@@ -1,0 +1,187 @@
+{
+ "_doc": "Where the store members the data cannot place by itself come from in the 3.4.3.54261 tables (read by dbcsources.py). source: a column ('12' or '12[3]'), 'id', 'parent' or 'zero'. why: the evidence (dbccompare.py output, AC's use of the member). fixup: a conversion DBCStores.cpp applies to the loaded value, named for the function that does it.",
+ "AreaPOI": {
+  "icon[2]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[3]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[4]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[5]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[6]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[7]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[8]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[9]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"},
+  "icon[10]": {"source": "zero", "why": "AC never reads AreaPOIEntry::icon"}
+ },
+ "BattlemasterList": {
+  "maxGroupSize": {"source": "11", "why": "column 11 equals it on every shared row; column 9 (40 on Alterac Valley and Isle of Conquest) is the player cap"}
+ },
+ "CharTitles": {
+  "nameMale[0]": {"source": "0", "why": "columns 0 and 1 are identical in every enUS row; 3.3.5's order (male, then female) kept"},
+  "nameFemale[0]": {"source": "1", "why": "columns 0 and 1 are identical in every enUS row; 3.3.5's order (male, then female) kept"}
+ },
+ "ChatChannels": {
+  "flags": {"source": "3", "why": "equal on every channel but 26 (0x40039 -> 0x40001: bits 0x38 dropped)"}
+ },
+ "ChrClasses": {
+  "name[0]": {"source": "0", "why": "column 0 is the class name; 2 and 3 are its male and female forms (3 empty in enUS)"},
+  "expansion": {"source": "zero", "why": "no 54261 column marks the Death Knight; a 3.4.3 account owns every expansion"}
+ },
+ "ChrRaces": {
+  "Flags": {"source": "15", "why": "the same flags plus a new 0x40000 on races 12 and 17"},
+  "expansion": {"source": "zero", "why": "no 54261 column marks the Blood Elf and Draenei; a 3.4.3 account owns every expansion"}
+ },
+ "CinematicCamera": {
+  "Model": {"source": "zero", "why": "the camera model is a FileDataID now (column 3); M2Stores loads cameras by file name, and needs the D5 extractor to name them by FileDataID first"}
+ },
+ "CreatureModelData": {
+  "Flags": {"source": "1", "why": "the same low bits, plus new 0x1000 and 0x2000 bits"},
+  "CollisionWidth": {"source": "13", "why": "the collision box was recomputed in 54261 (0.6944 -> 0.6111 on the same models); 13 is its width, 14 its height"},
+  "CollisionHeight": {"source": "14", "why": "the collision box was recomputed in 54261; 13 is its width, 14 its height"}
+ },
+ "Criteria": {
+  "col1": {"source": "zero", "fixup": "CriteriaTreeLinks", "why": "referredAchievement: a criteria hangs under CriteriaTree nodes now (column 4 the criteria, 1 the parent node) and an achievement names its tree's root (Achievement column 13); the first node reaching an achievement gives 3.3.5's for 5661 of 6310, some node for 6146. 3.4.3 shares criteria between achievements, which AC's one-achievement criteria cannot hold (engine follow-up)"},
+  "col4": {"source": "zero", "fixup": "CriteriaTreeLinks", "why": "the required count is the tree node's amount (CriteriaTree column 2): 6256 of 6310"},
+  "col26": {"source": "zero", "fixup": "CriteriaTreeLinks", "why": "flags: the tree node's flags (CriteriaTree column 6), 6072 of 6310"},
+  "col27": {"source": "zero", "why": "timedType: no 54261 column carries it"}
+ },
+ "CurrencyTypes": {
+  "BitIndex": {"source": "zero", "why": "no 54261 column; it fed 3.3.5's PLAYER_FIELD_KNOWN_CURRENCIES, which the 3.4.3 update fields replace"}
+ },
+ "DestructibleModelData": {
+  "SmokeDisplayId": {"source": "zero", "why": "AC never reads it"}
+ },
+ "DungeonEncounter": {
+  "difficulty": {"source": "3", "fixup": "DifficultyIndex", "why": "column 3 is a Difficulty.db2 id; DifficultyIndex ranks its old enum value (Difficulty column 3) among its map's modes, as 3.3.5 numbered them per map (147 of 149 MapDifficulty rows). 3.4.3 uses 0 for every difficulty, which AC has no value for (engine follow-up)"}
+ },
+ "DurabilityCosts": {
+  "_arrays": {"multiplier": [
+   [0, 0, 21, "AC's 29 multipliers are 21 weapon subclasses then 8 armor subclasses; 54261 keeps them as a weapon array (column 0, 21) and an armor array (column 1, 8). Identical values across subclasses tie the matcher; the order within each array is the subclass order"],
+   [1, 21, 8, "the armor half: column 1, 8 armor subclasses"]
+  ]}
+ },
+ "Emotes": {
+  "Flags": {"source": "3", "why": "the same flags plus a new 0x20000"}
+ },
+ "Holidays": {
+  "Date[16]": {"source": "zero", "why": "54261 keeps 16 dates; AC's 26 slots past them stay empty"},
+  "Date[17]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[18]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[19]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[20]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[21]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[22]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[23]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[24]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "Date[25]": {"source": "zero", "why": "54261 keeps 16 dates"},
+  "TextureFilename": {"source": "zero", "why": "the textures are FileDataIDs now (column 12); the 3.3.5 calendar packet that sent the name is replaced by the 3.4.3 protocol"}
+ },
+ "ItemDisplayInfo": {
+  "inventoryIcon": {"source": "zero", "why": "AC never reads it"}
+ },
+ "Item": {
+  "DisplayInfoID": {"source": "zero", "fixup": "ItemAppearanceDisplay", "why": "Item no longer holds it: ItemModifiedAppearance (column 1 the item, 2 the appearance modifier, 3 the ItemAppearance, 4 the order) -> ItemAppearance column 1. 3.4.3 renumbered the displays: the chain gives 3.3.5's id for 14524 items and another for 12140 (item 17: 7016 -> 5661); 19432 3.3.5 items are not in the client tables"}
+ },
+ "ItemSet": {
+  "_arrays": {
+   "spells": [["zero", 0, 8, "the set bonuses moved to ItemSetSpell (parent the set, column 1 the spell, 2 the item count); it holds the same bonuses for 508 of 509 sets (760 gained a 4-piece) and its row order matches 3.3.5's for 505 [fixup: ItemSetSpells]"]],
+   "items_to_triggerspell": [["zero", 0, 8, "the bonus thresholds, from ItemSetSpell column 2 [fixup: ItemSetSpells]"]]
+  }
+ },
+ "ItemExtendedCost": {
+  "reqhonorpoints": {"source": "9[0]", "fixup": "CurrencyCosts", "why": "honor is currency 1901 now: columns 8 (ids) and 9 (counts); CurrencyCosts sums the counts of currency 1901. 3.4.3 halved the honor costs (6885 -> 3445)"},
+  "reqarenapoints": {"source": "9[0]", "fixup": "CurrencyCosts", "why": "arena points are currency 1900 now; CurrencyCosts sums the counts of currency 1900"}
+ },
+ "LFGDungeons": {
+  "MinLevel": {"source": "2", "why": "Classic raised the dungeon levels (15 -> 17, 55 -> 57); 2 tracks it, 3 is the maximum"},
+  "TargetLevelMin": {"source": "zero", "why": "AC never reads it"},
+  "TargetLevelMax": {"source": "zero", "why": "AC never reads it"},
+  "Difficulty": {"source": "23", "fixup": "DifficultyIndex", "why": "a Difficulty.db2 id; 23 and 24 are identical in every row of this build, so either loads the same values (which one the client reads is an exe check still owed)"},
+  "TypeID": {"source": "4", "why": "equal but for 3.3.5's heroic type 5, which 54261 folds into dungeon type 1 with the heroic difficulty in its DifficultyID"}
+ },
+ "Light": {
+  "X": {"source": "0[0]", "why": "world coordinates now (3.3.5 stored (17066.67 - y) * 36); AC only tests for the all-zero default light, which holds in both"},
+  "Y": {"source": "0[1]", "why": "world coordinates now; AC only tests for the all-zero default light"},
+  "Z": {"source": "0[2]", "why": "world coordinates now; AC only tests for the all-zero default light"}
+ },
+ "Map": {
+  "Flags": {"source": "21[0]", "why": "the flags were renumbered; the one AC reads, MAP_FLAG_DYNAMIC_DIFFICULTY 0x100, is bit 0x100 of word 0 (on 631, 724 and now 649)"},
+  "entrance_x": {"source": "zero", "why": "54261 Map holds no corpse position; the corpse query needs another source (engine follow-up: the instance's areatrigger_teleport)"},
+  "entrance_y": {"source": "zero", "why": "54261 Map holds no corpse position"}
+ },
+ "MapDifficulty": {
+  "Difficulty": {"source": "3", "fixup": "DifficultyIndex", "why": "a Difficulty.db2 id; DifficultyIndex turns it into AC's 0-3 index"},
+  "areaTriggerText": {"source": "0", "why": "the same message, now also the level requirements 3.3.5 left empty"},
+  "resetTime": {"source": "5", "fixup": "ResetIntervalSeconds", "why": "column 5 is the reset interval (0 none, 1 daily, 2 weekly); ResetIntervalSeconds turns it into the seconds AC keeps"}
+ },
+ "NamesReserved": {
+  "Pattern": {"source": "0", "why": "the same patterns, with the word boundaries written \\b instead of \\< \\>; ObjectMgr strips both"}
+ },
+ "NamesProfanity": {
+  "Pattern": {"source": "0", "why": "the same patterns, with the word boundaries written \\b instead of \\< \\>; ObjectMgr strips both"}
+ },
+ "PVPDifficulty": {
+  "difficulty": {"source": "zero", "why": "PVPDifficulty keeps only the bracket, its levels and the map (parent); AC never reads PvPDifficultyEntry::difficulty"}
+ },
+ "ScalingStatValues": {
+  "ssdMultiplier[0]": {"source": "zero", "why": "AC never reads it"},
+  "ssdMultiplier[1]": {"source": "zero", "why": "AC never reads it"}
+ },
+ "SkillLine": {
+  "spellIcon": {"source": "zero", "why": "AC never reads it"}
+ },
+ "SkillLineAbility": {
+  "SupercededBySpell": {"source": "6", "fixup": "InvertSupersedes", "why": "54261 records the other direction: column 6 of the next rank's row holds the spell it supersedes (5008 matches over 1059 3.3.5 pairs); InvertSupersedes turns it around"}
+ },
+ "SkillRaceClassInfo": {
+  "Flags": {"source": "3", "why": "the same flags without 0x400"}
+ },
+ "Spell": {
+  "Targets": {"source": "SpellTargetRestrictions.5", "why": "the only column that agrees (88%); the target flags changed on some spells"},
+  "TargetAuraStateNot": {"source": "SpellAuraRestrictions.4", "why": "the only column that agrees (89%)"},
+  "ProcFlags": {"source": "SpellAuraOptions.6[0]", "why": "the only column that agrees (86%): 3.4.3 changed the proc flags of some spells; the second word of the array is new"},
+  "PowerType": {"source": "zero", "fixup": "SpellPowerCosts", "why": "SpellPower holds one row per cost (column 1 the order, 10 the power type, 2 the cost, 3 per level, 4 per second, 7 the percentage as a float): the first row that is not a rune or a runic power gain is AC's power, POWER_RUNE when there is none and runes are paid"},
+  "ManaCost": {"source": "zero", "fixup": "SpellPowerCosts", "why": "SpellPower column 2 of the main cost row (98% of 6661)"},
+  "ManaCostPerlevel": {"source": "zero", "fixup": "SpellPowerCosts", "why": "SpellPower column 3 of the main cost row"},
+  "ManaPerSecond": {"source": "zero", "fixup": "SpellPowerCosts", "why": "SpellPower column 4 of the main cost row (6655 of 6661)"},
+  "ManaPerSecondPerLevel": {"source": "zero", "why": "0 on every 3.3.5 spell; SpellPower keeps no such column"},
+  "ManaCostPercentage": {"source": "zero", "fixup": "SpellPowerCosts", "why": "SpellPower column 7 of the main cost row, a float now (8.0 for 8)"},
+  "RuneCostID": {"source": "zero", "fixup": "SpellPowerCosts", "why": "rune costs are SpellPower rows (power types 20 blood, 22 unholy, 21 frost; 47-48 votes each against SpellRuneCost) and a runic power row with a negative amount is the gain (-100 -> 100); SpellPowerCosts builds a SpellRuneCost entry under the spell's own id"},
+  "EquippedItemClass": {"source": "SpellEquippedItems.1", "default": -1, "why": "column 1, -1 for a spell without a SpellEquippedItems row: agrees on 48633 of 48639"},
+  "SpellVisual[1]": {"source": "zero", "why": "a second visual, on 4 kinds of spells; SpellXSpellVisual keeps one row per spell and difficulty"},
+  "SpellIconID": {"source": "SpellMisc.9", "why": "the icon is a FileDataID now (Fireball 135812), not a SpellIcon id; AC's 48 comparisons with 3.3.5 icon ids must be rewritten (engine follow-up)"},
+  "ActiveIconID": {"source": "SpellMisc.10", "why": "the active icon's FileDataID; AC compares it once, in SpellInfoCorrections (engine follow-up)"},
+  "SpellPriority": {"source": "zero", "why": "no 54261 column; AC sets it only in SpellInfoCorrections"},
+  "SpellName[0]": {"source": "SpellName.0", "why": "SpellName names 27272 spells; the 55% is the 3.3.5 spells it does not name (server-side ones), which load an empty name"},
+  "Rank[0]": {"source": "Spell.0", "why": "54261's Spell keeps the rank text (NameSubtext) first: 'Rank 1' on Fireball (85%)"},
+  "AreaGroupId": {"source": "SpellCastingRequirements.4", "why": "an AreaGroupMember group now; 338 of 1003 keep their 3.3.5 group id"}
+ },
+ "SpellRadius": {
+  "RadiusMin": {"source": "0", "why": "AC's RadiusMin is the base radius: column 0; 54261 inserted a real minimum (2) before the maximum (3)"},
+  "RadiusPerLevel": {"source": "1", "why": "column 1, 0 on every shared row as in 3.3.5"},
+  "RadiusMax": {"source": "3", "why": "columns 0 and 3 agree everywhere; 3 is the maximum, after the inserted minimum"}
+ },
+ "SpellShapeshiftForm": {
+  "flags1": {"source": "2", "why": "the same flags without 0x200"},
+  "creatureType": {"source": "1", "why": "column 1, equal wherever 3.3.5 has a type; its -1 is 0 now, and AC only tests for > 0"}
+ },
+ "SpellVisual": {
+  "MissileModel": {"source": "zero", "why": "the missile moved to SpellVisualMissile; AC reads it only for a -4/-5 heuristic in SpellMgr (engine follow-up)"}
+ },
+ "Vehicle": {
+  "m_facingLimitRight": {"source": "zero", "why": "AC never reads it"},
+  "m_facingLimitLeft": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtTurnLingering": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtPitchLingering": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtMouseLingering": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtEndOpacity": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtArcSpeed": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtArcRepeat": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtArcWidth": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactRadius[0]": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactRadius[1]": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtArcTexture": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactTexture": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactModel[0]": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactModel[1]": {"source": "zero", "why": "AC never reads it"},
+  "m_msslTrgtImpactTexRadius": {"source": "zero", "why": "AC never reads it"}
+ }
+}

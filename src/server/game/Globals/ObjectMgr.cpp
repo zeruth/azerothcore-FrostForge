@@ -8990,6 +8990,7 @@ void ObjectMgr::LoadReservedPlayerNamesDBC()
         // DBC does not have clean entries, remove the junk.
         boost::algorithm::replace_all(wstr, "\\<", "");
         boost::algorithm::replace_all(wstr, "\\>", "");
+        boost::algorithm::replace_all(wstr, "\\b", "");             // 54261 writes the word boundaries this way
 
         _reservedNamesStore.insert(wstr);
         count++;
@@ -9093,6 +9094,7 @@ void ObjectMgr::LoadProfanityNamesFromDBC()
         // DBC does not have clean entries, remove the junk.
         boost::algorithm::replace_all(wstr, "\\<", "");
         boost::algorithm::replace_all(wstr, "\\>", "");
+        boost::algorithm::replace_all(wstr, "\\b", "");             // 54261 writes the word boundaries this way
 
         _profanityNamesStore.insert(wstr);
         count++;

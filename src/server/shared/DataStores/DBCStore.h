@@ -19,9 +19,11 @@
 #define DBCSTORE_H
 
 #include "Common.h"
+#include "DBCSource.h"
 #include "DBCStorageIterator.h"
 #include "Errors.h"
 #include <cstring>
+#include <string>
 #include <vector>
 
 /// Interface class for common access
@@ -35,11 +37,15 @@ public:
     [[nodiscard]] uint32 GetFieldCount() const { return _fieldCount; }
 
     virtual bool Load(char const* path) = 0;
+    virtual bool LoadDB2(char const* path, DBCSourceInfo const& sources, std::string& error) = 0;
+    virtual bool LoadGameTable(char const* path, std::string& error) = 0;
     virtual bool LoadStringsFrom(char const* path) = 0;
     virtual void LoadFromDB(char const* table, char const* format) = 0;
 
 protected:
     bool Load(char const* path, char**& indexTable);
+    bool LoadDB2(char const* path, DBCSourceInfo const& sources, std::string& error, char**& indexTable);
+    bool LoadGameTable(char const* path, std::string& error, char**& indexTable);
     bool LoadStringsFrom(char const* path, char** indexTable);
     void LoadFromDB(char const* table, char const* format, char**& indexTable);
 
@@ -93,6 +99,16 @@ public:
     bool Load(char const* path) override
     {
         return DBCStorageBase::Load(path, _indexTable.AsChar);
+    }
+
+    bool LoadDB2(char const* path, DBCSourceInfo const& sources, std::string& error) override
+    {
+        return DBCStorageBase::LoadDB2(path, sources, error, _indexTable.AsChar);
+    }
+
+    bool LoadGameTable(char const* path, std::string& error) override
+    {
+        return DBCStorageBase::LoadGameTable(path, error, _indexTable.AsChar);
     }
 
     bool LoadStringsFrom(char const* path) override

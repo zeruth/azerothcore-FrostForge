@@ -17,7 +17,9 @@
 
 #include "DBCStores.h"
 #include "BattlegroundMgr.h"
+#include "DB2FileLoader.h"
 #include "DBCFileLoader.h"
+#include "DBCSources.h"
 #include "DBCfmt.h"
 #include "Errors.h"
 #include "LFGMgr.h"
@@ -26,7 +28,14 @@
 #include "SpellMgr.h"
 #include "TransportMgr.h"
 #include "World.h"
+#include <algorithm>
+#include <array>
+#include <functional>
 #include <map>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 typedef std::tuple<int16, int8, int32> WMOAreaTableKey;
 typedef std::map<WMOAreaTableKey, WMOAreaTableEntry const*> WMOAreaInfoByTripple;
@@ -262,133 +271,651 @@ inline void LoadDBC(uint32& availableDbcLocales, StoreProblemList& errors, DBCSt
     }
 }
 
+/// Loads a store from its 3.4.3.54261 client table through the store's sources (DBCSources.h),
+/// converts what the client table keeps in another form (fixup), then applies the world
+/// database's overrides as LoadDBC does. The overrides are already in AC's form, so the fixup
+/// runs before them.
+template<class T>
+inline void LoadDB2(StoreProblemList& errors, DBCStorage<T>& storage, std::string const& dbcPath, DBCSourceInfo const& sources,
+    char const* dbTable = nullptr, std::type_identity_t<std::function<void(DBCStorage<T>&)>> const& fixup = nullptr)
+{
+    ASSERT(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()) == sizeof(T) || LoadDBC_assert_print(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()), sizeof(T), sources.Meta->Name));
+
+    ++DBCFileCount;
+    std::string db2Filename = dbcPath + sources.Meta->Name + ".db2";
+    std::string error;
+    if (!storage.LoadDB2(db2Filename.c_str(), sources, error))
+        errors.push_back(error);
+    else if (fixup)
+        fixup(storage);
+
+    if (dbTable)
+        storage.LoadFromDB(dbTable, storage.GetFormat());
+
+    if (!storage.GetNumRows() && error.empty())
+        errors.push_back(db2Filename + " holds no records");
+}
+
+/// Loads a store from the client's GameTable (GameTables/<name>.txt, extracted beside the client
+/// tables), then the world database's overrides as LoadDBC does.
+template<class T>
+inline void LoadGameTable(StoreProblemList& errors, DBCStorage<T>& storage, std::string const& gtPath, char const* name, char const* dbTable)
+{
+    ASSERT(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()) == sizeof(T) || LoadDBC_assert_print(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()), sizeof(T), name));
+
+    ++DBCFileCount;
+    std::string error;
+    if (!storage.LoadGameTable((gtPath + name + ".txt").c_str(), error))
+        errors.push_back(error);
+
+    if (dbTable)
+        storage.LoadFromDB(dbTable, storage.GetFormat());
+}
+
+// Fixups: values a 54261 table keeps in another form than the store's. Each is named in
+// apps/db2meta/dbcsources.json beside the evidence for it.
+namespace
+{
+    /// Reads one client table outside the stores, for a fixup that needs columns no store holds.
+    std::unordered_map<uint32, DB2FileLoader::Record> ReadDB2(DB2FileLoader& db2, std::string const& dbcPath, DB2Meta const& meta, StoreProblemList& errors)
+    {
+        std::unordered_map<uint32, DB2FileLoader::Record> records;
+        if (!db2.Load((dbcPath + meta.Name + ".db2").c_str(), &meta))
+        {
+            errors.push_back(db2.GetError());
+            return records;
+        }
+
+        for (uint32 i = 0; i < db2.GetNumRows(); ++i)
+            records.emplace(db2.getRecord(i).getId(), db2.getRecord(i));
+
+        return records;
+    }
+
+    /// A Difficulty.db2 id as AC's difficulty index. 3.3.5 numbered each map's own modes from 0
+    /// (a 25-player-only raid's one mode is 0), so the index is the rank of the mode's old enum
+    /// value (Difficulty column 3: 1 Normal and 3 10 Player -> 0, 2 Heroic and 4 25 Player -> 1,
+    /// 5 -> 2, 6 -> 3; none -> 0) among the modes MapDifficulty gives the entry's map (parent
+    /// the map, column 3 the DifficultyID). Matches 3.3.5's MapDifficulty on 147 of 149 rows
+    /// (the two others are battlegrounds). A map without MapDifficulty rows keeps the old enum.
+    template<class T, class M, class N>
+    std::function<void(DBCStorage<T>&)> DifficultyIndex(std::string const& dbcPath, StoreProblemList& errors, M T::* member, N T::* map)
+    {
+        return [&dbcPath, &errors, member, map](DBCStorage<T>& storage)
+        {
+            DB2FileLoader db2;
+            std::unordered_map<uint32, DB2FileLoader::Record> difficulties = ReadDB2(db2, dbcPath, DB2Metadata::Difficulty, errors);
+            auto oldEnum = [&](uint32 difficultyId) -> int32
+            {
+                auto itr = difficulties.find(difficultyId);
+                int32 value = itr != difficulties.end() ? itr->second.getInt(3) : 0;
+                return value < 0 ? 0 : value;
+            };
+
+            DB2FileLoader mapDb2;
+            std::unordered_map<uint32, DB2FileLoader::Record> mapDifficulties = ReadDB2(mapDb2, dbcPath, DB2Metadata::MapDifficulty, errors);
+            std::unordered_map<uint32, std::vector<int32>> modes;
+            for (auto const& [id, record] : mapDifficulties)
+                modes[record.getParentId()].push_back(oldEnum(record.getUInt(3)));
+
+            for (auto& [mapId, values] : modes)
+            {
+                std::sort(values.begin(), values.end());
+                values.erase(std::unique(values.begin(), values.end()), values.end());
+            }
+
+            for (T const* entry : storage)
+            {
+                int32 value = oldEnum(uint32(entry->*member));
+                auto itr = modes.find(uint32(entry->*map));
+                if (itr != modes.end())
+                {
+                    auto rank = std::find(itr->second.begin(), itr->second.end(), value);
+                    if (rank != itr->second.end())
+                        value = int32(rank - itr->second.begin());
+                }
+
+                const_cast<T*>(entry)->*member = M(value);
+            }
+        };
+    }
+
+    /// MapDifficulty's reset interval (0 none, 1 daily, 2 weekly) as the seconds AC keeps.
+    void ResetIntervalSeconds(DBCStorage<MapDifficultyEntry>& storage)
+    {
+        for (MapDifficultyEntry const* entry : storage)
+        {
+            uint32& resetTime = const_cast<MapDifficultyEntry*>(entry)->resetTime;
+            resetTime = resetTime == 1 ? DAY : resetTime == 2 ? WEEK : 0;
+        }
+    }
+
+    /// Honor and arena points are currencies in 54261 (1901 and 1900): ItemExtendedCost keeps
+    /// up to five currency ids (column 8) and counts (column 9).
+    std::function<void(DBCStorage<ItemExtendedCostEntry>&)> CurrencyCosts(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        return [&dbcPath, &errors](DBCStorage<ItemExtendedCostEntry>& storage)
+        {
+            constexpr uint32 CURRENCY_ARENA_POINTS = 1900;
+            constexpr uint32 CURRENCY_HONOR_POINTS = 1901;
+
+            DB2FileLoader db2;
+            std::unordered_map<uint32, DB2FileLoader::Record> costs = ReadDB2(db2, dbcPath, DB2Metadata::ItemExtendedCost, errors);
+            for (ItemExtendedCostEntry const* entry : storage)
+            {
+                ItemExtendedCostEntry* cost = const_cast<ItemExtendedCostEntry*>(entry);
+                cost->reqhonorpoints = 0;
+                cost->reqarenapoints = 0;
+                auto itr = costs.find(entry->ID);
+                if (itr == costs.end())
+                    continue;
+
+                for (uint32 i = 0; i < 5; ++i)
+                {
+                    uint32 currency = itr->second.getUInt(8, i);
+                    if (currency == CURRENCY_HONOR_POINTS)
+                        cost->reqhonorpoints += itr->second.getUInt(9, i);
+                    else if (currency == CURRENCY_ARENA_POINTS)
+                        cost->reqarenapoints += itr->second.getUInt(9, i);
+                }
+            }
+        };
+    }
+
+    /// An item's display is no longer an Item column: its base appearance (ItemModifiedAppearance
+    /// with the lowest appearance modifier, then order, then row id; column 1 the item, 2 the
+    /// modifier, 3 the ItemAppearance, 4 the order) names an ItemAppearance, whose column 1 is
+    /// the ItemDisplayInfo id.
+    std::function<void(DBCStorage<ItemEntry>&)> ItemAppearanceDisplay(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        return [&dbcPath, &errors](DBCStorage<ItemEntry>& storage)
+        {
+            DB2FileLoader appearanceDb2;
+            std::unordered_map<uint32, DB2FileLoader::Record> appearances = ReadDB2(appearanceDb2, dbcPath, DB2Metadata::ItemAppearance, errors);
+
+            DB2FileLoader modified;
+            if (!modified.Load((dbcPath + DB2Metadata::ItemModifiedAppearance.Name + ".db2").c_str(), &DB2Metadata::ItemModifiedAppearance))
+            {
+                errors.push_back(modified.GetError());
+                return;
+            }
+
+            // per item: (modifier, order, row id) of its base appearance, and that appearance
+            std::unordered_map<uint32, std::pair<std::tuple<uint32, uint32, uint32>, uint32>> base;
+            for (uint32 i = 0; i < modified.GetNumRows(); ++i)
+            {
+                DB2FileLoader::Record record = modified.getRecord(i);
+                std::tuple<uint32, uint32, uint32> key(record.getUInt(2), record.getUInt(4), record.getId());
+                auto [itr, inserted] = base.try_emplace(record.getUInt(1), key, record.getUInt(3));
+                if (!inserted && key < itr->second.first)
+                    itr->second = { key, record.getUInt(3) };
+            }
+
+            for (ItemEntry const* entry : storage)
+            {
+                uint32 display = 0;
+                if (auto itr = base.find(entry->ID); itr != base.end())
+                    if (auto appearance = appearances.find(itr->second.second); appearance != appearances.end())
+                        display = appearance->second.getUInt(1);
+
+                const_cast<ItemEntry*>(entry)->DisplayInfoID = display;
+            }
+        };
+    }
+
+    /// The set bonuses are ItemSetSpell rows in 54261 (parent the set, column 1 the spell,
+    /// column 2 the number of items), in the order 3.3.5 kept them.
+    std::function<void(DBCStorage<ItemSetEntry>&)> ItemSetSpells(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        return [&dbcPath, &errors](DBCStorage<ItemSetEntry>& storage)
+        {
+            DB2FileLoader db2;
+            if (!db2.Load((dbcPath + DB2Metadata::ItemSetSpell.Name + ".db2").c_str(), &DB2Metadata::ItemSetSpell))
+            {
+                errors.push_back(db2.GetError());
+                return;
+            }
+
+            std::vector<std::pair<uint32, uint32>> rows; // (id, row)
+            for (uint32 i = 0; i < db2.GetNumRows(); ++i)
+                rows.emplace_back(db2.getRecord(i).getId(), i);
+            std::sort(rows.begin(), rows.end());
+
+            std::unordered_map<uint32, uint32> filled;
+            for (auto const& [id, row] : rows)
+            {
+                DB2FileLoader::Record record = db2.getRecord(row);
+                ItemSetEntry const* set = storage.LookupEntry(record.getParentId());
+                if (!set)
+                    continue;
+
+                uint32& slot = filled[record.getParentId()];
+                if (slot >= MAX_ITEM_SET_SPELLS)
+                {
+                    LOG_ERROR("dbc", "ItemSetSpell: set {} has more than {} bonuses, {} dropped", record.getParentId(), MAX_ITEM_SET_SPELLS, id);
+                    continue;
+                }
+
+                ItemSetEntry* entry = const_cast<ItemSetEntry*>(set);
+                entry->spells[slot] = record.getUInt(1);
+                entry->items_to_triggerspell[slot] = record.getUInt(2);
+                ++slot;
+            }
+        };
+    }
+
+    /// A spell's costs are SpellPower rows in 54261, one per cost (column 1 the order, 10 the power
+    /// type, 2 the amount, 3 per level, 4 per second, 7 the percentage as a float). Rune costs are
+    /// rows of power types 20, 22 and 21 (AC's rune slots 0, 1, 2), and a runic power row with a
+    /// negative amount is the runic power the spell gives; they make the spell's SpellRuneCost
+    /// entry, under its own id, as 3.3.5 kept them in SpellRuneCost.dbc. The first other row is
+    /// AC's power and cost.
+    std::function<void(DBCStorage<SpellEntry>&)> SpellPowerCosts(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        return [&dbcPath, &errors](DBCStorage<SpellEntry>& storage)
+        {
+            constexpr int32 POWER_RUNE_BLOOD = 20;
+            constexpr int32 POWER_RUNE_FROST = 21;
+            constexpr int32 POWER_RUNE_UNHOLY = 22;
+
+            DB2FileLoader db2;
+            if (!db2.Load((dbcPath + DB2Metadata::SpellPower.Name + ".db2").c_str(), &DB2Metadata::SpellPower))
+            {
+                errors.push_back(db2.GetError());
+                return;
+            }
+
+            // per spell: its rows by (order, row id)
+            std::unordered_map<uint32, std::vector<std::tuple<uint32, uint32, uint32>>> costs;
+            for (uint32 i = 0; i < db2.GetNumRows(); ++i)
+            {
+                DB2FileLoader::Record record = db2.getRecord(i);
+                costs[record.getParentId()].emplace_back(record.getUInt(1), record.getId(), i);
+            }
+
+            for (SpellEntry const* spell : storage)
+            {
+                SpellEntry* entry = const_cast<SpellEntry*>(spell);
+                entry->PowerType = POWER_MANA;
+                entry->ManaCost = 0;
+                entry->ManaCostPerlevel = 0;
+                entry->ManaPerSecond = 0;
+                entry->ManaCostPercentage = 0;
+                entry->RuneCostID = 0;
+
+                auto itr = costs.find(entry->Id);
+                if (itr == costs.end())
+                    continue;
+
+                std::sort(itr->second.begin(), itr->second.end());
+                std::array<uint32, 3> runes = {};
+                uint32 runicPowerGain = 0;
+                bool hasMain = false;
+                for (auto const& [order, id, row] : itr->second)
+                {
+                    DB2FileLoader::Record record = db2.getRecord(row);
+                    int32 type = record.getInt(10);
+                    int32 amount = record.getInt(2);
+                    if (type == POWER_RUNE_BLOOD)
+                        runes[0] += amount;
+                    else if (type == POWER_RUNE_UNHOLY)
+                        runes[1] += amount;
+                    else if (type == POWER_RUNE_FROST)
+                        runes[2] += amount;
+                    else if (type == POWER_RUNIC_POWER && amount < 0)
+                        runicPowerGain += uint32(-amount);
+                    else if (!hasMain)
+                    {
+                        hasMain = true;
+                        entry->PowerType = uint32(type);
+                        entry->ManaCost = uint32(amount);
+                        entry->ManaCostPerlevel = record.getUInt(3);
+                        entry->ManaPerSecond = record.getUInt(4);
+                        entry->ManaCostPercentage = uint32(record.getFloat(7));
+                    }
+                }
+
+                if (runes == std::array<uint32, 3>{} && !runicPowerGain)
+                    continue;
+
+                if (!hasMain)
+                    entry->PowerType = POWER_RUNE;
+
+                SpellRuneCostEntry* runeCost = new SpellRuneCostEntry();
+                runeCost->ID = entry->Id;
+                for (uint32 slot = 0; slot < 3; ++slot)
+                    runeCost->RuneCost[slot] = runes[slot];
+                runeCost->runePowerGain = runicPowerGain;
+                sSpellRuneCostStore.SetEntry(entry->Id, runeCost);
+                entry->RuneCostID = entry->Id;
+            }
+        };
+    }
+
+    /// AreaGroup is AreaGroupMember rows in 54261 (parent the group, column 0 an area). AC's
+    /// entry holds six areas and the id of the group that continues it, so a larger group is
+    /// chained through entries numbered after the highest group id.
+    void LoadAreaGroups(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        DB2FileLoader db2;
+        if (!db2.Load((dbcPath + DB2Metadata::AreaGroupMember.Name + ".db2").c_str(), &DB2Metadata::AreaGroupMember))
+        {
+            errors.push_back(db2.GetError());
+            return;
+        }
+
+        std::map<uint32, std::vector<uint32>> groups;
+        std::vector<std::pair<uint32, uint32>> rows; // (row id, row)
+        for (uint32 i = 0; i < db2.GetNumRows(); ++i)
+            rows.emplace_back(db2.getRecord(i).getId(), i);
+        std::sort(rows.begin(), rows.end());
+        for (auto const& [id, row] : rows)
+            groups[db2.getRecord(row).getParentId()].push_back(db2.getRecord(row).getUInt(0));
+
+        uint32 nextId = groups.empty() ? 1 : groups.rbegin()->first + 1;
+        for (auto const& [groupId, areas] : groups)
+        {
+            uint32 id = groupId;
+            for (std::size_t first = 0; first < areas.size(); first += MAX_GROUP_AREA_IDS)
+            {
+                AreaGroupEntry* entry = new AreaGroupEntry();
+                entry->AreaGroupId = id;
+                for (std::size_t i = 0; i < MAX_GROUP_AREA_IDS && first + i < areas.size(); ++i)
+                    entry->AreaId[i] = areas[first + i];
+
+                entry->nextGroup = first + MAX_GROUP_AREA_IDS < areas.size() ? nextId : 0;
+                sAreaGroupStore.SetEntry(id, entry);
+                id = entry->nextGroup;
+                if (id)
+                    ++nextId;
+            }
+        }
+    }
+
+    /// WorldMapArea is the UI map tables in 54261. A zone's UiMapAssignment (column 7 the area,
+    /// 6 the map, 5 the order, 2 the region: min x, y, z, then max x, y, z) gives its map and its
+    /// corners (AC's x1/y1 are the maxima); its virtual map is the map of the continent its UiMap
+    /// sits under (UiMap column 2 the parent; a continent's own assignment has area 0), -1 when
+    /// that is its own map. Checked against 3.3.5: map and corners agree on all 86 zones still
+    /// assigned, the virtual map on every zone of maps 530 and 571 (the only ones AC reads it for).
+    void LoadWorldMapAreas(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        DB2FileLoader uiMapDb2;
+        std::unordered_map<uint32, DB2FileLoader::Record> uiMaps = ReadDB2(uiMapDb2, dbcPath, DB2Metadata::UiMap, errors);
+
+        DB2FileLoader db2;
+        if (!db2.Load((dbcPath + DB2Metadata::UiMapAssignment.Name + ".db2").c_str(), &DB2Metadata::UiMapAssignment))
+        {
+            errors.push_back(db2.GetError());
+            return;
+        }
+
+        std::vector<std::pair<uint32, uint32>> rows; // (row id, row)
+        for (uint32 i = 0; i < db2.GetNumRows(); ++i)
+            rows.emplace_back(db2.getRecord(i).getId(), i);
+        std::sort(rows.begin(), rows.end());
+
+        std::unordered_map<uint32, uint32> continentMap;   // UiMap -> its own map
+        std::unordered_map<uint32, uint32> zoneRow;        // area -> its first order-0 assignment
+        for (auto const& [id, row] : rows)
+        {
+            DB2FileLoader::Record record = db2.getRecord(row);
+            if (!record.getUInt(7))
+                continentMap.try_emplace(record.getParentId(), record.getUInt(6));
+            else if (!record.getUInt(5))
+                zoneRow.try_emplace(record.getUInt(7), row);
+        }
+
+        for (auto const& [area, row] : zoneRow)
+        {
+            DB2FileLoader::Record record = db2.getRecord(row);
+            WorldMapAreaEntry* entry = new WorldMapAreaEntry();
+            entry->map_id = record.getUInt(6);
+            entry->area_id = area;
+            entry->x1 = record.getFloat(2, 3);
+            entry->x2 = record.getFloat(2, 0);
+            entry->y1 = record.getFloat(2, 4);
+            entry->y2 = record.getFloat(2, 1);
+            entry->virtual_map_id = -1;
+
+            // up the UI map tree to the first continent
+            uint32 uiMap = record.getParentId();
+            for (uint32 depth = 0; depth < 16; ++depth)
+            {
+                auto parent = uiMaps.find(uiMap);
+                if (parent == uiMaps.end() || !(uiMap = parent->second.getUInt(2)))
+                    break;
+
+                if (auto continent = continentMap.find(uiMap); continent != continentMap.end())
+                {
+                    if (continent->second != entry->map_id)
+                        entry->virtual_map_id = int32(continent->second);
+                    break;
+                }
+            }
+
+            sWorldMapAreaStore.SetEntry(area, entry);
+        }
+    }
+
+    /// A criteria's achievement, count and flags are CriteriaTree's in 54261: a node (column 4 the
+    /// criteria, 1 the parent node, 2 the amount, 6 the flags) under a tree whose root an
+    /// achievement names (Achievement column 13). A criteria can sit under several achievements'
+    /// trees; AC's criteria holds one, the first node's (by id) that reaches an achievement.
+    std::function<void(DBCStorage<AchievementCriteriaEntry>&)> CriteriaTreeLinks(std::string const& dbcPath, StoreProblemList& errors)
+    {
+        return [&dbcPath, &errors](DBCStorage<AchievementCriteriaEntry>& storage)
+        {
+            DB2FileLoader treeDb2;
+            std::unordered_map<uint32, DB2FileLoader::Record> tree = ReadDB2(treeDb2, dbcPath, DB2Metadata::CriteriaTree, errors);
+            DB2FileLoader achievementDb2;
+            std::unordered_map<uint32, DB2FileLoader::Record> achievements = ReadDB2(achievementDb2, dbcPath, DB2Metadata::Achievement, errors);
+
+            std::unordered_map<uint32, uint32> achievementOfRoot;
+            for (auto const& [id, record] : achievements)
+                achievementOfRoot.try_emplace(record.getUInt(13), id);
+
+            auto achievementOf = [&](uint32 node) -> uint32
+            {
+                for (uint32 depth = 0; depth < 16 && node; ++depth)
+                {
+                    if (auto itr = achievementOfRoot.find(node); itr != achievementOfRoot.end())
+                        return itr->second;
+
+                    auto itr = tree.find(node);
+                    node = itr != tree.end() ? itr->second.getUInt(1) : 0;
+                }
+
+                return 0;
+            };
+
+            std::vector<uint32> nodes;
+            for (auto const& [id, record] : tree)
+                if (record.getUInt(4))
+                    nodes.push_back(id);
+            std::sort(nodes.begin(), nodes.end());
+
+            // per criteria: its first node, and the first node reaching an achievement
+            std::unordered_map<uint32, std::pair<uint32, uint32>> links;
+            for (uint32 node : nodes)
+            {
+                uint32 criteria = tree.at(node).getUInt(4);
+                auto [itr, inserted] = links.try_emplace(criteria, node, 0);
+                if (!itr->second.second)
+                    if (uint32 achievement = achievementOf(node))
+                        itr->second = { node, achievement };
+            }
+
+            for (AchievementCriteriaEntry const* criteria : storage)
+            {
+                AchievementCriteriaEntry* entry = const_cast<AchievementCriteriaEntry*>(criteria);
+                auto itr = links.find(entry->ID);
+                if (itr == links.end())
+                    continue;
+
+                DB2FileLoader::Record const& node = tree.at(itr->second.first);
+                entry->referredAchievement = itr->second.second;
+                entry->raw.count = node.getUInt(2);
+                entry->flags = node.getUInt(6);
+            }
+        };
+    }
+
+    /// 54261 records which spell a rank supersedes; AC keeps which spell supersedes it.
+    void InvertSupersedes(DBCStorage<SkillLineAbilityEntry>& storage)
+    {
+        std::unordered_map<uint32, uint32> supersededBy;
+        for (SkillLineAbilityEntry const* entry : storage)
+            if (entry->SupercededBySpell)
+                supersededBy[entry->SupercededBySpell] = entry->Spell;
+
+        for (SkillLineAbilityEntry const* entry : storage)
+        {
+            auto itr = supersededBy.find(entry->Spell);
+            const_cast<SkillLineAbilityEntry*>(entry)->SupercededBySpell = itr != supersededBy.end() ? itr->second : 0;
+        }
+    }
+}
+
 void LoadDBCStores(std::string const& dataPath)
 {
     uint32 oldMSTime = getMSTime();
 
     std::string dbcPath = dataPath + "dbc/";
+    std::string gtPath = dataPath + "gt/GameTables/";
 
     StoreProblemList bad_dbc_files;
     uint32 availableDbcLocales = 0xFFFFFFFF;
 
 #define LOAD_DBC(store, file, dbtable) LoadDBC(availableDbcLocales, bad_dbc_files, store, dbcPath, file, dbtable)
+#define LOAD_GT(store, name, dbtable) LoadGameTable(bad_dbc_files, store, gtPath, name, dbtable)
+#define LOAD_DB2(store, sources, dbtable) LoadDB2(bad_dbc_files, store, dbcPath, sources, dbtable)
+#define LOAD_DB2_FIXUP(store, sources, dbtable, fixup) LoadDB2(bad_dbc_files, store, dbcPath, sources, dbtable, fixup)
 
-    LOAD_DBC(sAreaTableStore,                       "AreaTable.dbc",                        "areatable_dbc");
-    LOAD_DBC(sAchievementStore,                     "Achievement.dbc",                      "achievement_dbc");
-    LOAD_DBC(sAchievementCategoryStore,             "Achievement_Category.dbc",             "achievement_category_dbc");
-    LOAD_DBC(sAchievementCriteriaStore,             "Achievement_Criteria.dbc",             "achievement_criteria_dbc");
-    LOAD_DBC(sAreaGroupStore,                       "AreaGroup.dbc",                        "areagroup_dbc");
-    LOAD_DBC(sAreaPOIStore,                         "AreaPOI.dbc",                          "areapoi_dbc");
-    LOAD_DBC(sAuctionHouseStore,                    "AuctionHouse.dbc",                     "auctionhouse_dbc");
-    LOAD_DBC(sBankBagSlotPricesStore,               "BankBagSlotPrices.dbc",                "bankbagslotprices_dbc");
-    LOAD_DBC(sBattlemasterListStore,                "BattlemasterList.dbc",                 "battlemasterlist_dbc");
-    LOAD_DBC(sBarberShopStyleStore,                 "BarberShopStyle.dbc",                  "barbershopstyle_dbc");
-    LOAD_DBC(sCharStartOutfitStore,                 "CharStartOutfit.dbc",                  "charstartoutfit_dbc");
-    LOAD_DBC(sCharSectionsStore,                    "CharSections.dbc",                     "charsections_dbc");
-    LOAD_DBC(sCharTitlesStore,                      "CharTitles.dbc",                       "chartitles_dbc");
-    LOAD_DBC(sChatChannelsStore,                    "ChatChannels.dbc",                     "chatchannels_dbc");
-    LOAD_DBC(sChrClassesStore,                      "ChrClasses.dbc",                       "chrclasses_dbc");
-    LOAD_DBC(sChrRacesStore,                        "ChrRaces.dbc",                         "chrraces_dbc");
-    LOAD_DBC(sCinematicCameraStore,                 "CinematicCamera.dbc",                  "cinematiccamera_dbc");
-    LOAD_DBC(sCinematicSequencesStore,              "CinematicSequences.dbc",               "cinematicsequences_dbc");
-    LOAD_DBC(sCreatureDisplayInfoStore,             "CreatureDisplayInfo.dbc",              "creaturedisplayinfo_dbc");
-    LOAD_DBC(sCreatureDisplayInfoExtraStore,        "CreatureDisplayInfoExtra.dbc",         "creaturedisplayinfoextra_dbc");
-    LOAD_DBC(sCreatureFamilyStore,                  "CreatureFamily.dbc",                   "creaturefamily_dbc");
-    LOAD_DBC(sCreatureModelDataStore,               "CreatureModelData.dbc",                "creaturemodeldata_dbc");
-    LOAD_DBC(sCreatureSpellDataStore,               "CreatureSpellData.dbc",                "creaturespelldata_dbc");
-    LOAD_DBC(sCreatureTypeStore,                    "CreatureType.dbc",                     "creaturetype_dbc");
-    LOAD_DBC(sCurrencyTypesStore,                   "CurrencyTypes.dbc",                    "currencytypes_dbc");
-    LOAD_DBC(sDestructibleModelDataStore,           "DestructibleModelData.dbc",            "destructiblemodeldata_dbc");
-    LOAD_DBC(sDungeonEncounterStore,                "DungeonEncounter.dbc",                 "dungeonencounter_dbc");
-    LOAD_DBC(sDurabilityCostsStore,                 "DurabilityCosts.dbc",                  "durabilitycosts_dbc");
-    LOAD_DBC(sDurabilityQualityStore,               "DurabilityQuality.dbc",                "durabilityquality_dbc");
-    LOAD_DBC(sEmotesStore,                          "Emotes.dbc",                           "emotes_dbc");
-    LOAD_DBC(sEmotesTextStore,                      "EmotesText.dbc",                       "emotestext_dbc");
-    LOAD_DBC(sEmotesTextSoundStore,                 "EmotesTextSound.dbc",                  "emotestextsound_dbc");
-    LOAD_DBC(sFactionStore,                         "Faction.dbc",                          "faction_dbc");
-    LOAD_DBC(sFactionTemplateStore,                 "FactionTemplate.dbc",                  "factiontemplate_dbc");
-    LOAD_DBC(sGameObjectArtKitStore,                "GameObjectArtKit.dbc",                 "gameobjectartkit_dbc");
-    LOAD_DBC(sGameObjectDisplayInfoStore,           "GameObjectDisplayInfo.dbc",            "gameobjectdisplayinfo_dbc");
-    LOAD_DBC(sGemPropertiesStore,                   "GemProperties.dbc",                    "gemproperties_dbc");
-    LOAD_DBC(sGlyphPropertiesStore,                 "GlyphProperties.dbc",                  "glyphproperties_dbc");
-    LOAD_DBC(sGlyphSlotStore,                       "GlyphSlot.dbc",                        "glyphslot_dbc");
-    LOAD_DBC(sGtBarberShopCostBaseStore,            "gtBarberShopCostBase.dbc",             "gtbarbershopcostbase_dbc");
-    LOAD_DBC(sGtCombatRatingsStore,                 "gtCombatRatings.dbc",                  "gtcombatratings_dbc");
-    LOAD_DBC(sGtChanceToMeleeCritBaseStore,         "gtChanceToMeleeCritBase.dbc",          "gtchancetomeleecritbase_dbc");
-    LOAD_DBC(sGtChanceToMeleeCritStore,             "gtChanceToMeleeCrit.dbc",              "gtchancetomeleecrit_dbc");
-    LOAD_DBC(sGtChanceToSpellCritBaseStore,         "gtChanceToSpellCritBase.dbc",          "gtchancetospellcritbase_dbc");
-    LOAD_DBC(sGtChanceToSpellCritStore,             "gtChanceToSpellCrit.dbc",              "gtchancetospellcrit_dbc");
-    LOAD_DBC(sGtNPCManaCostScalerStore,             "gtNPCManaCostScaler.dbc",              "gtnpcmanacostscaler_dbc");
-    LOAD_DBC(sGtOCTClassCombatRatingScalarStore,    "gtOCTClassCombatRatingScalar.dbc",     "gtoctclasscombatratingscalar_dbc");
-    LOAD_DBC(sGtOCTRegenHPStore,                    "gtOCTRegenHP.dbc",                     "gtoctregenhp_dbc");
+    LOAD_DB2(sAreaTableStore,                        DBCSources::AreaTableInfo,                              "areatable_dbc");
+    LOAD_DB2(sAchievementStore,                      DBCSources::AchievementInfo,                            "achievement_dbc");
+    LOAD_DB2(sAchievementCategoryStore,              DBCSources::Achievement_CategoryInfo,                   "achievement_category_dbc");
+    LOAD_DB2_FIXUP(sAchievementCriteriaStore,             DBCSources::CriteriaInfo,                               "achievement_criteria_dbc", CriteriaTreeLinks(dbcPath, bad_dbc_files));
+    LoadAreaGroups(dbcPath, bad_dbc_files);                                 // AreaGroupMember
+    sAreaGroupStore.LoadFromDB("areagroup_dbc", sAreaGroupStore.GetFormat());
+    LOAD_DB2(sAreaPOIStore,                          DBCSources::AreaPOIInfo,                                "areapoi_dbc");
+    LOAD_DB2(sAuctionHouseStore,                     DBCSources::AuctionHouseInfo,                           "auctionhouse_dbc");
+    LOAD_DB2(sBankBagSlotPricesStore,                DBCSources::BankBagSlotPricesInfo,                      "bankbagslotprices_dbc");
+    LOAD_DB2(sBattlemasterListStore,                 DBCSources::BattlemasterListInfo,                       "battlemasterlist_dbc");
+    LOAD_DB2(sBarberShopStyleStore,                  DBCSources::BarberShopStyleInfo,                        "barbershopstyle_dbc");
+    LOAD_DB2(sCharStartOutfitStore,                  DBCSources::CharStartOutfitInfo,                        "charstartoutfit_dbc");
+    LOAD_DB2(sCharSectionsStore,                     DBCSources::CharSectionsInfo,                           "charsections_dbc");
+    LOAD_DB2(sCharTitlesStore,                       DBCSources::CharTitlesInfo,                             "chartitles_dbc");
+    LOAD_DB2(sChatChannelsStore,                     DBCSources::ChatChannelsInfo,                           "chatchannels_dbc");
+    LOAD_DB2(sChrClassesStore,                       DBCSources::ChrClassesInfo,                             "chrclasses_dbc");
+    LOAD_DB2(sChrRacesStore,                         DBCSources::ChrRacesInfo,                               "chrraces_dbc");
+    LOAD_DB2(sCinematicCameraStore,                  DBCSources::CinematicCameraInfo,                        "cinematiccamera_dbc");
+    LOAD_DB2(sCinematicSequencesStore,               DBCSources::CinematicSequencesInfo,                     "cinematicsequences_dbc");
+    LOAD_DB2(sCreatureDisplayInfoStore,              DBCSources::CreatureDisplayInfoInfo,                    "creaturedisplayinfo_dbc");
+    LOAD_DB2(sCreatureDisplayInfoExtraStore,         DBCSources::CreatureDisplayInfoExtraInfo,               "creaturedisplayinfoextra_dbc");
+    LOAD_DB2(sCreatureFamilyStore,                   DBCSources::CreatureFamilyInfo,                         "creaturefamily_dbc");
+    LOAD_DB2(sCreatureModelDataStore,                DBCSources::CreatureModelDataInfo,                      "creaturemodeldata_dbc");
+    LOAD_DB2(sCreatureSpellDataStore,                DBCSources::CreatureSpellDataInfo,                      "creaturespelldata_dbc");
+    LOAD_DB2(sCreatureTypeStore,                     DBCSources::CreatureTypeInfo,                           "creaturetype_dbc");
+    LOAD_DB2(sCurrencyTypesStore,                    DBCSources::CurrencyTypesInfo,                          "currencytypes_dbc");
+    LOAD_DB2(sDestructibleModelDataStore,            DBCSources::DestructibleModelDataInfo,                  "destructiblemodeldata_dbc");
+    LOAD_DB2_FIXUP(sDungeonEncounterStore,                 DBCSources::DungeonEncounterInfo,                       "dungeonencounter_dbc", DifficultyIndex(dbcPath, bad_dbc_files, &DungeonEncounterEntry::difficulty, &DungeonEncounterEntry::mapId));
+    LOAD_DB2(sDurabilityCostsStore,                  DBCSources::DurabilityCostsInfo,                        "durabilitycosts_dbc");
+    LOAD_DB2(sDurabilityQualityStore,                DBCSources::DurabilityQualityInfo,                      "durabilityquality_dbc");
+    LOAD_DB2(sEmotesStore,                           DBCSources::EmotesInfo,                                 "emotes_dbc");
+    LOAD_DB2(sEmotesTextStore,                       DBCSources::EmotesTextInfo,                             "emotestext_dbc");
+    LOAD_DB2(sEmotesTextSoundStore,                  DBCSources::EmotesTextSoundInfo,                        "emotestextsound_dbc");
+    LOAD_DB2(sFactionStore,                          DBCSources::FactionInfo,                                "faction_dbc");
+    LOAD_DB2(sFactionTemplateStore,                  DBCSources::FactionTemplateInfo,                        "factiontemplate_dbc");
+    LOAD_DB2(sGameObjectArtKitStore,                 DBCSources::GameObjectArtKitInfo,                       "gameobjectartkit_dbc");
+    LOAD_DB2(sGameObjectDisplayInfoStore,            DBCSources::GameObjectDisplayInfoInfo,                  "gameobjectdisplayinfo_dbc");
+    LOAD_DB2(sGemPropertiesStore,                    DBCSources::GemPropertiesInfo,                          "gemproperties_dbc");
+    LOAD_DB2(sGlyphPropertiesStore,                  DBCSources::GlyphPropertiesInfo,                        "glyphproperties_dbc");
+    LOAD_DB2(sGlyphSlotStore,                        DBCSources::GlyphSlotInfo,                              "glyphslot_dbc");
+    LOAD_GT(sGtBarberShopCostBaseStore,             "BarberShopCostBase",                   "gtbarbershopcostbase_dbc");
+    LOAD_GT(sGtCombatRatingsStore,                  "CombatRatings",                        "gtcombatratings_dbc");
+    LOAD_GT(sGtChanceToMeleeCritBaseStore,          "ChanceToMeleeCritBase",                "gtchancetomeleecritbase_dbc");
+    LOAD_GT(sGtChanceToMeleeCritStore,              "ChanceToMeleeCrit",                    "gtchancetomeleecrit_dbc");
+    LOAD_GT(sGtChanceToSpellCritBaseStore,          "ChanceToSpellCritBase",                "gtchancetospellcritbase_dbc");
+    LOAD_GT(sGtChanceToSpellCritStore,              "ChanceToSpellCrit",                    "gtchancetospellcrit_dbc");
+    LOAD_GT(sGtNPCManaCostScalerStore,              "NPCManaCostScaler",                    "gtnpcmanacostscaler_dbc");
+    LOAD_GT(sGtOCTClassCombatRatingScalarStore,     "OCTClassCombatRatingScalar",           "gtoctclasscombatratingscalar_dbc");
+    LOAD_GT(sGtOCTRegenHPStore,                     "OCTRegenHP",                           "gtoctregenhp_dbc");
     //LOAD_DBC(sGtOCTRegenMPStore,                  "gtOCTRegenMP.dbc",                     "gtoctregenmp_dbc");       -- not used currently
-    LOAD_DBC(sGtRegenHPPerSptStore,                 "gtRegenHPPerSpt.dbc",                  "gtregenhpperspt_dbc");
-    LOAD_DBC(sGtRegenMPPerSptStore,                 "gtRegenMPPerSpt.dbc",                  "gtregenmpperspt_dbc");
-    LOAD_DBC(sHolidaysStore,                        "Holidays.dbc",                         "holidays_dbc");
-    LOAD_DBC(sItemStore,                            "Item.dbc",                             "item_dbc");
-    LOAD_DBC(sItemBagFamilyStore,                   "ItemBagFamily.dbc",                    "itembagfamily_dbc");
-    LOAD_DBC(sItemDisplayInfoStore,                 "ItemDisplayInfo.dbc",                  "itemdisplayinfo_dbc");
+    LOAD_GT(sGtRegenHPPerSptStore,                  "RegenHPPerSpt",                        "gtregenhpperspt_dbc");
+    LOAD_GT(sGtRegenMPPerSptStore,                  "RegenMPPerSpt",                        "gtregenmpperspt_dbc");
+    LOAD_DB2(sHolidaysStore,                         DBCSources::HolidaysInfo,                               "holidays_dbc");
+    LOAD_DB2_FIXUP(sItemStore,                            DBCSources::ItemInfo,                                   "item_dbc", ItemAppearanceDisplay(dbcPath, bad_dbc_files));
+    LOAD_DB2(sItemBagFamilyStore,                    DBCSources::ItemBagFamilyInfo,                          "itembagfamily_dbc");
+    LOAD_DB2(sItemDisplayInfoStore,                  DBCSources::ItemDisplayInfoInfo,                        "itemdisplayinfo_dbc");
     //LOAD_DBC(sItemCondExtCostsStore,              "ItemCondExtCosts.dbc",                 "itemcondextcosts_dbc");
-    LOAD_DBC(sItemExtendedCostStore,                "ItemExtendedCost.dbc",                 "itemextendedcost_dbc");
-    LOAD_DBC(sItemLimitCategoryStore,               "ItemLimitCategory.dbc",                "itemlimitcategory_dbc");
-    LOAD_DBC(sItemRandomPropertiesStore,            "ItemRandomProperties.dbc",             "itemrandomproperties_dbc");
-    LOAD_DBC(sItemRandomSuffixStore,                "ItemRandomSuffix.dbc",                 "itemrandomsuffix_dbc");
-    LOAD_DBC(sItemSetStore,                         "ItemSet.dbc",                          "itemset_dbc");
-    LOAD_DBC(sLFGDungeonStore,                      "LFGDungeons.dbc",                      "lfgdungeons_dbc");
-    LOAD_DBC(sLightStore,                           "Light.dbc",                            "light_dbc");
-    LOAD_DBC(sLiquidTypeStore,                      "LiquidType.dbc",                       "liquidtype_dbc");
-    LOAD_DBC(sLockStore,                            "Lock.dbc",                             "lock_dbc");
-    LOAD_DBC(sMailTemplateStore,                    "MailTemplate.dbc",                     "mailtemplate_dbc");
-    LOAD_DBC(sMapStore,                             "Map.dbc",                              "map_dbc");
-    LOAD_DBC(sMapDifficultyStore,                   "MapDifficulty.dbc",                    "mapdifficulty_dbc");
-    LOAD_DBC(sMovieStore,                           "Movie.dbc",                            "movie_dbc");
-    LOAD_DBC(sNamesReservedStore,                   "NamesReserved.dbc",                    "namesreserved_dbc");
-    LOAD_DBC(sNamesProfanityStore,                  "NamesProfanity.dbc",                   "namesprofanity_dbc");
-    LOAD_DBC(sOverrideSpellDataStore,               "OverrideSpellData.dbc",                "overridespelldata_dbc");
-    LOAD_DBC(sPowerDisplayStore,                    "PowerDisplay.dbc",                     "powerdisplay_dbc");
-    LOAD_DBC(sPvPDifficultyStore,                   "PvpDifficulty.dbc",                    "pvpdifficulty_dbc");
-    LOAD_DBC(sQuestXPStore,                         "QuestXP.dbc",                          "questxp_dbc");
-    LOAD_DBC(sQuestFactionRewardStore,              "QuestFactionReward.dbc",               "questfactionreward_dbc");
-    LOAD_DBC(sQuestSortStore,                       "QuestSort.dbc",                        "questsort_dbc");
-    LOAD_DBC(sRandomPropertiesPointsStore,          "RandPropPoints.dbc",                   "randproppoints_dbc");
-    LOAD_DBC(sScalingStatDistributionStore,         "ScalingStatDistribution.dbc",          "scalingstatdistribution_dbc");
-    LOAD_DBC(sScalingStatValuesStore,               "ScalingStatValues.dbc",                "scalingstatvalues_dbc");
-    LOAD_DBC(sSkillLineStore,                       "SkillLine.dbc",                        "skillline_dbc");
-    LOAD_DBC(sSkillLineAbilityStore,                "SkillLineAbility.dbc",                 "skilllineability_dbc");
-    LOAD_DBC(sSkillRaceClassInfoStore,              "SkillRaceClassInfo.dbc",               "skillraceclassinfo_dbc");
-    LOAD_DBC(sSkillTiersStore,                      "SkillTiers.dbc",                       "skilltiers_dbc");
-    LOAD_DBC(sSoundEntriesStore,                    "SoundEntries.dbc",                     "soundentries_dbc");
-    LOAD_DBC(sSpellStore,                           "Spell.dbc",                            "spell_dbc");
-    LOAD_DBC(sSpellCastTimesStore,                  "SpellCastTimes.dbc",                   "spellcasttimes_dbc");
-    LOAD_DBC(sSpellCategoryStore,                   "SpellCategory.dbc",                    "spellcategory_dbc");
-    LOAD_DBC(sSpellDifficultyStore,                 "SpellDifficulty.dbc",                  "spelldifficulty_dbc");
-    LOAD_DBC(sSpellDurationStore,                   "SpellDuration.dbc",                    "spellduration_dbc");
-    LOAD_DBC(sSpellFocusObjectStore,                "SpellFocusObject.dbc",                 "spellfocusobject_dbc");
-    LOAD_DBC(sSpellItemEnchantmentStore,            "SpellItemEnchantment.dbc",             "spellitemenchantment_dbc");
-    LOAD_DBC(sSpellItemEnchantmentConditionStore,   "SpellItemEnchantmentCondition.dbc",    "spellitemenchantmentcondition_dbc");
-    LOAD_DBC(sSpellRadiusStore,                     "SpellRadius.dbc",                      "spellradius_dbc");
-    LOAD_DBC(sSpellRangeStore,                      "SpellRange.dbc",                       "spellrange_dbc");
-    LOAD_DBC(sSpellRuneCostStore,                   "SpellRuneCost.dbc",                    "spellrunecost_dbc");
-    LOAD_DBC(sSpellShapeshiftFormStore,             "SpellShapeshiftForm.dbc",              "spellshapeshiftform_dbc");
-    LOAD_DBC(sSpellVisualStore,                     "SpellVisual.dbc",                      "spellvisual_dbc");
-    LOAD_DBC(sStableSlotPricesStore,                "StableSlotPrices.dbc",                 "stableslotprices_dbc");
-    LOAD_DBC(sSummonPropertiesStore,                "SummonProperties.dbc",                 "summonproperties_dbc");
-    LOAD_DBC(sTalentStore,                          "Talent.dbc",                           "talent_dbc");
-    LOAD_DBC(sTalentTabStore,                       "TalentTab.dbc",                        "talenttab_dbc");
-    LOAD_DBC(sTaxiNodesStore,                       "TaxiNodes.dbc",                        "taxinodes_dbc");
-    LOAD_DBC(sTaxiPathStore,                        "TaxiPath.dbc",                         "taxipath_dbc");
-    LOAD_DBC(sTaxiPathNodeStore,                    "TaxiPathNode.dbc",                     "taxipathnode_dbc");
-    LOAD_DBC(sTeamContributionPointsStore,          "TeamContributionPoints.dbc",           "teamcontributionpoints_dbc");
-    LOAD_DBC(sTotemCategoryStore,                   "TotemCategory.dbc",                    "totemcategory_dbc");
-    LOAD_DBC(sTransportAnimationStore,              "TransportAnimation.dbc",               "transportanimation_dbc");
-    LOAD_DBC(sTransportRotationStore,               "TransportRotation.dbc",                "transportrotation_dbc");
-    LOAD_DBC(sVehicleStore,                         "Vehicle.dbc",                          "vehicle_dbc");
-    LOAD_DBC(sVehicleSeatStore,                     "VehicleSeat.dbc",                      "vehicleseat_dbc");
-    LOAD_DBC(sWMOAreaTableStore,                    "WMOAreaTable.dbc",                     "wmoareatable_dbc");
-    LOAD_DBC(sWorldMapAreaStore,                    "WorldMapArea.dbc",                     "worldmaparea_dbc");
-    LOAD_DBC(sWorldMapOverlayStore,                 "WorldMapOverlay.dbc",                  "worldmapoverlay_dbc");
+    LOAD_DB2_FIXUP(sItemExtendedCostStore,                 DBCSources::ItemExtendedCostInfo,                       "itemextendedcost_dbc", CurrencyCosts(dbcPath, bad_dbc_files));
+    LOAD_DB2(sItemLimitCategoryStore,                DBCSources::ItemLimitCategoryInfo,                      "itemlimitcategory_dbc");
+    LOAD_DB2(sItemRandomPropertiesStore,             DBCSources::ItemRandomPropertiesInfo,                   "itemrandomproperties_dbc");
+    LOAD_DB2(sItemRandomSuffixStore,                 DBCSources::ItemRandomSuffixInfo,                       "itemrandomsuffix_dbc");
+    LOAD_DB2_FIXUP(sItemSetStore,                         DBCSources::ItemSetInfo,                                "itemset_dbc", ItemSetSpells(dbcPath, bad_dbc_files));
+    LOAD_DB2_FIXUP(sLFGDungeonStore,                       DBCSources::LFGDungeonsInfo,                            "lfgdungeons_dbc", DifficultyIndex(dbcPath, bad_dbc_files, &LFGDungeonEntry::Difficulty, &LFGDungeonEntry::MapID));
+    LOAD_DB2(sLightStore,                            DBCSources::LightInfo,                                  "light_dbc");
+    LOAD_DB2(sLiquidTypeStore,                       DBCSources::LiquidTypeInfo,                             "liquidtype_dbc");
+    LOAD_DB2(sLockStore,                             DBCSources::LockInfo,                                   "lock_dbc");
+    LOAD_DB2(sMailTemplateStore,                     DBCSources::MailTemplateInfo,                           "mailtemplate_dbc");
+    LOAD_DB2(sMapStore,                              DBCSources::MapInfo,                                    "map_dbc");
+    LOAD_DB2_FIXUP(sMapDifficultyStore,                    DBCSources::MapDifficultyInfo,                          "mapdifficulty_dbc", [&](DBCStorage<MapDifficultyEntry>& storage) { DifficultyIndex(dbcPath, bad_dbc_files, &MapDifficultyEntry::Difficulty, &MapDifficultyEntry::MapId)(storage); ResetIntervalSeconds(storage); });
+    LOAD_DB2(sMovieStore,                            DBCSources::MovieInfo,                                  "movie_dbc");
+    LOAD_DB2(sNamesReservedStore,                    DBCSources::NamesReservedInfo,                          "namesreserved_dbc");
+    LOAD_DB2(sNamesProfanityStore,                   DBCSources::NamesProfanityInfo,                         "namesprofanity_dbc");
+    LOAD_DB2(sOverrideSpellDataStore,                DBCSources::OverrideSpellDataInfo,                      "overridespelldata_dbc");
+    LOAD_DB2(sPowerDisplayStore,                     DBCSources::PowerDisplayInfo,                           "powerdisplay_dbc");
+    LOAD_DB2(sPvPDifficultyStore,                   DBCSources::PVPDifficultyInfo,                          "pvpdifficulty_dbc");
+    LOAD_DB2(sQuestXPStore,                          DBCSources::QuestXPInfo,                                "questxp_dbc");
+    LOAD_DB2(sQuestFactionRewardStore,               DBCSources::QuestFactionRewardInfo,                     "questfactionreward_dbc");
+    LOAD_DB2(sQuestSortStore,                        DBCSources::QuestSortInfo,                              "questsort_dbc");
+    LOAD_DB2(sRandomPropertiesPointsStore,           DBCSources::RandPropPointsInfo,                         "randproppoints_dbc");
+    LOAD_DB2(sScalingStatDistributionStore,          DBCSources::ScalingStatDistributionInfo,                "scalingstatdistribution_dbc");
+    LOAD_DB2(sScalingStatValuesStore,                DBCSources::ScalingStatValuesInfo,                      "scalingstatvalues_dbc");
+    LOAD_DB2(sSkillLineStore,                        DBCSources::SkillLineInfo,                              "skillline_dbc");
+    LOAD_DB2_FIXUP(sSkillLineAbilityStore,                 DBCSources::SkillLineAbilityInfo,                       "skilllineability_dbc", InvertSupersedes);
+    LOAD_DB2(sSkillRaceClassInfoStore,               DBCSources::SkillRaceClassInfoInfo,                     "skillraceclassinfo_dbc");
+    sSkillTiersStore.LoadFromDB("skilltiers_dbc", sSkillTiersStore.GetFormat());           // server-side: no client table
+    ++DBCFileCount;
+    LOAD_DB2(sSoundEntriesStore,                    DBCSources::SoundKitInfo,                               "soundentries_dbc");
+    LOAD_DB2_FIXUP(sSpellStore,                            DBCSources::SpellInfo,                                  "spell_dbc", SpellPowerCosts(dbcPath, bad_dbc_files));
+    sSpellRuneCostStore.LoadFromDB("spellrunecost_dbc", sSpellRuneCostStore.GetFormat());
+    LOAD_DB2(sSpellCastTimesStore,                   DBCSources::SpellCastTimesInfo,                         "spellcasttimes_dbc");
+    LOAD_DB2(sSpellCategoryStore,                    DBCSources::SpellCategoryInfo,                          "spellcategory_dbc");
+    sSpellDifficultyStore.LoadFromDB("spelldifficulty_dbc", sSpellDifficultyStore.GetFormat()); // server-side: no client table
+    ++DBCFileCount;
+    LOAD_DB2(sSpellDurationStore,                    DBCSources::SpellDurationInfo,                          "spellduration_dbc");
+    LOAD_DB2(sSpellFocusObjectStore,                 DBCSources::SpellFocusObjectInfo,                       "spellfocusobject_dbc");
+    LOAD_DB2(sSpellItemEnchantmentStore,             DBCSources::SpellItemEnchantmentInfo,                   "spellitemenchantment_dbc");
+    LOAD_DB2(sSpellItemEnchantmentConditionStore,    DBCSources::SpellItemEnchantmentConditionInfo,          "spellitemenchantmentcondition_dbc");
+    LOAD_DB2(sSpellRadiusStore,                      DBCSources::SpellRadiusInfo,                            "spellradius_dbc");
+    LOAD_DB2(sSpellRangeStore,                       DBCSources::SpellRangeInfo,                             "spellrange_dbc");
+    // sSpellRuneCostStore: built from SpellPower with the spells (SpellPowerCosts), overrides below
+    LOAD_DB2(sSpellShapeshiftFormStore,              DBCSources::SpellShapeshiftFormInfo,                    "spellshapeshiftform_dbc");
+    LOAD_DB2(sSpellVisualStore,                      DBCSources::SpellVisualInfo,                            "spellvisual_dbc");
+    LOAD_DB2(sStableSlotPricesStore,                 DBCSources::StableSlotPricesInfo,                       "stableslotprices_dbc");
+    LOAD_DB2(sSummonPropertiesStore,                 DBCSources::SummonPropertiesInfo,                       "summonproperties_dbc");
+    LOAD_DB2(sTalentStore,                           DBCSources::TalentInfo,                                 "talent_dbc");
+    LOAD_DB2(sTalentTabStore,                        DBCSources::TalentTabInfo,                              "talenttab_dbc");
+    LOAD_DB2(sTaxiNodesStore,                        DBCSources::TaxiNodesInfo,                              "taxinodes_dbc");
+    LOAD_DB2(sTaxiPathStore,                         DBCSources::TaxiPathInfo,                               "taxipath_dbc");
+    LOAD_DB2(sTaxiPathNodeStore,                     DBCSources::TaxiPathNodeInfo,                           "taxipathnode_dbc");
+    LOAD_GT(sTeamContributionPointsStore,           "TeamContributionPoints",               "teamcontributionpoints_dbc");
+    LOAD_DB2(sTotemCategoryStore,                    DBCSources::TotemCategoryInfo,                          "totemcategory_dbc");
+    LOAD_DB2(sTransportAnimationStore,               DBCSources::TransportAnimationInfo,                     "transportanimation_dbc");
+    LOAD_DB2(sTransportRotationStore,                DBCSources::TransportRotationInfo,                      "transportrotation_dbc");
+    LOAD_DB2(sVehicleStore,                          DBCSources::VehicleInfo,                                "vehicle_dbc");
+    LOAD_DB2(sVehicleSeatStore,                      DBCSources::VehicleSeatInfo,                            "vehicleseat_dbc");
+    LOAD_DB2(sWMOAreaTableStore,                     DBCSources::WMOAreaTableInfo,                           "wmoareatable_dbc");
+    LoadWorldMapAreas(dbcPath, bad_dbc_files);                              // UiMapAssignment, UiMap
+    sWorldMapAreaStore.LoadFromDB("worldmaparea_dbc", sWorldMapAreaStore.GetFormat());
+    LOAD_DB2(sWorldMapOverlayStore,                  DBCSources::WorldMapOverlayInfo,                        "worldmapoverlay_dbc");
 
 #undef LOAD_DBC
+#undef LOAD_DB2
+#undef LOAD_DB2_FIXUP
+#undef LOAD_GT
 
     for (CharStartOutfitEntry const* outfit : sCharStartOutfitStore)
         sCharStartOutfitMap[outfit->Race | (outfit->Class << 8) | (outfit->Gender << 16)] = outfit;
