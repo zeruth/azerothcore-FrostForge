@@ -928,7 +928,8 @@ enum SpellEffects
     SPELL_EFFECT_TALENT_SPEC_SELECT                 = 162,
     SPELL_EFFECT_163                                = 163,
     SPELL_EFFECT_REMOVE_AURA                        = 164,
-    TOTAL_SPELL_EFFECTS                             = 165
+    // 3.4.3.54261 spells use effect types up to 226; the new ones have no handler yet
+    TOTAL_SPELL_EFFECTS                             = 227
 };
 
 // EnumUtils: DESCRIBE THIS
@@ -1515,7 +1516,8 @@ enum Targets
     TARGET_UNK_DEST_AREA_UNK_107       = 107, // not enough info - only generic spells avalible
     TARGET_GAMEOBJECT_CONE             = 108,
     TARGET_DEST_UNK_110                = 110, // 1 spell
-    TOTAL_SPELL_TARGETS
+    // 3.4.3.54261 spells use targets up to 149 (120, 123, 142, 149 on 9 spells); unnamed yet
+    TOTAL_SPELL_TARGETS                = 150
 };
 
 enum SpellMissInfo

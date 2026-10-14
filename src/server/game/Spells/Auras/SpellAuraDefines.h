@@ -377,7 +377,8 @@ enum AuraType
     SPELL_AURA_PREVENT_RESURRECTION                         = 314,
     SPELL_AURA_UNDERWATER_WALKING                           = 315,
     SPELL_AURA_PERIODIC_HASTE                               = 316,
-    TOTAL_AURAS                                             = 317
+    // 3.4.3.54261 spells use aura types up to 512; the new ones have no handler yet
+    TOTAL_AURAS                                             = 513
 };
 
 enum AuraObjectType
