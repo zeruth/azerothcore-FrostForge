@@ -32,6 +32,9 @@ target_link_libraries(
         game-interface
 )
 
+# lets tests find data kept in the source tree (var/data)
+target_compile_definitions(unit_tests PRIVATE AC_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # Add module test sources if any modules registered tests
 get_property(MODULE_TEST_SOURCES GLOBAL PROPERTY ACORE_MODULE_TEST_SOURCES)
 get_property(MODULE_TEST_INCLUDES GLOBAL PROPERTY ACORE_MODULE_TEST_INCLUDES)
