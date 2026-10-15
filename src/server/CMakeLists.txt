@@ -20,6 +20,10 @@ if (BUILD_APPLICATION_AUTHSERVER OR BUILD_APPLICATION_WORLDSERVER)
   add_subdirectory(shared)
 endif()
 
+if (BUILD_APPLICATION_AUTHSERVER)
+  add_subdirectory(proto)
+endif()
+
 if (BUILD_APPLICATION_WORLDSERVER)
   add_subdirectory(game)
   add_subdirectory(scripts)

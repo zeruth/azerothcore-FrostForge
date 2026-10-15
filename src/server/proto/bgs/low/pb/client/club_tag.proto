@@ -1,0 +1,33 @@
+syntax = "proto2";
+
+import "bgs/low/pb/client/rpc_types.proto";
+
+package bgs.protocol.club.v1;
+
+enum TagAction {
+  TAG_ACTION_NONE = 0;
+  TAG_ACTION_CLEAR = 1;
+  TAG_ACTION_SET = 2;
+}
+
+enum TagType {
+  TAG_TYPE_INVALID = 0;
+  TAG_TYPE_PLATFORM = 1;
+  TAG_TYPE_CUSTOM = 2;
+}
+
+message TagOptions {
+  optional uint32 action = 1 [(bgs.protocol.field_options).realized_enum = "TagAction"];
+  repeated .bgs.protocol.club.v1.TagIdentifier tag = 2;
+}
+
+message TagIdentifier {
+  optional uint32 id = 1;
+  optional uint32 type = 2 [(bgs.protocol.field_options).realized_enum = "TagType"];
+}
+
+message LocalizedTag {
+  optional .bgs.protocol.club.v1.TagIdentifier tag_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+}

@@ -1,0 +1,17 @@
+syntax = "proto2";
+
+import "google/protobuf/descriptor.proto";
+
+package bgs.protocol;
+
+option java_package = "bgs.protocol";
+option java_outer_classname = "MessageOptionsProto";
+
+message BGSMessageOptions {
+  optional bool custom_select_shard = 1;
+  optional bool custom_validator = 2;
+}
+
+extend .google.protobuf.MessageOptions {
+  optional .bgs.protocol.BGSMessageOptions message_options = 90000;
+}
