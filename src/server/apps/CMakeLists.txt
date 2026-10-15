@@ -130,7 +130,8 @@ foreach(APPLICATION_NAME ${APPLICATIONS_BUILD_LIST})
   if (${APP_PROJECT_NAME} MATCHES "authserver")
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
-        shared)
+        shared
+        bnetproto)
   elseif(${APP_PROJECT_NAME} MATCHES "worldserver")
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC

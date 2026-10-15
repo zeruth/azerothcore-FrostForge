@@ -66,6 +66,24 @@ RealmServerPort = 3724
 BindIP = "0.0.0.0"
 
 #
+#    BattlenetPort
+#        Description: TLS port the 3.4.3 client reaches for Battle.net RPC. 0 disables it.
+#        Default:     1119
+
+BattlenetPort = 1119
+
+#
+#    BattlenetCertificatesFile
+#    BattlenetPrivateKeyFile
+#        Description: PEM certificate chain and private key for the Battle.net port. The client
+#                     checks the certificate against the Windows trusted roots, so its CA must be
+#                     installed there, and its subject must match the address the client dials.
+#        Default:     "bnetserver.cert.pem", "bnetserver.key.pem" (beside the executable)
+
+BattlenetCertificatesFile = "bnetserver.cert.pem"
+BattlenetPrivateKeyFile = "bnetserver.key.pem"
+
+#
 #    EnableProxyProtocol
 #        Description: Enables Proxy Protocol v2. When your server is behind a proxy,
 #                     load balancer, or similar component, you need to enable Proxy Protocol v2 on both

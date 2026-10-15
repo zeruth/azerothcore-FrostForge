@@ -26,6 +26,7 @@
 #include "AppenderDB.h"
 #include "AuthSocketMgr.h"
 #include "Banner.h"
+#include "BattlenetServer.h"
 #include "Config.h"
 #include "DBUpdater.h"
 #include "DatabaseEnv.h"
@@ -181,6 +182,24 @@ int main(int argc, char** argv)
     }
 
     std::shared_ptr<void> sAuthSocketMgrHandle(nullptr, [](void*) { sAuthSocketMgr.StopNetwork(); });
+
+    // Battle.net RPC for the 3.4.3 client
+    int32 battlenetPort = sConfigMgr->GetOption<int32>("BattlenetPort", 1119);
+    if (battlenetPort < 0 || battlenetPort > 0xFFFF)
+    {
+        LOG_ERROR("server.authserver", "Specified BattlenetPort out of allowed range (0-65535)");
+        return 1;
+    }
+
+    if (battlenetPort && !sBattlenetServer.Start(*ioContext, bindIp, uint16(battlenetPort),
+        sConfigMgr->GetOption<std::string>("BattlenetCertificatesFile", "bnetserver.cert.pem"),
+        sConfigMgr->GetOption<std::string>("BattlenetPrivateKeyFile", "bnetserver.key.pem")))
+    {
+        LOG_ERROR("server.authserver", "Failed to initialize the Battle.net network");
+        return 1;
+    }
+
+    std::shared_ptr<void> sBattlenetServerHandle(nullptr, [](void*) { sBattlenetServer.Stop(); });
 
     // Set signal handlers
     boost::asio::signal_set signals(*ioContext, SIGINT, SIGTERM);
