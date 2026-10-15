@@ -36,6 +36,10 @@ if (BUILD_APPLICATION_WORLDSERVER OR BUILD_TOOLS_MAPS)
   add_subdirectory(recastnavigation)
 endif()
 
+if (BUILD_APPLICATION_AUTHSERVER)
+  add_subdirectory(protobuf)
+endif()
+
 if (BUILD_APPLICATION_WORLDSERVER)
   add_subdirectory(readline)
   add_subdirectory(gsoap)

@@ -82,6 +82,10 @@ recastnavigation (Recast is state of the art navigation mesh construction toolse
   https://github.com/fmtlib/fmt
   Version: 12.1.0 https://github.com/fmtlib/fmt/releases/tag/12.1.0
 
+Protocol Buffers (Google's data interchange format; the C++ runtime and protoc, for the Battle.net RPC)
+  https://github.com/protocolbuffers/protobuf
+  Version: v21.12 (C++ sources only, as listed by upstream cmake/; last release without abseil)
+
 fkYAML (A C++ header-only YAML library)
   https://github.com/fktn-k/fkYAML
   Version: 721edb3e1a817e527fd9e1e18a3bea300822522e
