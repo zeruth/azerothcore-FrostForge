@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-import "bgs/low/pb/client/global_extensions/field_options.proto";
+import public "bgs/low/pb/client/global_extensions/field_options.proto";
 import "bgs/low/pb/client/club_core.proto";
 import "bgs/low/pb/client/club_member.proto";
 import "bgs/low/pb/client/api/client/v2/attribute_types.proto";

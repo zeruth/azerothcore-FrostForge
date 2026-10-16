@@ -4,6 +4,7 @@ import "bgs/low/pb/client/account_types.proto";
 import "bgs/low/pb/client/attribute_types.proto";
 import "bgs/low/pb/client/entity_types.proto";
 import "bgs/low/pb/client/rpc_types.proto";
+import "bgs/low/pb/client/global_extensions/field_options.proto";
 
 package bgs.protocol.report.v1;
 

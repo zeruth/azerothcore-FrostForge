@@ -132,10 +132,18 @@ class Options:
         self.extensions: dict[tuple[str, int], tuple[str, list]] = {}  # -> (full name, field descriptor)
         self.messages: dict[str, list] = {}                               # full name -> DescriptorProto
         self.enums: dict[str, list] = {}
+        # The file each extension is defined in, and the files of the extensions rendered since
+        # `used` was last cleared. The client's descriptors do not list a file whose only use is
+        # an option (account_service.proto never names method_options.proto), and protoc rejects
+        # the option without the import, so render_file adds them.
+        self.extension_file: dict[tuple[str, int], str] = {}
+        self.used: set[str] = set()
+        self.file = ""
 
     def learn(self, fd: list) -> None:
         package = text(first(fd, 2, b""))
         prefix = "." + package if package else ""
+        self.file = text(first(fd, 1))
 
         def walk(msg: list, scope: str) -> None:
             name = f"{scope}.{text(first(msg, 1))}"
@@ -157,7 +165,9 @@ class Options:
             self.extension(fields(x), prefix)
 
     def extension(self, xf: list, scope: str) -> None:
-        self.extensions[(text(first(xf, 2)), first(xf, 3))] = (f"{scope}.{text(first(xf, 1))}".lstrip("."), xf)
+        key = (text(first(xf, 2)), first(xf, 3))
+        self.extensions[key] = (f"{scope}.{text(first(xf, 1))}".lstrip("."), xf)
+        self.extension_file[key] = self.file
 
     def render(self, kind: str, raw: bytes) -> list[str]:
         """`option` assignments for an options message: the standard ones this tool knows, the
@@ -187,6 +197,7 @@ class Options:
                 out.append(f"cc_generic_services = {'true' if v else 'false'}")
             elif (OPTION_EXTENDEE[kind], f) in self.extensions:
                 name, xf = self.extensions[(OPTION_EXTENDEE[kind], f)]
+                self.used.add(self.extension_file[(OPTION_EXTENDEE[kind], f)])
                 out.extend(self.value(f"({name})", xf, wt, v))
             else:
                 out.append(f"/* unknown {kind} option {f} */")
@@ -238,13 +249,7 @@ class Options:
 
 def render_file(fd: list, opts: Options) -> str:
     lines = []
-    syntax = text(first(fd, 12, b"proto2"))
-    lines.append(f'syntax = "{syntax}";')
-    lines.append("")
-    for imp in every(fd, 3):
-        lines.append(f'import "{text(imp)}";')
-    if every(fd, 3):
-        lines.append("")
+    opts.used = set()
     package = first(fd, 2)
     if package:
         lines.append(f"package {text(package)};")
@@ -361,7 +366,14 @@ def render_file(fd: list, opts: Options) -> str:
                 lines.append(head + ";")
         lines.append("}")
         lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    imports = [text(imp) for imp in every(fd, 3)]
+    public = {imports[i] for i in every(fd, 10)}  # public_dependency: indexes into the imports
+    imports += sorted(opts.used - set(imports) - {text(first(fd, 1))})
+    head = [f'syntax = "{text(first(fd, 12, b"proto2"))}";', ""]
+    head += [f'import {"public " if imp in public else ""}"{imp}";' for imp in imports]
+    if imports:
+        head.append("")
+    return "\n".join(head + lines).rstrip() + "\n"
 
 
 def main() -> None:

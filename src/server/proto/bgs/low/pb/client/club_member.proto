@@ -1,9 +1,10 @@
 syntax = "proto2";
 
-import "bgs/low/pb/client/club_member_id.proto";
+import public "bgs/low/pb/client/club_member_id.proto";
 import "bgs/low/pb/client/api/client/v2/attribute_types.proto";
 import "bgs/low/pb/client/club_enum.proto";
 import "bgs/low/pb/client/rpc_types.proto";
+import "bgs/low/pb/client/global_extensions/field_options.proto";
 
 package bgs.protocol.club.v1;
 

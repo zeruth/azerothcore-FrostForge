@@ -1,9 +1,9 @@
 syntax = "proto2";
 
-import "bgs/low/pb/client/global_extensions/field_options.proto";
-import "bgs/low/pb/client/global_extensions/method_options.proto";
-import "bgs/low/pb/client/global_extensions/message_options.proto";
-import "bgs/low/pb/client/global_extensions/service_options.proto";
+import public "bgs/low/pb/client/global_extensions/field_options.proto";
+import public "bgs/low/pb/client/global_extensions/method_options.proto";
+import public "bgs/low/pb/client/global_extensions/message_options.proto";
+import public "bgs/low/pb/client/global_extensions/service_options.proto";
 
 package bgs.protocol;
 
