@@ -19,6 +19,7 @@
 #define AC_PACKET_BUILDER_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
 
 class ByteBuffer;
 namespace G3D
@@ -31,13 +32,21 @@ namespace Movement
     using G3D::Vector3;
 
     class MoveSpline;
+    class MoveSplineFlag;
+
+    /// Splines in the 3.4.3 client's layouts.
     class PacketBuilder
     {
-        static void WriteCommonMonsterMovePart(MoveSpline const& mov, ByteBuffer& data);
+        static void WriteMovementSpline(MoveSpline const& mov, ByteBuffer& data, ObjectGuid const& transport, int8 seat);
     public:
-        static void WriteMonsterMove(MoveSpline const& mov, ByteBuffer& data);
-        static void WriteStopMovement(Vector3 const& loc, uint32 splineId, ByteBuffer& data);
+        /// SMSG_ON_MONSTER_MOVE after the mover's GUID: start position, spline id, destination,
+        /// CrzTeleport / StopDistanceTolerance bits, the MovementSpline (FUN_140715140).
+        static void WriteMonsterMove(MoveSpline const& mov, ByteBuffer& data, ObjectGuid const& transport = ObjectGuid::Empty, int8 seat = 0);
+        static void WriteStopMovement(Vector3 const& loc, uint32 splineId, ByteBuffer& data, ObjectGuid const& transport = ObjectGuid::Empty, int8 seat = 0);
+        /// The create block's spline (updateobject.md 3.1 #32-35 and 3.4).
         static void WriteCreate(MoveSpline const& mov, ByteBuffer& data);
+        /// AC's (3.3.5) spline flags as the client's.
+        static uint32 ClientFlags(MoveSplineFlag const& flags);
     };
 }
 #endif // AC_PACKET_BUILDER_H

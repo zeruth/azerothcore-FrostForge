@@ -663,17 +663,27 @@ void Unit::MonsterMoveWithSpeed(float x, float y, float z, float speed)
 
 void Unit::SendMonsterMove(float NewPosX, float NewPosY, float NewPosZ, uint32 TransitTime, SplineFlags sf)
 {
-    WorldPacket data(SMSG_ON_MONSTER_MOVE, 1 + 12 + 4 + 1 + 4 + 4 + 4 + 12 + GetPackGUID().size());
-    data << GetPackGUID();
-
-    data << uint8(0);                                       // new in 3.1
+    // SMSG_ON_MONSTER_MOVE, 3.4.3 (see Movement::PacketBuilder): the mover, the start, spline id 0,
+    // the destination, no flags (walking is a movement flag in 3.4.3, not a spline flag), one point
+    (void)sf;
+    WorldPacket data(SMSG_ON_MONSTER_MOVE, 80);
+    Guid128::Write(data, GetGUID());
     data << GetPositionX() << GetPositionY() << GetPositionZ();
-    data << GameTime::GetGameTimeMS().count();
-    data << uint8(0);
-    data << uint32(sf);
-    data << TransitTime;                                           // Time in between points
-    data << uint32(1);                                      // 1 single waypoint
-    data << NewPosX << NewPosY << NewPosZ;                  // the single waypoint Point B
+    data << uint32(0);                                      // ID
+    data << NewPosX << NewPosY << NewPosZ;                  // Destination
+    data << uint8(0);                                       // CrzTeleport, StopDistanceTolerance
+    data << uint32(0);                                      // Flags
+    data << int32(0);                                       // Elapsed
+    data << uint32(TransitTime);                            // MoveTime
+    data << uint32(0);                                      // FadeObjectTime
+    data << uint8(0);                                       // Mode
+    Guid128::Write(data, ObjectGuid::Empty);                // TransportGUID
+    data << int8(0);                                        // VehicleSeat
+    data.WriteBits(0, 2);                                   // Face
+    data.WriteBits(1, 16);                                  // one point
+    data.WriteBits(0, 22);
+    data.FlushBits();
+    data << NewPosX << NewPosY << NewPosZ;
 
     SendMessageToSet(&data, true);
 }

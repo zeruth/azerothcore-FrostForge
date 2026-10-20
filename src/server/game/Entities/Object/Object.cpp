@@ -31,6 +31,7 @@
 #include "Log.h"
 #include "MapMgr.h"
 #include "MiscPackets.h"
+#include "MoveSpline.h"
 #include "MovementPacketBuilder.h"
 #include "MovementPackets.h"
 #include "ObjectAccessor.h"
@@ -379,7 +380,8 @@ void Object::BuildMovementUpdate(ByteBuffer* data, CreateObjectBits flags, Playe
     if (flags.MovementUpdate)
     {
         ASSERT(unit);
-        WorldPackets::Movement::WriteUnitMovementInfo(*data, unit);
+        bool hasSpline = unit->movespline->Initialized() && !unit->movespline->Finalized();
+        WorldPackets::Movement::WriteUnitMovementInfo(*data, unit, hasSpline);
 
         *data << float(ClientSpeed(unit->GetSpeed(MOVE_WALK)));
         *data << float(ClientSpeed(unit->GetSpeed(MOVE_RUN)));
@@ -413,10 +415,11 @@ void Object::BuildMovementUpdate(ByteBuffer* data, CreateObjectBits flags, Playe
         *data << float(7.0f);                                   // OverMaxDeceleration
         *data << float(0.4f);                                   // LaunchSpeedCoefficient
 
-        // HasSpline: a unit moving along a spline is created where it stands; its spline follows as
-        // SMSG_ON_MONSTER_MOVE. TODO: send the spline here (updateobject.md 3.4).
-        data->WriteBit(false);
+        // HasSpline: a unit moving along a spline is created on it (updateobject.md 3.1 #32-35)
+        data->WriteBit(hasSpline);
         data->FlushBits();
+        if (hasSpline)
+            Movement::PacketBuilder::WriteCreate(*unit->movespline, *data);
     }
 
     *data << uint32(0);                                         // PauseTimes count [TODO: static transports' pause times]

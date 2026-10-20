@@ -52,10 +52,11 @@ namespace WorldPackets::Movement
         uint32 moveTime, Optional<uint32> prevMoveTime, Optional<uint32> vehicleRecId);
 
     /// The status of `mi` (its guid is the mover). `vehicleRecId` is set for a vehicle passenger.
-    void WriteMovementInfo(ByteBuffer& data, MovementInfo const& mi, Optional<uint32> vehicleRecId = {});
+    void WriteMovementInfo(ByteBuffer& data, MovementInfo const& mi, Optional<uint32> vehicleRecId = {}, bool hasSpline = false);
 
-    /// A unit's current status, as SMSG_MOVE_UPDATE and its create block send it.
-    void WriteUnitMovementInfo(ByteBuffer& data, Unit const* unit);
+    /// A unit's current status, as SMSG_MOVE_UPDATE and its create block send it; `hasSpline` when the
+    /// create block carries the unit's spline.
+    void WriteUnitMovementInfo(ByteBuffer& data, Unit const* unit, bool hasSpline = false);
 
     /// A status from the client into AC's MovementInfo (flags converted; transport and spline become
     /// AC's ONTRANSPORT / SPLINE_ENABLED flags). Returns false if the status is malformed.

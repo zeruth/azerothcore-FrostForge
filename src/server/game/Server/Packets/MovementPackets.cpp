@@ -94,7 +94,7 @@ namespace WorldPackets::Movement
             data << uint32(*vehicleRecId);
     }
 
-    void WriteMovementInfo(ByteBuffer& data, MovementInfo const& mi, Optional<uint32> vehicleRecId)
+    void WriteMovementInfo(ByteBuffer& data, MovementInfo const& mi, Optional<uint32> vehicleRecId, bool hasSpline)
     {
         bool hasTransport = mi.HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && !mi.transport.guid.IsEmpty();
         bool hasFallDirection = mi.HasMovementFlag(MOVEMENTFLAG_FALLING);
@@ -118,7 +118,7 @@ namespace WorldPackets::Movement
         data.WriteBit(false);                                       // HasStandingOnGameObjectGUID
         data.WriteBit(hasTransport);
         data.WriteBit(hasFall);
-        data.WriteBit(false);                                       // HasSpline: TODO, creates send no spline yet
+        data.WriteBit(hasSpline);                                   // HasSpline: the unit moves on a spline
         data.WriteBit(false);                                       // HeightChangeFailed
         data.WriteBit(false);                                       // RemoteTimeValid
         data.WriteBit(false);                                       // HasInertia
@@ -148,7 +148,7 @@ namespace WorldPackets::Movement
         }
     }
 
-    void WriteUnitMovementInfo(ByteBuffer& data, Unit const* unit)
+    void WriteUnitMovementInfo(ByteBuffer& data, Unit const* unit, bool hasSpline)
     {
         MovementInfo mi = unit->m_movementInfo;
         mi.guid = unit->GetGUID();
@@ -169,7 +169,7 @@ namespace WorldPackets::Movement
                 mi.transport.guid = transport->GetGUID();
         }
 
-        WriteMovementInfo(data, mi, vehicleRecId);
+        WriteMovementInfo(data, mi, vehicleRecId, hasSpline);
     }
 
     bool ReadMovementInfo(ByteBuffer& data, MovementInfo& mi)
