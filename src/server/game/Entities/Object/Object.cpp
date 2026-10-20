@@ -2231,9 +2231,8 @@ void Object::ForceValuesUpdateAtIndex(uint32 i)
 
 void Unit::BuildHeartBeatMsg(WorldPacket* data) const
 {
-    data->Initialize(SMSG_MOVE_UPDATE, 32);
-    *data << GetPackGUID();
-    BuildMovementPacket(data);
+    data->Initialize(SMSG_MOVE_UPDATE, 64);
+    WorldPackets::Movement::WriteUnitMovementInfo(*data, this);
 }
 
 void WorldObject::SendMessageToSet(WorldPacket const* data, bool self) const

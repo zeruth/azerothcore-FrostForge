@@ -47,6 +47,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "WaypointMovementGenerator.h"
+#include "PacketGuid128.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
@@ -3401,7 +3402,7 @@ bool Creature::SetWalk(bool enable)
         return false;
 
     WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_WALK_MODE : SMSG_MOVE_SPLINE_SET_RUN_MODE, 9);
-    data << GetPackGUID();
+    Guid128::Write(data, GetGUID());
     SendMessageToSet(&data, false);
     return true;
 }

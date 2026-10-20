@@ -36,6 +36,7 @@
 #include "MapMgr.h"
 #include "Metric.h"
 #include "MiscPackets.h"
+#include "MovementPackets.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "PacketGuid128.h"
@@ -1077,40 +1078,12 @@ void WorldSession::SaveTutorialsData(CharacterDatabaseTransaction trans)
     m_TutorialsChanged = false;
 }
 
+// The 3.4.3 movement status (FrostLite docs/updateobject.md 5, the client's writer FUN_14074c3e0):
+// mover GUID first, AC's movement flags converted at the wire (WorldPackets::Movement).
 void WorldSession::ReadMovementInfo(WorldPacket& data, MovementInfo* mi)
 {
-    data >> mi->flags;
-    data >> mi->flags2;
-    data >> mi->time;
-    data >> mi->pos.PositionXYZOStream();
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
-    {
-        data >> mi->transport.guid.ReadAsPacked();
-
-        data >> mi->transport.pos.PositionXYZOStream();
-        data >> mi->transport.time;
-        data >> mi->transport.seat;
-
-        if (mi->HasExtraMovementFlag(MOVEMENTFLAG2_INTERPOLATED_MOVEMENT))
-            data >> mi->transport.time2;
-    }
-
-    if (mi->HasMovementFlag(MovementFlags(MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING)) || (mi->HasExtraMovementFlag(MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING)))
-        data >> mi->pitch;
-
-    data >> mi->fallTime;
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_FALLING))
-    {
-        data >> mi->jump.zspeed;
-        data >> mi->jump.sinAngle;
-        data >> mi->jump.cosAngle;
-        data >> mi->jump.xyspeed;
-    }
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION))
-        data >> mi->splineElevation;
+    if (!WorldPackets::Movement::ReadMovementInfo(data, *mi))
+        mi->pos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);     // not finite: VerifyMovementInfo drops it
 
     //! Anti-cheat checks. Please keep them in seperate if () blocks to maintain a clear overview.
     //! Might be subject to latency, so just remove improper flags.
@@ -1193,40 +1166,7 @@ void WorldSession::ReadMovementInfo(WorldPacket& data, MovementInfo* mi)
 
 void WorldSession::WriteMovementInfo(WorldPacket* data, MovementInfo* mi)
 {
-    *data << mi->guid.WriteAsPacked();
-
-    *data << mi->flags;
-    *data << mi->flags2;
-    *data << mi->time;
-    *data << mi->pos.PositionXYZOStream();
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
-    {
-        *data << mi->transport.guid.WriteAsPacked();
-
-        *data << mi->transport.pos.PositionXYZOStream();
-        *data << mi->transport.time;
-        *data << mi->transport.seat;
-
-        if (mi->HasExtraMovementFlag(MOVEMENTFLAG2_INTERPOLATED_MOVEMENT))
-            *data << mi->transport.time2;
-    }
-
-    if (mi->HasMovementFlag(MovementFlags(MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING)) || mi->HasExtraMovementFlag(MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING))
-        *data << mi->pitch;
-
-    *data << mi->fallTime;
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_FALLING))
-    {
-        *data << mi->jump.zspeed;
-        *data << mi->jump.sinAngle;
-        *data << mi->jump.cosAngle;
-        *data << mi->jump.xyspeed;
-    }
-
-    if (mi->HasMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION))
-        *data << mi->splineElevation;
+    WorldPackets::Movement::WriteMovementInfo(*data, *mi);
 }
 
 void WorldSession::SetPlayer(Player* player)

@@ -1011,10 +1011,10 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
                     if (!plMover)
                         break;
 
-                    WorldPacket pkt(SMSG_MOVE_TELEPORT, 20);
-                    pkt << plMover->GetPackGUID();
-                    pkt << uint32(0); // flags
-                    pkt << uint32(0); // time
+                    WorldPacket pkt(CMSG_MOVE_TELEPORT_ACK, 20);
+                    Guid128::Write(pkt, plMover->GetGUID());
+                    pkt << uint32(0); // AckIndex
+                    pkt << uint32(0); // MoveTime
                     sess->HandleMoveTeleportAck(pkt);
                 }
             }

@@ -1597,10 +1597,8 @@ void WorldSession::HandleMoveFlagChangeOpcode(WorldPacket& recv_data)
 
     Opcodes opcode = (Opcodes)recv_data.GetOpcode();
 
-    ObjectGuid guid;
+    // 3.4.3 (e.g. CMSG_MOVE_HOVER_ACK, writer FUN_140762c00): the status, u32 AckIndex
     uint32 counter;
-    uint32 isApplied;
-    recv_data >> guid.ReadAsPacked();
 
     if (!_player)
     {
@@ -1608,14 +1606,9 @@ void WorldSession::HandleMoveFlagChangeOpcode(WorldPacket& recv_data)
         return;
     }
 
-    recv_data >> counter;
-
     MovementInfo movementInfo;
-    movementInfo.guid = guid;
     ReadMovementInfo(recv_data, &movementInfo);
-
-    if (opcode != CMSG_MOVE_GRAVITY_DISABLE_ACK && opcode != CMSG_MOVE_GRAVITY_ENABLE_ACK)
-        recv_data >> isApplied;
+    recv_data >> counter;
 
     sScriptMgr->AnticheatSetCanFlybyServer(_player, movementInfo.HasMovementFlag(MOVEMENTFLAG_CAN_FLY));
 

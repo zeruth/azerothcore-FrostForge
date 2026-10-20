@@ -59,6 +59,7 @@
 #include "LootItemStorage.h"
 #include "MapMgr.h"
 #include "MiscPackets.h"
+#include "MovementPackets.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "PacketGuid128.h"
@@ -1346,10 +1347,25 @@ uint8 Player::GetChatTag() const
 
 void Player::SendTeleportAckPacket()
 {
-    WorldPacket data(SMSG_MOVE_TELEPORT, 41);
-    data << GetPackGUID();
-    data << GetSession()->GetOrderCounter(); // movement counter
-    BuildMovementPacket(&data);
+    // SMSG_MOVE_TELEPORT, 3.4.3 (parsed inline by the movement switch, handler FUN_14178c0d0):
+    // PackedGuid128 MoverGUID, u32 SequenceIndex, f32 X, Y, Z, f32 Facing, u8 PreloadWorld, bits
+    // HasTransport, HasVehicleTeleport, flush, [u8 VehicleSeatIndex, bits ExitVoluntary, ExitTeleport,
+    // flush], [PackedGuid128 TransportGUID]. On a transport the position is the transport offset.
+    Transport* transport = GetTransport();
+    WorldPacket data(SMSG_MOVE_TELEPORT, 48);
+    Guid128::Write(data, GetGUID());
+    data << uint32(GetSession()->GetOrderCounter()); // movement counter
+    if (transport)
+        data << float(GetTransOffsetX()) << float(GetTransOffsetY()) << float(GetTransOffsetZ());
+    else
+        data << float(GetPositionX()) << float(GetPositionY()) << float(GetPositionZ());
+    data << float(Position::NormalizeOrientation(transport ? GetTransOffsetO() : GetOrientation()));
+    data << uint8(0);                                    // PreloadWorld
+    data.WriteBit(transport != nullptr);
+    data.WriteBit(false);                                // HasVehicleTeleport
+    data.FlushBits();
+    if (transport)
+        Guid128::Write(data, transport->GetGUID());
     SendDirectMessage(&data);
     GetSession()->IncrementOrderCounter();
 }

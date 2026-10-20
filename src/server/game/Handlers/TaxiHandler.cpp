@@ -209,8 +209,9 @@ void WorldSession::HandleMoveSplineDoneOpcode(WorldPacket& recvData)
 
     Unit* mover = _player->m_mover;
 
-    recvData >> guid.ReadAsPacked();
+    // 3.4.3 (writer FUN_140763550): the status, u32 SplineID
     ReadMovementInfo(recvData, &movementInfo);
+    guid = movementInfo.guid;
     recvData >> movementCounter;
 
     if (_player->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_TAXI_FLIGHT)) // taxi spline case
