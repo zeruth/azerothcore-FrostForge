@@ -33,11 +33,12 @@
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "PacketGuid128.h"
 
 void WorldSession::HandleBattlemasterHelloOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075c720): PackedGuid128 Unit
+    ObjectGuid guid = Guid128::Read(recvData);
     LOG_DEBUG("network", "WORLD: Recvd CMSG_BATTLEMASTER_HELLO Message from ({})", guid.ToString());
 
     Creature* unit = GetPlayer()->GetMap()->GetCreature(guid);
@@ -71,16 +72,19 @@ void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTy
 
 void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    uint32 bgTypeId_;
-    uint32 instanceId;
-    uint8 joinAsGroup;
+    // 3.4.3 (writer FUN_14075c760, Lua JoinBattlefield): u64 QueueID (BattlemasterListID in the low 16 bits), u8 Roles,
+    // u32 x 2 blacklisted maps, PackedGuid128 BattlemasterGuid, u32 Verification, u32 BattlefieldInstanceID (0: first
+    // available), bit JoinAsGroup, flush
+    uint64 queueId = recvData.read<uint64>();
+    recvData.read_skip<uint8>();                           // Roles
+    recvData.read_skip<uint32>();
+    recvData.read_skip<uint32>();
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.read_skip<uint32>();                          // Verification
+    uint32 instanceId = recvData.read<uint32>();
+    uint8 joinAsGroup = recvData.ReadBit();
+    uint32 bgTypeId_ = uint32(queueId & 0xFFFF);
     bool isPremade = false;
-
-    recvData >> guid;                                      // battlemaster guid
-    recvData >> bgTypeId_;                                 // battleground type id (DBC id)
-    recvData >> instanceId;                                // instance id, 0 if First Available selected
-    recvData >> joinAsGroup;                               // join as group
 
     // entry not found
     if (!sBattlemasterListStore.LookupEntry(bgTypeId_))
@@ -285,9 +289,6 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
             sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, member->AddBattlegroundQueueId(bgQueueTypeId), STATUS_WAIT_QUEUE, avgWaitTime, 0, 0, TEAM_NEUTRAL);
             member->SendDirectMessage(&data);
 
-            sBattlegroundMgr->BuildGroupJoinedBattlegroundPacket(&data, err);
-            member->SendDirectMessage(&data);
-
             sScriptMgr->OnPlayerJoinBG(member);
         });
     }
@@ -369,14 +370,9 @@ void WorldSession::HandleBattlefieldListOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_BATTLEFIELD_LIST Message");
 
-    uint32 bgTypeId;
-    recvData >> bgTypeId;                                  // id from DBC
-
-    uint8 fromWhere;
-    recvData >> fromWhere;                                 // 0 - battlemaster (lua: ShowBattlefieldList), 1 - UI (lua: RequestBattlegroundInstanceInfo)
-
-    uint8 canGainXP;
-    recvData >> canGainXP;                                 // players with locked xp have their own bg queue on retail
+    // 3.4.3 (writer FUN_14075c620, Lua RequestBattlegroundInstanceInfo): u32 ListID
+    uint32 bgTypeId = recvData.read<uint32>();
+    uint8 fromWhere = 1;
 
     BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId);
     if (!bl)
@@ -392,13 +388,20 @@ void WorldSession::HandleBattlefieldListOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
 {
-    uint8 arenaType;    // arenatype if arena
-    uint8 unk2;         // unk, can be 0x0 (may be if was invited?) and 0x1
-    uint32 bgTypeId_;   // type id from dbc
-    uint16 unk;         // 0x1F90 constant?
-    uint8 action;       // enter battle 0x1, leave queue 0x0
+    // 3.4.3 (writer FUN_14075c660, Lua AcceptBattlefieldPort): the slot's RideTicket (PackedGuid128, u32 Id = the queue
+    // slot, u32 Type, i64 Time, bit, flush), bit AcceptedInvite, flush. Declining is also how a queue is left.
+    Guid128::Skip(recvData);
+    uint32 queueSlot = recvData.read<uint32>();
+    recvData.read_skip<uint32>();                          // Type
+    recvData.read_skip<int64>();                           // Time
+    recvData.ReadBit();
+    recvData.ResetBitReader();
+    uint8 action = recvData.ReadBit();
 
-    recvData >> arenaType >> unk2 >> bgTypeId_ >> unk >> action;
+    BattlegroundQueueTypeId slotQueueTypeId = queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES ? _player->GetBattlegroundQueueTypeId(queueSlot) : BATTLEGROUND_QUEUE_NONE;
+    uint8 arenaType = slotQueueTypeId ? BattlegroundMgr::BGArenaType(slotQueueTypeId) : 0;
+    uint8 unk2 = 0;
+    uint32 bgTypeId_ = slotQueueTypeId ? uint32(BattlegroundMgr::BGTemplateId(slotQueueTypeId)) : 0;
 
     // bgTypeId not valid
     if (!sBattlemasterListStore.LookupEntry(bgTypeId_))
@@ -495,7 +498,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
     }
 
     // get player queue slot index for this bg (can be in up to 2 queues at the same time)
-    uint32 queueSlot = _player->GetBattlegroundQueueIndex(bgQueueTypeId);
+    queueSlot = _player->GetBattlegroundQueueIndex(bgQueueTypeId);
     WorldPacket data;
 
     if (action) // accept
@@ -620,10 +623,7 @@ void WorldSession::HandleBattlefieldLeaveOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_BATTLEFIELD_LEAVE Message");
 
-    recvData.read_skip<uint8>();                           // unk1
-    recvData.read_skip<uint8>();                           // unk2
-    recvData.read_skip<uint32>();                          // BattlegroundTypeId
-    recvData.read_skip<uint16>();                          // unk3
+    // 3.4.3 (writer FUN_14075c600): empty
 
     // not allow leave battleground in combat
     if (_player->IsInCombat())
@@ -704,7 +704,27 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     uint8 asGroup;   // asGroup
     uint8 isRated;   // isRated
 
-    recvData >> guid >> arenaslot >> asGroup >> isRated;
+    if (recvData.GetOpcode() == CMSG_BATTLEMASTER_JOIN_SKIRMISH)
+    {
+        // 3.4.3 (writer FUN_14075c880, Lua JoinSkirmish): PackedGuid128 BattlemasterGuid, u8 Roles, u8 Bracket (0 2v2, 1
+        // 3v3, 2 5v5), bits JoinAsGroup, IsRequeue, flush
+        guid = Guid128::Read(recvData);
+        recvData.read_skip<uint8>();
+        arenaslot = recvData.read<uint8>();
+        asGroup = recvData.ReadBit();
+        recvData.ReadBit();
+        isRated = 0;
+    }
+    else
+    {
+        // 3.4.3 (writer FUN_14075c830, Lua JoinArena): PackedGuid128 BattlemasterGuid, u8 TeamSizeIndex (0 2v2, 1 3v3,
+        // 2 5v5), u8 Roles; a rated group queue
+        guid = Guid128::Read(recvData);
+        arenaslot = recvData.read<uint8>();
+        recvData.read_skip<uint8>();
+        asGroup = 1;
+        isRated = 1;
+    }
 
     // can't queue for rated without a group
     if (isRated && !asGroup)
@@ -913,9 +933,6 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
             sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bgt, queueSlot, STATUS_WAIT_QUEUE, avgWaitTime, 0, arenatype, TEAM_NEUTRAL, isRated);
             member->SendDirectMessage(&data);
 
-            sBattlegroundMgr->BuildGroupJoinedBattlegroundPacket(&data, err);
-            member->SendDirectMessage(&data);
-
             LOG_DEBUG("bg.battleground", "Battleground: player joined queue for arena as group bg queue type {} bg type {}: {}, NAME {}", bgQueueTypeId, bgTypeId, member->GetGUID().ToString(), member->GetName());
 
             sScriptMgr->OnPlayerJoinArena(member);
@@ -927,8 +944,8 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
 
 void WorldSession::HandleReportPvPAFK(WorldPacket& recvData)
 {
-    ObjectGuid playerGuid;
-    recvData >> playerGuid;
+    // 3.4.3: PackedGuid128 Offender
+    ObjectGuid playerGuid = Guid128::Read(recvData);
     Player* reportedPlayer = ObjectAccessor::FindPlayer(playerGuid);
 
     if (!reportedPlayer)

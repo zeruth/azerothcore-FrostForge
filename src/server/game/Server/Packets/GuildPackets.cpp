@@ -214,7 +214,7 @@ void WorldPackets::Guild::GuildInviteByName::Read()
     _worldPacket.ResetBitReader();
     Name = _worldPacket.ReadString(length);
     if (hasUnused)
-        _worldPacket.read_skip<uint32>();
+        ArenaTeamId = _worldPacket.read<uint32>();
     if (std::size_t dash = Name.find('-'); dash != std::string::npos)
         Name.resize(dash);
 }

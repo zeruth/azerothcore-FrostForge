@@ -279,8 +279,9 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
         {
             if (bg->isArena())
             {
-                WorldPacket data(SMSG_DESTROY_ARENA_UNIT, 8);
-                data << GetGUID();
+                // SMSG_DESTROY_ARENA_UNIT, 3.4.3 (FUN_1406b8960): PackedGuid128
+                WorldPacket data(SMSG_DESTROY_ARENA_UNIT, 18);
+                Guid128::Write(data, GetGUID());
                 target->SendDirectMessage(&data);
             }
         }

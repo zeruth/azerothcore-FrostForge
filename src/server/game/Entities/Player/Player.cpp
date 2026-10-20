@@ -6439,10 +6439,15 @@ bool Player::RewardHonor(Unit* uVictim, uint32 groupsize, int32 honor, bool awar
     // victim_rank [1..4]  HK: <dishonored rank>
     // victim_rank [5..19] HK: <alliance\horde rank>
     // victim_rank [0, 20+] HK: <>
-    WorldPacket data(SMSG_PVP_CREDIT, 4 + 8 + 4);
-    data << honor;
-    data << victim_guid;
-    data << victim_rank;
+    // SMSG_PVP_CREDIT, 3.4.3 (handler FUN_141928820): u32 Honor, u32 OriginalHonor, PackedGuid128 Target (empty: bonus
+    // honor), u32 Rank, bit Honorable, flush
+    WorldPacket data(SMSG_PVP_CREDIT, 4 + 4 + 18 + 4 + 1);
+    data << uint32(honor);
+    data << uint32(honor);
+    Guid128::Write(data, victim_guid);
+    data << uint32(victim_rank);
+    data.WriteBit(honor > 0);
+    data.FlushBits();
 
     // Xinef: non quest case, quest honor obtain is send in quest reward packet
     if (uVictim || groupsize > 0)
@@ -11896,6 +11901,24 @@ void Player::SendInitialPacketsBeforeAddToMap()
     if (mapDifficulty && mapDifficulty->maxPlayers)
         data << uint32(mapDifficulty->maxPlayers);
     SendDirectMessage(&data);
+
+    // SMSG_PVP_SEASON, 3.4.3 (FUN_1406c9eb0, handler FUN_1419af680): u32 MythicPlusDisplaySeasonID,
+    // MythicPlusMilestoneSeasonID, CurrentArenaSeason, PreviousArenaSeason, ConquestWeeklyProgressCurrencyID,
+    // PvpSeasonID, bits WeeklyRewardChestsEnabled, CurrentArenaSeasonUsesTeams (the client refuses arena team invites
+    // without it), PreviousArenaSeasonUsesTeams, flush
+    {
+        uint32 season = sArenaSeasonMgr->GetCurrentSeason();
+        WorldPacket seasonData(SMSG_PVP_SEASON, 25);
+        seasonData << uint32(0) << uint32(0);
+        seasonData << uint32(season);
+        seasonData << uint32(season ? season - 1 : 0);
+        seasonData << uint32(0) << uint32(0);
+        seasonData.WriteBit(false);
+        seasonData.WriteBit(true);
+        seasonData.WriteBit(true);
+        seasonData.FlushBits();
+        SendDirectMessage(&seasonData);
+    }
 
     // SMSG_INITIAL_SETUP, 3.4.3 (handler FUN_141735910): u8 ServerExpansionLevel, u8 ServerExpansionTier
     data.Initialize(SMSG_INITIAL_SETUP, 2);

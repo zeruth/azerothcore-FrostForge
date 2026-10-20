@@ -1297,8 +1297,8 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    recv_data >> guid;
+    // CMSG_REQUEST_HONOR_STATS, 3.4.3 (writer FUN_14075fe90): PackedGuid128 TargetGUID
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     Player* player = ObjectAccessor::GetPlayer(*_player, guid);
     if (!player)
@@ -1317,13 +1317,21 @@ void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recv_data)
         return;
     }
 
-    WorldPacket data(SMSG_INSPECT_HONOR_STATS, 8 + 1 + 4 * 4);
-    data << player->GetGUID();
-    data << uint8(player->GetHonorPoints());
-    data << uint32(player->GetUInt32Value(PLAYER_FIELD_KILLS));
-    data << uint32(player->GetUInt32Value(PLAYER_FIELD_TODAY_CONTRIBUTION));
-    data << uint32(player->GetUInt32Value(PLAYER_FIELD_YESTERDAY_CONTRIBUTION));
+    // SMSG_INSPECT_HONOR_STATS, 3.4.3 (handler FUN_141aa76b0): PackedGuid128, u8 LifetimeHighestRank, 8 x u16, 6 x u32,
+    // u8 (GetInspectHonorData's order: today HK, today DK, yesterday HK, ...) [field names inferred]
+    uint32 kills = player->GetUInt32Value(PLAYER_FIELD_KILLS);
+    WorldPacket data(SMSG_INSPECT_HONOR_STATS, 18 + 1 + 16 + 24 + 1);
+    Guid128::Write(data, player->GetGUID());
+    data << uint8(0);                                       // LifetimeHighestRank
+    data << uint16(kills & 0xFFFF);                         // today HK
+    data << uint16(0);                                      // today DK
+    data << uint16(kills >> 16);                            // yesterday HK
+    data << uint16(0) << uint16(0) << uint16(0) << uint16(0) << uint16(0);
     data << uint32(player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS));
+    data << uint32(0);                                      // lifetime DK
+    data << uint32(player->GetUInt32Value(PLAYER_FIELD_YESTERDAY_CONTRIBUTION));
+    data << uint32(0) << uint32(0) << uint32(0);
+    data << uint8(0);
     SendPacket(&data);
 }
 

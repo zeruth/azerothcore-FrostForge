@@ -16,6 +16,7 @@
  */
 
 #include "Battleground.h"
+#include "CharacterCache.h"
 #include "PacketGuid128.h"
 #include "ArenaSpectator.h"
 #include "ArenaTeam.h"
@@ -1376,34 +1377,92 @@ void Battleground::SpectatorsSendPacket(WorldPacket& data)
         (*itr)->SendDirectMessage(&data);
 }
 
+/// SMSG_PVP_LOG_DATA, 3.4.3 (FUN_140700ee0, per player FUN_140701220, handler FUN_1419b2c40): bits HasRatings,
+/// HasArenaTeams, HasWinner, flush, [7-bit team name lengths, flush, team GUID and name x 2], u32 player count, u8
+/// PlayerCount[2], [ratings: {u32 Prematch, Postmatch, PrematchMMR} x 2], [u8 Winner], then per player: PackedGuid128,
+/// u32 Kills, DamageDone, HealingDone, StatsCount, PrimaryTalentTree, u8 Sex, u32 Race, Class, CreatureID, HonorLevel,
+/// Rank, the stats (plain values: the zone's objectives), bits Faction, IsInWorld, HasHonor, HasPreMatchRating,
+/// HasRatingChange, HasPreMatchMMR, HasMmrChange, flush, [u32 HonorKills, Deaths, ContributionPoints]
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 {
-    uint8 type = (isArena() ? 1 : 0);
+    bool arena = isArena();
+    bool rated = arena && isRated();
+    bool hasWinner = GetStatus() == STATUS_WAIT_LEAVE;
 
-    data.Initialize(SMSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * GetPlayerScores()->size());
-    data << uint8(type); // type (battleground = 0 / arena = 1)
-
-    if (type) // arena
+    uint8 playerCount[PVP_TEAMS_COUNT] = { };
+    ByteBuffer players;
+    for (auto const& [low, score] : PlayerScores)
     {
-        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
-            _arenaTeamScores[i].BuildRatingInfoBlock(data);
+        ObjectGuid guid = score->GetPlayerGuid();
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(guid);
+        TeamId team = player ? player->GetBgTeamId() : (cache ? Player::TeamIdForRace(cache->Race) : TEAM_HORDE);
+        uint8 pvpTeam = team == TEAM_ALLIANCE ? PVP_TEAM_ALLIANCE : PVP_TEAM_HORDE;
+        if (pvpTeam < PVP_TEAMS_COUNT && playerCount[pvpTeam] < 0xFF)
+            ++playerCount[pvpTeam];
 
-        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
-            _arenaTeamScores[i].BuildTeamInfoBlock(data);
+        WorldPacket objectives;
+        score->BuildObjectivesBlock(objectives);            // u32 count, the values
+        uint32 statsCount = objectives.size() >= 4 ? objectives.read<uint32>() : 0;
+
+        Guid128::WritePlayer(players, guid);
+        players << uint32(score->GetKillingBlows());
+        players << uint32(score->GetDamageDone());
+        players << uint32(score->GetHealingDone());
+        players << uint32(statsCount);
+        players << uint32(0);                               // PrimaryTalentTree
+        players << uint8(player ? player->getGender() : (cache ? cache->Sex : 0));
+        players << uint32(player ? player->getRace() : (cache ? cache->Race : 0));
+        players << uint32(player ? player->getClass() : (cache ? cache->Class : 0));
+        players << uint32(0);                               // CreatureID
+        players << uint32(0);                               // HonorLevel
+        players << uint32(0);                               // Rank
+        for (uint32 i = 0; i < statsCount; ++i)
+            players << objectives.read<uint32>();
+        players.WriteBit(pvpTeam == PVP_TEAM_ALLIANCE);     // Faction
+        players.WriteBit(player != nullptr);                // IsInWorld
+        players.WriteBit(!arena);                           // HasHonor
+        players.WriteBit(false);
+        players.WriteBit(false);
+        players.WriteBit(false);
+        players.WriteBit(false);
+        players.FlushBits();
+        if (!arena)
+        {
+            players << uint32(score->GetHonorableKills());
+            players << uint32(score->GetDeaths());
+            players << uint32(score->GetBonusHonor());
+        }
     }
 
-    if (GetStatus() == STATUS_WAIT_LEAVE)
+    data.Initialize(SMSG_PVP_LOG_DATA, 16 + 40 + players.size());
+    data.WriteBit(rated);                                   // HasRatings
+    data.WriteBit(rated);                                   // HasArenaTeams
+    data.WriteBit(hasWinner);
+    data.FlushBits();
+    if (rated)
     {
-        data << uint8(1);                      // bg ended
-        data << uint8(GetWinner());            // who win
+        std::string_view names[PVP_TEAMS_COUNT];
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+            names[i] = std::string_view(_arenaTeamScores[i].TeamName).substr(0, 127);
+        data.WriteBits(names[0].size(), 7);
+        data.WriteBits(names[1].size(), 7);
+        data.FlushBits();
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+        {
+            Guid128::Write(data, ObjectGuid::Empty);        // the arena team's GUID
+            data.WriteString(names[i]);
+        }
     }
-    else
-        data << uint8(0);                      // bg not ended
-
-    data << uint32(GetPlayerScores()->size());
-
-    for (auto const& score : PlayerScores)
-        score.second->AppendToPacket(data);
+    data << uint32(PlayerScores.size());
+    data << uint8(playerCount[0]);
+    data << uint8(playerCount[1]);
+    if (rated)
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+            _arenaTeamScores[i].BuildRatingInfoBlock(data);   // old rating, new rating, MMR
+    if (hasWinner)
+        data << uint8(GetWinner());
+    data.append(players);
 }
 
 bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor)

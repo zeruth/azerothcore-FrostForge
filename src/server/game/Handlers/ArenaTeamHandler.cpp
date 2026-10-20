@@ -17,6 +17,8 @@
 
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
+#include "CharacterCache.h"
+#include "PacketGuid128.h"
 #include "BattlegroundMgr.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -40,8 +42,9 @@ void WorldSession::HandleArenaTeamQueryOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleArenaTeamRosterOpcode(WorldPacket& recvData)
 {
-    uint32 arenaTeamId;                                     // arena team id
-    recvData >> arenaTeamId;
+    // 3.4.3 (writer FUN_140764520): u32 TeamSlot (0 2v2, 1 3v3, 2 5v5), not a team id
+    uint32 slot = recvData.read<uint32>();
+    uint32 arenaTeamId = slot < MAX_ARENA_SLOT ? GetPlayer()->GetArenaTeamId(slot) : 0;
 
     if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(arenaTeamId))
         arenaTeam->Roster(this);
@@ -123,9 +126,19 @@ void WorldSession::HandleArenaTeamInviteOpcode(WorldPacket& recvData)
 
     player->SetArenaTeamIdInvited(arenaTeam->GetId());
 
-    WorldPacket data(SMSG_ARENA_TEAM_INVITE, (8 + 10));
-    data << GetPlayer()->GetName();
-    data << arenaTeam->GetName();
+    // SMSG_ARENA_TEAM_INVITE, 3.4.3 (FUN_1406b73f0, handler FUN_141bb0680): PackedGuid128 InviterGuid, u32 InviterRealm,
+    // PackedGuid128 TeamGuid (the team id low), 6-bit inviter and 7-bit team name lengths, flush, the names
+    std::string_view inviterName = std::string_view(GetPlayer()->GetName()).substr(0, 63);
+    std::string_view teamName = std::string_view(arenaTeam->GetName()).substr(0, 127);
+    WorldPacket data(SMSG_ARENA_TEAM_INVITE, 18 + 4 + 18 + 2 + inviterName.size() + teamName.size());
+    Guid128::Write(data, GetPlayer()->GetGUID());
+    data << uint32(Guid128::VirtualRealmAddress());
+    Guid128::WritePacked(data, arenaTeam->GetId(), uint64(0x34) << 58);
+    data.WriteBits(inviterName.size(), 6);
+    data.WriteBits(teamName.size(), 7);
+    data.FlushBits();
+    data.WriteString(inviterName);
+    data.WriteString(teamName);
     player->SendDirectMessage(&data);
 
     LOG_DEBUG("network", "WORLD: Sent SMSG_ARENA_TEAM_INVITE");
@@ -265,11 +278,11 @@ void WorldSession::HandleArenaTeamRemoveOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_ARENA_TEAM_REMOVE");
 
-    uint32 arenaTeamId;
+    // 3.4.3 (writer FUN_1407644d0): u32 TeamId, PackedGuid128 PlayerGuid
+    uint32 arenaTeamId = recvData.read<uint32>();
+    ObjectGuid memberGuid = Guid128::Read(recvData);
     std::string name;
-
-    recvData >> arenaTeamId;
-    recvData >> name;
+    sCharacterCache->GetCharacterNameByGuid(memberGuid, name);
 
     // Check for valid arena team
     ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(arenaTeamId);
@@ -330,11 +343,11 @@ void WorldSession::HandleArenaTeamLeaderOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_ARENA_TEAM_LEADER");
 
-    uint32 arenaTeamId;
+    // 3.4.3 (writer FUN_140764560): u32 TeamId, PackedGuid128 PlayerGuid
+    uint32 arenaTeamId = recvData.read<uint32>();
+    ObjectGuid memberGuid = Guid128::Read(recvData);
     std::string name;
-
-    recvData >> arenaTeamId;
-    recvData >> name;
+    sCharacterCache->GetCharacterNameByGuid(memberGuid, name);
 
     // Check for valid arena team
     ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(arenaTeamId);
@@ -371,11 +384,18 @@ void WorldSession::HandleArenaTeamLeaderOpcode(WorldPacket& recvData)
 
 void WorldSession::SendArenaTeamCommandResult(uint32 teamAction, std::string const& team, std::string const& player, uint32 errorId)
 {
-    WorldPacket data(SMSG_ARENA_TEAM_COMMAND_RESULT, 4 + team.length() + 1 + player.length() + 1 + 4);
-    data << uint32(teamAction);
-    data << team;
-    data << player;
-    data << uint32(errorId);
+    // SMSG_ARENA_TEAM_COMMAND_RESULT, 3.4.3 (FUN_1406b7140, handler FUN_141734e40): u8 Action, u8 Error, 7-bit team and
+    // 6-bit player name lengths, flush, the names
+    std::string_view teamName = std::string_view(team).substr(0, 127);
+    std::string_view playerName = std::string_view(player).substr(0, 63);
+    WorldPacket data(SMSG_ARENA_TEAM_COMMAND_RESULT, 4 + teamName.size() + playerName.size());
+    data << uint8(teamAction);
+    data << uint8(errorId);
+    data.WriteBits(teamName.size(), 7);
+    data.WriteBits(playerName.size(), 6);
+    data.FlushBits();
+    data.WriteString(teamName);
+    data.WriteString(playerName);
     SendPacket(&data);
 }
 

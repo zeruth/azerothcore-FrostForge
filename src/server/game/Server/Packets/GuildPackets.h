@@ -186,6 +186,7 @@ namespace WorldPackets
             void Read() override;
 
             std::string Name;
+            Optional<uint32> ArenaTeamId;                   // 3.4.3: an arena team invite goes this way
         };
 
         class GuildInvite final : public ServerPacket

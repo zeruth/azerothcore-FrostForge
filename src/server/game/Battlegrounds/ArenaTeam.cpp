@@ -16,6 +16,7 @@
  */
 
 #include "ArenaTeam.h"
+#include "PacketGuid128.h"
 #include "ArenaTeamMgr.h"
 #include "ArenaSeasonMgr.h"
 #include "BattlegroundMgr.h"
@@ -451,34 +452,42 @@ void ArenaTeam::Roster(WorldSession* session)
     uint8 unk308 = 0;
     std::string tempName;
 
-    WorldPacket data(SMSG_ARENA_TEAM_ROSTER, 100);
-    data << uint32(GetId());                                // team id
-    data << uint8(unk308);                                  // 308 unknown value but affect packet structure
-    data << uint32(GetMembersSize());                       // members count
-    data << uint32(GetType());                              // arena team type?
+    // SMSG_ARENA_TEAM_ROSTER, 3.4.3 (FUN_1406f7a30, handler FUN_141bb0710): u32 TeamId, u32 TeamSize, u32 WeekPlayed,
+    // WeekWins, SeasonPlayed, SeasonWins, TeamRating, Rank, u32 member count, bit, flush, per member {PackedGuid128, u8
+    // Online, u32 Captain (0 the captain), u8 Level, u8 Class, u32 week played, week won, season played, season won,
+    // personal rating, 6-bit name length, bits HasA, HasB, flush, the name}
+    WorldPacket data(SMSG_ARENA_TEAM_ROSTER, 48 + Members.size() * 64);
+    data << uint32(GetId());
+    data << uint32(GetType());
+    data << uint32(Stats.WeekGames);
+    data << uint32(Stats.WeekWins);
+    data << uint32(Stats.SeasonGames);
+    data << uint32(Stats.SeasonWins);
+    data << uint32(Stats.Rating);
+    data << uint32(Stats.Rank);
+    data << uint32(GetMembersSize());
+    data.WriteBit(false);
+    data.FlushBits();
 
     for (MemberList::const_iterator itr = Members.begin(); itr != Members.end(); ++itr)
     {
-        player = ObjectAccessor::FindConnectedPlayer(itr->Guid);
-
-        data << itr->Guid;                                  // guid
-        data << uint8((player ? 1 : 0));                    // online flag
-        tempName = "";
-        sCharacterCache->GetCharacterNameByGuid(itr->Guid, tempName);
-        data << tempName;                                  // member name
-        data << uint32((itr->Guid == GetCaptain() ? 0 : 1));// captain flag 0 captain 1 member
-        data << uint8((player ? player->GetLevel() : 0));           // unknown, level?
-        data << uint8(itr->Class);                         // class
-        data << uint32(itr->WeekGames);                    // played this week
-        data << uint32(itr->WeekWins);                     // wins this week
-        data << uint32(itr->SeasonGames);                  // played this season
-        data << uint32(itr->SeasonWins);                   // wins this season
-        data << uint32(itr->PersonalRating);               // personal rating
-        if (unk308)
-        {
-            data << float(0.0f);                           // 308 unk
-            data << float(0.0f);                           // 308 unk
-        }
+        Player* player = ObjectAccessor::FindPlayer(itr->Guid);
+        std::string_view name = std::string_view(itr->Name).substr(0, 63);
+        Guid128::WritePlayer(data, itr->Guid);
+        data << uint8(player ? 1 : 0);
+        data << uint32(itr->Guid == GetCaptain() ? 0 : 1);
+        data << uint8(player ? player->GetLevel() : 0);
+        data << uint8(itr->Class);
+        data << uint32(itr->WeekGames);
+        data << uint32(itr->WeekWins);
+        data << uint32(itr->SeasonGames);
+        data << uint32(itr->SeasonWins);
+        data << uint32(itr->PersonalRating);
+        data.WriteBits(name.size(), 6);
+        data.WriteBit(false);
+        data.WriteBit(false);
+        data.FlushBits();
+        data.WriteString(name);
     }
 
     session->SendPacket(&data);
@@ -487,15 +496,23 @@ void ArenaTeam::Roster(WorldSession* session)
 
 void ArenaTeam::Query(WorldSession* session)
 {
-    WorldPacket data(SMSG_QUERY_ARENA_TEAM_RESPONSE, 4 * 7 + GetName().size() + 1);
-    data << uint32(GetId());                                // team id
-    data << GetName();                                      // team name
-    data << uint32(GetType());                              // arena team type (2=2x2, 3=3x3 or 5=5x5)
-    data << uint32(BackgroundColor);                        // background color
-    data << uint32(EmblemStyle);                            // emblem style
-    data << uint32(EmblemColor);                            // emblem color
-    data << uint32(BorderStyle);                            // border style
-    data << uint32(BorderColor);                            // border color
+    // SMSG_QUERY_ARENA_TEAM_RESPONSE, 3.4.3 (handler FUN_14035a4c0): u32 TeamId, bit HasData, flush, [u32 TeamId, u32
+    // TeamSize, u32 BackgroundColor, EmblemStyle, EmblemColor, BorderStyle, BorderColor, 7-bit name length, flush, the name]
+    std::string_view name = std::string_view(GetName()).substr(0, 127);
+    WorldPacket data(SMSG_QUERY_ARENA_TEAM_RESPONSE, 4 + 1 + 28 + 1 + name.size());
+    data << uint32(GetId());
+    data.WriteBit(true);
+    data.FlushBits();
+    data << uint32(GetId());
+    data << uint32(GetType());
+    data << uint32(BackgroundColor);
+    data << uint32(EmblemStyle);
+    data << uint32(EmblemColor);
+    data << uint32(BorderStyle);
+    data << uint32(BorderColor);
+    data.WriteBits(name.size(), 7);
+    data.FlushBits();
+    data.WriteString(name);
     session->SendPacket(&data);
     LOG_DEBUG("network", "WORLD: Sent SMSG_QUERY_ARENA_TEAM_RESPONSE");
 }
@@ -563,32 +580,20 @@ void ArenaTeam::BroadcastPacket(WorldPacket* packet)
 
 void ArenaTeam::BroadcastEvent(ArenaTeamEvents event, ObjectGuid guid, uint8 strCount, std::string const& str1, std::string const& str2, std::string const& str3)
 {
-    WorldPacket data(SMSG_ARENA_TEAM_EVENT, 1 + 1 + 1);
-    data << uint8(event);
-    data << uint8(strCount);
-    switch (strCount)
-    {
-        case 0:
-            break;
-        case 1:
-            data << str1;
-            break;
-        case 2:
-            data << str1 << str2;
-            break;
-        case 3:
-            data << str1 << str2 << str3;
-            break;
-        default:
-            LOG_ERROR("bg.arena", "Unhandled strCount {} in ArenaTeam::BroadcastEvent", strCount);
-            return;
-    }
-
-    if (guid)
-        data << guid;
-
+    // SMSG_ARENA_TEAM_EVENT, 3.4.3 (FUN_1406b7260, handler FUN_141bb0450): u8 Event (3.3.5's value + 1), 3 x 9-bit
+    // lengths, flush, the strings. The GUID is gone.
+    (void)guid;
+    std::string_view params[3] = { strCount > 0 ? std::string_view(str1).substr(0, 256) : std::string_view(),
+                                   strCount > 1 ? std::string_view(str2).substr(0, 256) : std::string_view(),
+                                   strCount > 2 ? std::string_view(str3).substr(0, 256) : std::string_view() };
+    WorldPacket data(SMSG_ARENA_TEAM_EVENT, 1 + 4 + params[0].size() + params[1].size() + params[2].size());
+    data << uint8(event + 1);
+    for (std::string_view param : params)
+        data.WriteBits(param.size(), 9);
+    data.FlushBits();
+    for (std::string_view param : params)
+        data.WriteString(param);
     BroadcastPacket(&data);
-
     LOG_DEBUG("network", "WORLD: Sent SMSG_ARENA_TEAM_EVENT");
 }
 

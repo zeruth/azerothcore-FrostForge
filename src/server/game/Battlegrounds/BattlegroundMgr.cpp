@@ -194,86 +194,127 @@ void BattlegroundMgr::Update(uint32 diff)
     }
 }
 
+/// RideTicket of a battleground queue slot, 3.4.3 (FUN_14070f950): PackedGuid128 RequesterGuid, u32 Id, u32 Type, i64
+/// Time, bit, flush. The client keys its queue slots on the whole ticket, so every status of one slot (the final NONE
+/// included) carries the same one: Id = the player's queue slot, Type 1 (battlegrounds), no requester, no time.
+static void WriteBattlegroundTicket(ByteBuffer& data, uint8 queueSlot)
+{
+    Guid128::Write(data, ObjectGuid::Empty);
+    data << uint32(queueSlot);
+    data << uint32(1);
+    data << int64(0);
+    data.WriteBit(false);
+    data.FlushBits();
+}
+
+/// The u64 queue id, 3.4.3 (Lua GetBattlefieldStatus): BattlemasterListID, Type << 16 (0 battleground, 1 arena), Rated
+/// << 20, TeamSize << 24, 0x1F10000000000000
+static uint64 BattlegroundQueueId(uint32 listId, uint8 arenaType, bool rated)
+{
+    return uint64(listId & 0xFFFF) | (uint64(arenaType ? 1 : 0) << 16) | (uint64(rated ? 1 : 0) << 20) | (uint64(arenaType) << 24) | 0x1F10000000000000ULL;
+}
+
+/// SMSG_BATTLEFIELD_STATUS_*, 3.4.3: 3.3.5's one message is one opcode per status. NONE (handler FUN_1419b41b0): the
+/// RideTicket. The others start with BattlefieldStatusHeader (FUN_1406f8ac0): RideTicket, u32 queue id count (1), u8
+/// RangeMin, u8 RangeMax, u8 TeamSize, u32 InstanceID, the u64 queue ids, bits RegisteredMatch, TournamentRules, flush.
+/// QUEUED (FUN_1419b41c0): u32 AverageWaitTime, u32 WaitTime (ms), u32, bits AsGroup, EligibleForMatchmaking,
+/// SuspendedQueue, flush. NEED_CONFIRMATION (FUN_1419b4110): u32 Mapid, u32 Timeout (ms), u8 Role. ACTIVE
+/// (FUN_1419b3760): u32 Mapid, u32 ShutdownTimer, u32 StartTimer (ms), bits ArenaFaction, LeftEarly, IsBrawl, flush.
 void BattlegroundMgr::BuildBattlegroundStatusPacket(WorldPacket* data, Battleground* bg, uint8 QueueSlot, uint8 StatusID, uint32 Time1, uint32 Time2, uint8 arenatype, TeamId teamId, bool isRated, BattlegroundTypeId forceBgTypeId)
 {
-    // pussywizard:
-    //ASSERT(QueueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES);
-
-    // 3.4.3 splits SMSG_BATTLEFIELD_STATUS into one opcode per status (the body below is still 3.3.5's)
     if (StatusID == STATUS_NONE || !bg)
     {
-        data->Initialize(SMSG_BATTLEFIELD_STATUS_NONE, 4 + 8);
-        *data << uint32(QueueSlot);
-        *data << uint64(0);
+        data->Initialize(SMSG_BATTLEFIELD_STATUS_NONE, 20);
+        WriteBattlegroundTicket(*data, QueueSlot);
         return;
     }
 
-    Opcodes opcode = SMSG_BATTLEFIELD_STATUS_NONE;
+    Opcodes opcode = SMSG_BATTLEFIELD_STATUS_ACTIVE;
     switch (StatusID)
     {
         case STATUS_WAIT_QUEUE: opcode = SMSG_BATTLEFIELD_STATUS_QUEUED; break;
         case STATUS_WAIT_JOIN: opcode = SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION; break;
-        case STATUS_IN_PROGRESS: opcode = SMSG_BATTLEFIELD_STATUS_ACTIVE; break;
-        default: break;
+        default: break;                                     // in progress, ending
     }
 
-    data->Initialize(opcode, (4 + 8 + 1 + 1 + 4 + 1 + 4 + 4 + 4));
-    *data << uint32(QueueSlot);
-    // The following segment is read as uint64 in client but can be appended as their original type.
-    *data << uint8(arenatype);
-    *data << uint8(bg->isArena() ? 0xE : 0x0);
-    *data << uint32(forceBgTypeId != BATTLEGROUND_TYPE_NONE ? forceBgTypeId : bg->GetBgTypeID());
-    *data << uint16(0x1F90);
-    // End of uint64 segment, decomposed this way for simplicity
+    bool rated = bg->isRated() || isRated;
+    uint32 listId = forceBgTypeId != BATTLEGROUND_TYPE_NONE ? forceBgTypeId : bg->GetBgTypeID();
+    data->Initialize(opcode, 64);
+    WriteBattlegroundTicket(*data, QueueSlot);
+    *data << uint32(1);                                     // queue ids
     *data << uint8(bg->GetMinLevel());
     *data << uint8(bg->GetMaxLevel());
+    *data << uint8(arenatype);                              // TeamSize
     *data << uint32(bg->GetClientInstanceID());
+    *data << uint64(BattlegroundQueueId(listId, arenatype, rated));
+    data->WriteBit(rated);                                  // RegisteredMatch
+    data->WriteBit(false);                                  // TournamentRules
+    data->FlushBits();
 
-    // following displays the minimap icon. 0 = faction icon, 1 = arenaicon
-    *data << uint8(bg->isRated() || isRated); // 1 for rated match, 0 for bg or non rated match
-
-    *data << uint32(StatusID);                                  // status
     switch (StatusID)
     {
-        case STATUS_WAIT_QUEUE:                                 // status_in_queue
-            *data << uint32(Time1);                             // average wait time, milliseconds
-            *data << uint32(Time2);                             // time in queue, updated every minute!, milliseconds
+        case STATUS_WAIT_QUEUE:
+            *data << uint32(Time1);                         // average wait time, milliseconds
+            *data << uint32(Time2);                         // time in queue, milliseconds
+            *data << uint32(0);
+            data->WriteBit(false);                          // AsGroup
+            data->WriteBit(true);                           // EligibleForMatchmaking
+            data->WriteBit(false);                          // SuspendedQueue
+            data->FlushBits();
             break;
-        case STATUS_WAIT_JOIN:                                  // status_invite
-            *data << uint32(bg->GetMapId());                    // map id
-            *data << uint64(0);                                 // 3.3.5, unknown
-            *data << uint32(Time1);                             // time to remove from queue, milliseconds
-            break;
-        case STATUS_IN_PROGRESS:                                // status_in_progress
-            *data << uint32(bg->GetMapId());                    // map id
-            *data << uint64(0);                                 // 3.3.5, unknown
-            *data << uint32(Time1);                             // time to bg auto leave, 0 at bg start, 120000 after bg end, milliseconds
-            *data << uint32(Time2);                             // time from bg start, milliseconds
-            *data << uint8(teamId == TEAM_ALLIANCE ? 1 : 0);   // arenafaction (0 for horde, 1 for alliance)
+        case STATUS_WAIT_JOIN:
+            *data << uint32(bg->GetMapId());
+            *data << uint32(Time1);                         // time to remove from queue, milliseconds
+            *data << uint8(2);                              // Role: damage
             break;
         default:
+            *data << uint32(bg->GetMapId());
+            *data << uint32(Time1);                         // time to bg auto leave, 0 at bg start, 120000 after bg end, milliseconds
+            *data << uint32(Time2);                         // time from bg start, milliseconds
+            data->WriteBit(teamId == TEAM_ALLIANCE);        // ArenaFaction
+            data->WriteBit(false);                          // LeftEarly
+            data->WriteBit(false);                          // IsBrawl
+            data->FlushBits();
             break;
     }
 }
 
+/// SMSG_BATTLEFIELD_STATUS_FAILED, 3.4.3 (handler FUN_1419b3af0), which replaces SMSG_GROUP_JOINED_BATTLEGROUND:
+/// RideTicket (all zero: no queue slot is touched), u64 QueueID, u32 Reason (the client's numbering: AC's -2..-12 are
+/// 2..12, -13..-15 are 14..16, a failed group join 35), PackedGuid128 ClientID. 3.3.5's "joined" form (a positive
+/// result) has no message: the QUEUED status says it, so a reason the client shows nothing for goes out.
 void BattlegroundMgr::BuildGroupJoinedBattlegroundPacket(WorldPacket* data, GroupJoinBattlegroundResult result)
 {
-    data->Initialize(SMSG_BATTLEFIELD_STATUS_FAILED, 4);     // 3.3.5's SMSG_GROUP_JOINED_BATTLEGROUND
-    *data << int32(result);
-    if (result == ERR_BATTLEGROUND_JOIN_TIMED_OUT || result == ERR_BATTLEGROUND_JOIN_FAILED)
-        *data << uint64(0);                                 // player guid
+    uint32 reason = 0;
+    if (result <= ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS && result >= ERR_BATTLEGROUND_JOIN_FAILED)
+        reason = uint32(-int32(result));
+    else if (result <= ERR_LFG_CANT_USE_BATTLEGROUND && result >= ERR_IN_NON_RANDOM_BG)
+        reason = uint32(-int32(result)) + 1;
+    else if (result == ERR_GROUP_JOIN_BATTLEGROUND_FAIL)
+        reason = 35;
+
+    data->Initialize(SMSG_BATTLEFIELD_STATUS_FAILED, 20 + 8 + 4 + 2);
+    Guid128::Write(*data, ObjectGuid::Empty);               // the ticket: none
+    *data << uint32(0) << uint32(0) << int64(0);
+    data->WriteBit(false);
+    data->FlushBits();
+    *data << uint64(0);                                     // QueueID
+    *data << uint32(reason);
+    Guid128::Write(*data, ObjectGuid::Empty);               // ClientID
 }
 
 void BattlegroundMgr::BuildPlayerLeftBattlegroundPacket(WorldPacket* data, ObjectGuid guid)
 {
-    data->Initialize(SMSG_BATTLEGROUND_PLAYER_LEFT, 8);
-    *data << guid;
+    // SMSG_BATTLEGROUND_PLAYER_LEFT, 3.4.3: PackedGuid128
+    data->Initialize(SMSG_BATTLEGROUND_PLAYER_LEFT, 18);
+    Guid128::Write(*data, guid);
 }
 
 void BattlegroundMgr::BuildPlayerJoinedBattlegroundPacket(WorldPacket* data, Player* player)
 {
-    data->Initialize(SMSG_BATTLEGROUND_PLAYER_JOINED, 8);
-    *data << player->GetGUID();
+    // SMSG_BATTLEGROUND_PLAYER_JOINED, 3.4.3: PackedGuid128
+    data->Initialize(SMSG_BATTLEGROUND_PLAYER_JOINED, 18);
+    Guid128::Write(*data, player->GetGUID());
 }
 
 Battleground* BattlegroundMgr::GetBattlegroundThroughClientInstance(uint32 instanceId, BattlegroundTypeId bgTypeId)
@@ -592,70 +633,37 @@ void BattlegroundMgr::InitAutomaticArenaPointDistribution()
     LOG_INFO("server.loading", "Automatic Arena Point Distribution initialized.");
 }
 
-void BattlegroundMgr::BuildBattlegroundListPacket(WorldPacket* data, ObjectGuid guid, Player* player, BattlegroundTypeId bgTypeId, uint8 fromWhere)
+/// SMSG_BATTLEFIELD_LIST, 3.4.3 (handler FUN_1419b3070): PackedGuid128 BattlemasterGuid, u32 Verification (echoed by
+/// CMSG_BATTLEMASTER_JOIN), u32 BattlemasterListID, u8 MinLevel, u8 MaxLevel, u32 count, the client instance ids, bits
+/// PvpAnywhere (0 opens the battlemaster window on the NPC), HasRandomWinToday, flush. No rewards any more.
+void BattlegroundMgr::BuildBattlegroundListPacket(WorldPacket* data, ObjectGuid guid, Player* player, BattlegroundTypeId bgTypeId, uint8 /*fromWhere*/)
 {
     if (!player)
         return;
 
-    uint32 winner_kills = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_HONOR_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_HONOR_FIRST);
-    uint32 winner_arena = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_FIRST);
-    uint32 loser_kills = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_LOSER_HONOR_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_LOSER_HONOR_FIRST);
-
-    winner_kills = Acore::Honor::hk_honor_at_level(player->GetLevel(), float(winner_kills));
-    loser_kills = Acore::Honor::hk_honor_at_level(player->GetLevel(), float(loser_kills));
-
-    data->Initialize(SMSG_BATTLEFIELD_LIST);
-    *data << guid;                                          // battlemaster guid
-    *data << uint8(fromWhere);                              // from where you joined
-    *data << uint32(bgTypeId);                              // battleground id
-    *data << uint8(0);                                      // unk
-    *data << uint8(0);                                      // unk
-
-    // Rewards
-    *data << uint8(player->GetRandomWinner());              // 3.3.3 hasWin
-    *data << uint32(winner_kills);                          // 3.3.3 winHonor
-    *data << uint32(winner_arena);                          // 3.3.3 winArena
-    *data << uint32(loser_kills);                           // 3.3.3 lossHonor
-
-    uint8 isQueueRandom = (bgTypeId == BATTLEGROUND_RB);
-
-    *data << uint8(isQueueRandom);                          // 3.3.3 isRandom
-    if (isQueueRandom)
+    std::vector<uint32> instances;
+    PvPDifficultyEntry const* bracketEntry = nullptr;
+    auto const& it = bgDataStore.find(bgTypeId);
+    if (it != bgDataStore.end() && !it->second._Battlegrounds.empty())
     {
-        // Rewards (random)
-        *data << uint8(player->GetRandomWinner());          // 3.3.3 hasWin_Random
-        *data << uint32(winner_kills);                      // 3.3.3 winHonor_Random
-        *data << uint32(winner_arena);                      // 3.3.3 winArena_Random
-        *data << uint32(loser_kills);                       // 3.3.3 lossHonor_Random
+        bracketEntry = GetBattlegroundBracketByLevel(it->second._Battlegrounds.begin()->second->GetMapId(), player->GetLevel());
+        if (bracketEntry && bgTypeId != BATTLEGROUND_AA)
+            for (auto const& itr : it->second._ClientBattlegroundIds[bracketEntry->GetBracketId()])
+                instances.push_back(itr);
     }
 
-    if (bgTypeId == BATTLEGROUND_AA)                        // arena
-        *data << uint32(0);                                 // unk (count?)
-    else                                                    // battleground
-    {
-        std::size_t count_pos = data->wpos();
-        *data << uint32(0);                                 // number of bg instances
-
-        auto const& it = bgDataStore.find(bgTypeId);
-        if (it != bgDataStore.end())
-        {
-            // expected bracket entry
-            if (PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(it->second._Battlegrounds.begin()->second->GetMapId(), player->GetLevel()))
-            {
-                uint32 count = 0;
-                BattlegroundBracketId bracketId = bracketEntry->GetBracketId();
-                BattlegroundClientIdsContainer& clientIds = it->second._ClientBattlegroundIds[bracketId];
-
-                for (auto const& itr : clientIds)
-                {
-                    *data << uint32(itr);
-                    ++count;
-                }
-
-                data->put<uint32>(count_pos, count);
-            }
-        }
-    }
+    data->Initialize(SMSG_BATTLEFIELD_LIST, 18 + 14 + 4 * instances.size() + 1);
+    Guid128::Write(*data, guid);
+    *data << uint32(0);                                     // Verification
+    *data << uint32(bgTypeId);
+    *data << uint8(bracketEntry ? bracketEntry->minLevel : 0);
+    *data << uint8(bracketEntry ? bracketEntry->maxLevel : 0);
+    *data << uint32(instances.size());
+    for (uint32 instanceId : instances)
+        *data << uint32(instanceId);
+    data->WriteBit(guid.IsEmpty());                         // PvpAnywhere
+    data->WriteBit(player->GetRandomWinner());              // HasRandomWinToday
+    data->FlushBits();
 }
 
 bool BattlegroundMgr::SendToBattleground(Player* player, uint32 instanceId, BattlegroundTypeId bgTypeId)

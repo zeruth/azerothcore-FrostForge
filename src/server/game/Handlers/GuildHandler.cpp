@@ -46,6 +46,15 @@ void WorldSession::HandleGuildQueryOpcode(WorldPackets::Guild::QueryGuildInfo& q
 void WorldSession::HandleGuildInviteOpcode(WorldPackets::Guild::GuildInviteByName& packet)
 {
     LOG_DEBUG("guild", "CMSG_GUILD_INVITE_BY_NAME [{}]: Invited: {}", GetPlayerInfo(), packet.Name);
+    // 3.4.3 has no CMSG_ARENA_TEAM_INVITE: Lua ArenaTeamInviteByName sends this with the team id
+    if (packet.ArenaTeamId)
+    {
+        WorldPacket arenaInvite(CMSG_GUILD_INVITE_BY_NAME, 4 + packet.Name.size() + 1);
+        arenaInvite << uint32(*packet.ArenaTeamId);
+        arenaInvite << packet.Name;
+        HandleArenaTeamInviteOpcode(arenaInvite);
+        return;
+    }
     if (normalizePlayerName(packet.Name))
         if (Guild* guild = GetPlayer()->GetGuild())
             guild->HandleInviteMember(this, packet.Name);
