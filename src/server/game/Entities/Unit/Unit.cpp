@@ -362,7 +362,7 @@ Unit::Unit() : WorldObject(),
     m_objectType |= TYPEMASK_UNIT;
     m_objectTypeId = TYPEID_UNIT;
 
-    m_updateFlag = (UPDATEFLAG_LIVING | UPDATEFLAG_STATIONARY_POSITION);
+    m_updateFlag.MovementUpdate = true;
 
     m_attackTimer[BASE_ATTACK] = 0;
     m_attackTimer[OFF_ATTACK] = 0;
@@ -641,8 +641,6 @@ void Unit::Update(uint32 p_time)
 
     UpdateSplineMovement(p_time);
     GetMotionMaster()->UpdateMotion(p_time);
-
-    InvalidateValuesUpdateCache();
 }
 
 bool Unit::haveOffhandWeapon() const
@@ -14580,7 +14578,7 @@ bool Unit::CreateVehicleKit(uint32 id, uint32 creatureEntry)
         return false;
 
     m_vehicleKit = new Vehicle(this, vehInfo, creatureEntry);
-    m_updateFlag |= UPDATEFLAG_VEHICLE;
+    m_updateFlag.Vehicle = true;
     m_unitTypeMask |= UNIT_MASK_VEHICLE;
     return true;
 }
@@ -14595,7 +14593,7 @@ void Unit::RemoveVehicleKit()
 
     m_vehicleKit = nullptr;
 
-    m_updateFlag &= ~UPDATEFLAG_VEHICLE;
+    m_updateFlag.Vehicle = false;
     m_unitTypeMask &= ~UNIT_MASK_VEHICLE;
     RemoveNpcFlag(UNIT_NPC_FLAG_SPELLCLICK | UNIT_NPC_FLAG_PLAYER_VEHICLE);
 }
@@ -16342,284 +16340,6 @@ void Unit::SendMovementHover(Player* sendTo)
     sendTo->SendDirectMessage(&data);
 }
 
-void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target)
-{
-    if (!target)
-        return;
-
-    uint32* flags = UnitUpdateFieldFlags;
-    uint32 visibleFlag = UF_FLAG_PUBLIC;
-
-    if (target == this)
-        visibleFlag |= UF_FLAG_PRIVATE;
-
-    Player* plr = GetCharmerOrOwnerPlayerOrPlayerItself();
-    if (GetOwnerGUID() == target->GetGUID())
-        visibleFlag |= UF_FLAG_OWNER;
-
-    if (HasDynamicFlag(UNIT_DYNFLAG_SPECIALINFO))
-        if (HasAuraTypeWithCaster(SPELL_AURA_EMPATHY, target->GetGUID()))
-            visibleFlag |= UF_FLAG_SPECIAL_INFO;
-
-    if (plr && plr->IsInSameRaidWith(target))
-        visibleFlag |= UF_FLAG_PARTY_MEMBER;
-
-    uint64 cacheKey = static_cast<uint64>(visibleFlag) << 8 | updateType;
-
-    auto cacheIt = _valuesUpdateCache.find(cacheKey);
-    if (cacheIt != _valuesUpdateCache.end())
-    {
-        int32 cachePos = static_cast<int32>(data->wpos());
-        data->append(cacheIt->second.buffer);
-
-        BuildValuesCachePosPointers dataAdjustedPos = cacheIt->second.posPointers;
-        if (cachePos)
-            dataAdjustedPos.ApplyOffset(cachePos);
-
-        PatchValuesUpdate(*data, dataAdjustedPos, target);
-
-        return;
-    }
-
-    BuildValuesCachedBuffer cacheValue(500);
-
-    ByteBuffer fieldBuffer(400);
-
-    UpdateMask updateMask;
-    updateMask.SetCount(m_valuesCount);
-
-    for (uint16 index = 0; index < m_valuesCount; ++index)
-    {
-        if (_fieldNotifyFlags & flags[index] ||
-                ((flags[index] & visibleFlag) & UF_FLAG_SPECIAL_INFO) ||
-                ((updateType == UPDATETYPE_VALUES ? _changesMask.GetBit(index) : m_uint32Values[index]) && (flags[index] & visibleFlag)) ||
-                (index == UNIT_FIELD_AURASTATE && HasFlag(UNIT_FIELD_AURASTATE, PER_CASTER_AURA_STATE_MASK)))
-        {
-            updateMask.SetBit(index);
-
-            if (index == UNIT_NPC_FLAGS)
-            {
-                cacheValue.posPointers.UnitNPCFlagsPos = int32(fieldBuffer.wpos());
-                fieldBuffer << m_uint32Values[UNIT_NPC_FLAGS];
-            }
-            else if (index == UNIT_FIELD_AURASTATE)
-            {
-                cacheValue.posPointers.UnitFieldAuraStatePos = int32(fieldBuffer.wpos());
-                fieldBuffer << uint32(0); // Fill in later.
-            }
-            // FIXME: Some values at server stored in float format but must be sent to client in uint32 format
-            else if (index >= UNIT_FIELD_BASEATTACKTIME && index <= UNIT_FIELD_RANGEDATTACKTIME)
-            {
-                // convert from float to uint32 and send
-                fieldBuffer << uint32(m_floatValues[index] < 0 ? 0 : m_floatValues[index]);
-            }
-            // there are some float values which may be negative or can't get negative due to other checks
-            else if ((index >= UNIT_FIELD_NEGSTAT0   && index <= UNIT_FIELD_NEGSTAT4) ||
-                     (index >= UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE  && index <= (UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE + 6)) ||
-                     (index >= UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE  && index <= (UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE + 6)) ||
-                     (index >= UNIT_FIELD_POSSTAT0   && index <= UNIT_FIELD_POSSTAT4))
-            {
-                fieldBuffer << uint32(m_floatValues[index]);
-            }
-            // Gamemasters should be always able to select units - remove not selectable flag
-            else if (index == UNIT_FIELD_FLAGS)
-            {
-                cacheValue.posPointers.UnitFieldFlagsPos = int32(fieldBuffer.wpos());
-                fieldBuffer << m_uint32Values[UNIT_FIELD_FLAGS];
-            }
-            // use modelid_a if not gm, _h if gm for CREATURE_FLAG_EXTRA_TRIGGER creatures
-            else if (index == UNIT_FIELD_DISPLAYID)
-            {
-                cacheValue.posPointers.UnitFieldDisplayPos = int32(fieldBuffer.wpos());
-                fieldBuffer << m_uint32Values[UNIT_FIELD_DISPLAYID];
-            }
-            else if (index == UNIT_DYNAMIC_FLAGS)
-            {
-                cacheValue.posPointers.UnitDynamicFlagsPos = int32(fieldBuffer.wpos());
-                uint32 dynamicFlags = m_uint32Values[UNIT_DYNAMIC_FLAGS] & ~(UNIT_DYNFLAG_TAPPED | UNIT_DYNFLAG_TAPPED_BY_PLAYER);
-                fieldBuffer << dynamicFlags;
-            }
-            else if (index == UNIT_FIELD_BYTES_2)
-            {
-                cacheValue.posPointers.UnitFieldBytes2Pos = int32(fieldBuffer.wpos());
-                fieldBuffer << m_uint32Values[index];
-            }
-            else if (index == UNIT_FIELD_FACTIONTEMPLATE)
-            {
-                cacheValue.posPointers.UnitFieldFactionTemplatePos = int32(fieldBuffer.wpos());
-                fieldBuffer << m_uint32Values[index];
-            }
-            else
-            {
-                if (sScriptMgr->ShouldTrackValuesUpdatePosByIndex(this, updateType, index))
-                    cacheValue.posPointers.other[index] = static_cast<uint32>(fieldBuffer.wpos());
-
-                // send in current format (float as float, uint32 as uint32)
-                fieldBuffer << m_uint32Values[index];
-            }
-        }
-    }
-
-    cacheValue.buffer << uint8(updateMask.GetBlockCount());
-    updateMask.AppendToPacket(&cacheValue.buffer);
-    int32 fieldBufferPos = static_cast<int32>(cacheValue.buffer.wpos());
-    cacheValue.buffer.append(fieldBuffer);
-    cacheValue.posPointers.ApplyOffset(fieldBufferPos);
-
-    int32 cachePos = static_cast<int32>(data->wpos());
-    data->append(cacheValue.buffer);
-
-    BuildValuesCachePosPointers dataAdjustedPos = cacheValue.posPointers;
-    if (cachePos)
-        dataAdjustedPos.ApplyOffset(cachePos);
-
-    PatchValuesUpdate(*data, dataAdjustedPos, target);
-
-    _valuesUpdateCache.insert(std::pair<uint64, BuildValuesCachedBuffer>(cacheKey, std::move(cacheValue)));
-}
-
-void Unit::PatchValuesUpdate(ByteBuffer& valuesUpdateBuf, BuildValuesCachePosPointers& posPointers, Player* target)
-{
-    Creature const* creature = ToCreature();
-
-    // UNIT_NPC_FLAGS
-    if (creature && posPointers.UnitNPCFlagsPos >= 0)
-    {
-        uint32 appendValue = m_uint32Values[UNIT_NPC_FLAGS];
-
-        if (sWorld->getIntConfig(CONFIG_INSTANT_TAXI) == 2 && appendValue & UNIT_NPC_FLAG_FLIGHTMASTER)
-            appendValue |= UNIT_NPC_FLAG_GOSSIP; // flight masters need NPC gossip flag to show instant flight toggle option
-
-        if (!target->CanSeeSpellClickOn(creature))
-            appendValue &= ~UNIT_NPC_FLAG_SPELLCLICK;
-
-        if (!target->CanSeeVendor(creature))
-        {
-            appendValue &= ~UNIT_NPC_FLAG_REPAIR;
-            appendValue &= ~UNIT_NPC_FLAG_VENDOR_MASK;
-        }
-
-        if (!target->CanSeeTrainer(creature))
-            appendValue &= ~UNIT_NPC_FLAG_TRAINER;
-
-        valuesUpdateBuf.put(posPointers.UnitNPCFlagsPos, appendValue);
-    }
-
-    // UNIT_FIELD_AURASTATE
-    if (posPointers.UnitFieldAuraStatePos >= 0)
-        valuesUpdateBuf.put(posPointers.UnitFieldAuraStatePos, uint32(BuildAuraStateUpdateForTarget(target)));
-
-    // UNIT_FIELD_FLAGS
-    if (posPointers.UnitFieldFlagsPos >= 0)
-    {
-        uint32 appendValue = m_uint32Values[UNIT_FIELD_FLAGS];
-        if (target->IsGameMaster() && target->GetSession()->IsGMAccount())
-            appendValue &= ~UNIT_FLAG_NOT_SELECTABLE;
-
-        valuesUpdateBuf.put(posPointers.UnitFieldFlagsPos, appendValue);
-    }
-
-    // UNIT_FIELD_DISPLAYID
-    // Use modelid_a if not gm, _h if gm for CREATURE_FLAG_EXTRA_TRIGGER creatures.
-    if (posPointers.UnitFieldDisplayPos >= 0)
-    {
-        uint32 displayId = m_uint32Values[UNIT_FIELD_DISPLAYID];
-        if (creature)
-        {
-            CreatureTemplate const* cinfo = creature->GetCreatureTemplate();
-
-            // this also applies for transform auras
-            if (SpellInfo const* transform = sSpellMgr->GetSpellInfo(getTransForm()))
-                for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
-                    if (transform->Effects[i].IsAura(SPELL_AURA_TRANSFORM))
-                        if (CreatureTemplate const* transformInfo = sObjectMgr->GetCreatureTemplate(transform->Effects[i].MiscValue))
-                        {
-                            cinfo = transformInfo;
-                            break;
-                        }
-
-            if (cinfo->HasFlagsExtra(CREATURE_FLAG_EXTRA_TRIGGER))
-            {
-                if (target->IsGameMaster() && target->GetSession()->IsGMAccount())
-                    displayId = cinfo->GetFirstVisibleModel()->CreatureDisplayID;
-                else
-                    displayId = cinfo->GetFirstInvisibleModel()->CreatureDisplayID;
-            }
-        }
-
-        valuesUpdateBuf.put(posPointers.UnitFieldDisplayPos, uint32(displayId));
-    }
-
-    // UNIT_DYNAMIC_FLAGS
-    // Hide lootable animation for unallowed players.
-    if (posPointers.UnitDynamicFlagsPos >= 0)
-    {
-        uint32 dynamicFlags = m_uint32Values[UNIT_DYNAMIC_FLAGS] & ~(UNIT_DYNFLAG_TAPPED | UNIT_DYNFLAG_TAPPED_BY_PLAYER);
-
-        if (creature)
-        {
-            if (creature->hasLootRecipient())
-            {
-                dynamicFlags |= UNIT_DYNFLAG_TAPPED;
-                if (creature->isTappedBy(target))
-                    dynamicFlags |= UNIT_DYNFLAG_TAPPED_BY_PLAYER;
-            }
-
-            if (!target->isAllowedToLoot(creature))
-                dynamicFlags &= ~UNIT_DYNFLAG_LOOTABLE;
-        }
-
-        // unit UNIT_DYNFLAG_TRACK_UNIT should only be sent to caster of SPELL_AURA_MOD_STALKED auras
-        if (dynamicFlags & UNIT_DYNFLAG_TRACK_UNIT)
-            if (!HasAuraTypeWithCaster(SPELL_AURA_MOD_STALKED, target->GetGUID()))
-                dynamicFlags &= ~UNIT_DYNFLAG_TRACK_UNIT;
-
-        valuesUpdateBuf.put(posPointers.UnitDynamicFlagsPos, dynamicFlags);
-    }
-
-    // UNIT_FIELD_BYTES_2
-    if (posPointers.UnitFieldBytes2Pos >= 0)
-    {
-        if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
-        {
-            FactionTemplateEntry const* ft1 = GetFactionTemplateEntry();
-            FactionTemplateEntry const* ft2 = target->GetFactionTemplateEntry();
-            if (ft1 && ft2 && !ft1->IsFriendlyTo(*ft2))
-                // Allow targetting opposite faction in party when enabled in config
-                valuesUpdateBuf.put(posPointers.UnitFieldBytes2Pos, (m_uint32Values[UNIT_FIELD_BYTES_2] & ((UNIT_BYTE2_FLAG_SANCTUARY /*| UNIT_BYTE2_FLAG_AURAS | UNIT_BYTE2_FLAG_UNK5*/) << 8))); // this flag is at uint8 offset 1 !!
-        }// pussywizard / Callmephil
-        else if (target->IsSpectator() && target->FindMap() && target->FindMap()->IsBattleArena() &&
-                    (this->IsPlayer() || this->IsCreature() || this->IsDynamicObject()))
-        {
-                valuesUpdateBuf.put(posPointers.UnitFieldBytes2Pos, (m_uint32Values[UNIT_FIELD_BYTES_2] & 0xFFFFF2FF)); // clear UNIT_BYTE2_FLAG_PVP, UNIT_BYTE2_FLAG_FFA_PVP, UNIT_BYTE2_FLAG_SANCTUARY
-        }
-    }
-
-    // UNIT_FIELD_FACTIONTEMPLATE
-    if (posPointers.UnitFieldFactionTemplatePos >= 0)
-    {
-        if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
-        {
-            FactionTemplateEntry const* ft1 = GetFactionTemplateEntry();
-            FactionTemplateEntry const* ft2 = target->GetFactionTemplateEntry();
-            if (ft1 && ft2 && !ft1->IsFriendlyTo(*ft2))
-                // pretend that all other HOSTILE players have own faction, to allow follow, heal, rezz (trade wont work)
-                valuesUpdateBuf.put(posPointers.UnitFieldFactionTemplatePos, uint32(target->GetFaction()));
-        }// pussywizard / Callmephil
-        else if (target->IsSpectator() && target->FindMap() && target->FindMap()->IsBattleArena() &&
-                    (this->IsPlayer() || this->IsCreature() || this->IsDynamicObject()))
-        {
-            valuesUpdateBuf.put(posPointers.UnitFieldFactionTemplatePos, uint32(target->GetFaction()));
-        }
-        else if (target->IsGMSpectator() && IsControlledByPlayer())
-        {
-            valuesUpdateBuf.put(posPointers.UnitFieldFactionTemplatePos, uint32(target->GetFaction()));
-        }
-    }
-
-    sScriptMgr->OnPatchValuesUpdate(this, valuesUpdateBuf, posPointers, target);
-}
-
 void Unit::BuildCooldownPacket(WorldPacket& data, uint8 flags, uint32 spellId, uint32 cooldown)
 {
     data.Initialize(SMSG_SPELL_COOLDOWN, 8 + 1 + 4 + 4);
@@ -16954,15 +16674,6 @@ bool Unit::IsInDisallowedMountForm() const
 void Unit::SetUInt32Value(uint16 index, uint32 value)
 {
     Object::SetUInt32Value(index, value);
-
-    switch (index)
-    {
-        // Invalidating the cache on health change should fix an issue where the client sees dead NPCs when they are not.
-        // We might also need to invalidate the cache for some other fields as well.
-        case UNIT_FIELD_HEALTH:
-            InvalidateValuesUpdateCache();
-            break;
-    }
 }
 
 std::string Unit::GetDebugInfo() const

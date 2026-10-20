@@ -57,6 +57,7 @@ public:
     void BindToCaster();
     void UnbindFromCaster();
     [[nodiscard]] uint32 GetSpellId() const {  return GetUInt32Value(DYNAMICOBJECT_SPELLID); }
+    void FillUpdateFields(UF::Values& values) const override;
     [[nodiscard]] ObjectGuid GetOwnerGUID() const override { return GetCasterGUID(); }
     [[nodiscard]] ObjectGuid GetCasterGUID() const { return GetGuidValue(DYNAMICOBJECT_CASTER); }
     [[nodiscard]] float GetRadius() const { return GetFloatValue(DYNAMICOBJECT_RADIUS); }

@@ -61,7 +61,8 @@ GameObject::GameObject() : WorldObject(), MovableMapObject(),
     m_objectType |= TYPEMASK_GAMEOBJECT;
     m_objectTypeId = TYPEID_GAMEOBJECT;
 
-    m_updateFlag = (UPDATEFLAG_LOWGUID | UPDATEFLAG_STATIONARY_POSITION | UPDATEFLAG_POSITION | UPDATEFLAG_ROTATION);
+    m_updateFlag.Stationary = true;
+    m_updateFlag.Rotation = true;
 
     m_valuesCount = GAMEOBJECT_END;
     m_respawnTime = 0;
@@ -2777,106 +2778,6 @@ bool GameObject::IsLootAllowedFor(Player const* player) const
 GameObject* GameObject::GetLinkedTrap()
 {
     return ObjectAccessor::GetGameObject(*this, m_linkedTrap);
-}
-
-void GameObject::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target)
-{
-    if (!target)
-        return;
-
-    bool forcedFlags = GetGoType() == GAMEOBJECT_TYPE_CHEST && GetGOInfo()->chest.groupLootRules && HasLootRecipient();
-    bool targetIsGM = target->IsGameMaster() && target->GetSession()->IsGMAccount();
-
-    ByteBuffer fieldBuffer;
-
-    UpdateMask updateMask;
-    updateMask.SetCount(m_valuesCount);
-
-    uint32* flags = GameObjectUpdateFieldFlags;
-    uint32 visibleFlag = UF_FLAG_PUBLIC;
-    if (GetOwnerGUID() == target->GetGUID())
-        visibleFlag |= UF_FLAG_OWNER;
-
-    for (uint16 index = 0; index < m_valuesCount; ++index)
-    {
-        if (_fieldNotifyFlags & flags[index] ||
-                ((updateType == UPDATETYPE_VALUES ? _changesMask.GetBit(index) : m_uint32Values[index]) && (flags[index] & visibleFlag)) ||
-                (index == GAMEOBJECT_FLAGS && forcedFlags))
-        {
-            updateMask.SetBit(index);
-
-            if (index == GAMEOBJECT_DYNAMIC)
-            {
-                uint16 dynFlags = 0;
-                int16 pathProgress = -1;
-                switch (GetGoType())
-                {
-                    case GAMEOBJECT_TYPE_QUESTGIVER:
-                        if (ActivateToQuest(target))
-                            dynFlags |= GO_DYNFLAG_LO_ACTIVATE;
-                        break;
-                    case GAMEOBJECT_TYPE_CHEST:
-                    case GAMEOBJECT_TYPE_GOOBER:
-                        if (ActivateToQuest(target))
-                        {
-                            dynFlags |= GO_DYNFLAG_LO_ACTIVATE;
-                            if (sWorld->getBoolConfig(CONFIG_OBJECT_SPARKLES))
-                                dynFlags |= GO_DYNFLAG_LO_SPARKLE;
-                        }
-                        else if (targetIsGM)
-                            dynFlags |= GO_DYNFLAG_LO_ACTIVATE;
-                        break;
-                    case GAMEOBJECT_TYPE_SPELL_FOCUS:
-                    case GAMEOBJECT_TYPE_GENERIC:
-                        if (ActivateToQuest(target) && sWorld->getBoolConfig(CONFIG_OBJECT_SPARKLES))
-                            dynFlags |= GO_DYNFLAG_LO_SPARKLE;
-                        break;
-                    case GAMEOBJECT_TYPE_TRANSPORT:
-                        if (StaticTransport const* t = ToStaticTransport())
-                            if (t->GetPauseTime())
-                            {
-                                if (GetGoState() == GO_STATE_READY)
-                                {
-                                    if (t->GetPathProgress() >= t->GetPauseTime()) // if not, send 100% progress
-                                        pathProgress = int16(float(t->GetPathProgress() - t->GetPauseTime()) / float(t->GetPeriod() - t->GetPauseTime()) * 65535.0f);
-                                }
-                                else
-                                {
-                                    if (t->GetPathProgress() <= t->GetPauseTime()) // if not, send 100% progress
-                                        pathProgress = int16(float(t->GetPathProgress()) / float(t->GetPauseTime()) * 65535.0f);
-                                }
-                            }
-                        // else it's ignored
-                        break;
-                    case GAMEOBJECT_TYPE_MO_TRANSPORT:
-                        if (MotionTransport const* t = ToMotionTransport())
-                            pathProgress = int16(float(t->GetPathProgress()) / float(t->GetPeriod()) * 65535.0f);
-                        break;
-                    default:
-                        break;
-                }
-
-                fieldBuffer << uint16(dynFlags);
-                fieldBuffer << int16(pathProgress);
-            }
-            else if (index == GAMEOBJECT_FLAGS)
-            {
-                uint32 goFlags = m_uint32Values[GAMEOBJECT_FLAGS];
-                if (GetGoType() == GAMEOBJECT_TYPE_CHEST && GetGOInfo() && GetGOInfo()->chest.groupLootRules && !IsLootAllowedFor(target))
-                {
-                    goFlags |= GO_FLAG_LOCKED | GO_FLAG_NOT_SELECTABLE;
-                }
-
-                fieldBuffer << goFlags;
-            }
-            else
-                fieldBuffer << m_uint32Values[index];                // other cases
-        }
-    }
-
-    *data << uint8(updateMask.GetBlockCount());
-    updateMask.AppendToPacket(data);
-    data->append(fieldBuffer);
 }
 
 void GameObject::GetRespawnPosition(float& x, float& y, float& z, float* ori /* = nullptr*/) const

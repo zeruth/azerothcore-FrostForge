@@ -582,6 +582,9 @@ public:
         _curbitval = 0;
     }
 
+    /// Whether WriteBit has left a partly filled byte that FlushBits would write out.
+    [[nodiscard]] bool HasUnfinishedBitPack() const { return _bitpos != 8; }
+
     bool ReadBit()
     {
         if (_readBitpos == 8)

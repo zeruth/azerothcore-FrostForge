@@ -5553,6 +5553,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     _LoadTalents(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TALENTS));
 
     _LoadGlyphs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GLYPHS));
+    _LoadCustomizations(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CUSTOMIZATIONS));
     _LoadGlyphAuras();
     _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
     // add ghost flag (must be after aura load: PLAYER_FLAGS_GHOST set in aura)

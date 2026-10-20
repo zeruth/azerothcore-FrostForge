@@ -56,6 +56,7 @@ public:
     void DeleteFromDB(CharacterDatabaseTransaction trans) override;
 
     void BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) override;
+    void FillUpdateFields(UF::Values& values) const override;
 
     std::string GetDebugInfo() const override;
 

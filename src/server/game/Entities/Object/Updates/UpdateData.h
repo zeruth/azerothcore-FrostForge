@@ -23,46 +23,42 @@
 
 class WorldPacket;
 
+/// The update block types of SMSG_UPDATE_OBJECT (FrostLite docs/updateobject.md 2). 3.4.3 has no
+/// movement, out-of-range or near-objects block: removals travel in the message header.
 enum OBJECT_UPDATE_TYPE
 {
     UPDATETYPE_VALUES               = 0,
-    UPDATETYPE_MOVEMENT             = 1,
-    UPDATETYPE_CREATE_OBJECT        = 2,
-    UPDATETYPE_CREATE_OBJECT2       = 3,
-    UPDATETYPE_OUT_OF_RANGE_OBJECTS = 4,
-    UPDATETYPE_NEAR_OBJECTS         = 5
+    UPDATETYPE_CREATE_OBJECT        = 1,    // an object coming into view
+    UPDATETYPE_CREATE_OBJECT2       = 2,    // an object just spawned (the client may play its birth)
 };
 
-enum OBJECT_UPDATE_FLAGS
-{
-    UPDATEFLAG_NONE                 = 0x0000,
-    UPDATEFLAG_SELF                 = 0x0001,
-    UPDATEFLAG_TRANSPORT            = 0x0002,
-    UPDATEFLAG_HAS_TARGET           = 0x0004,
-    UPDATEFLAG_UNKNOWN              = 0x0008,
-    UPDATEFLAG_LOWGUID              = 0x0010,
-    UPDATEFLAG_LIVING               = 0x0020,
-    UPDATEFLAG_STATIONARY_POSITION  = 0x0040,
-    UPDATEFLAG_VEHICLE              = 0x0080,
-    UPDATEFLAG_POSITION             = 0x0100,
-    UPDATEFLAG_ROTATION             = 0x0200
-};
-
+/// One SMSG_UPDATE_OBJECT (0x27CB): u32 NumObjUpdates, u16 MapID, bit HasRemovedObjects, [u16
+/// DestroyCount, u32 RemovedCount, PackedGuid128 x RemovedCount: the destroyed first, then those
+/// going out of range], u32 DataSize, the blocks. The client drops the whole message if MapID is not
+/// its current map, so it is the receiver's map.
 class UpdateData
 {
 public:
-    UpdateData();
+    static constexpr uint32 NO_MAP = 0xFFFFFFFF;
+
+    explicit UpdateData(uint32 mapId = NO_MAP);
+
+    void SetMapId(uint32 mapId) { m_map = mapId; }
+    [[nodiscard]] uint32 GetMapId() const { return m_map; }
 
     void AddOutOfRangeGUID(ObjectGuid guid);
+    void AddDestroyObject(ObjectGuid guid);
     void AddUpdateBlock(ByteBuffer const& block);
     void AddUpdateBlock(UpdateData const& block);
     bool BuildPacket(WorldPacket& packet);
-    [[nodiscard]] bool HasData() const { return m_blockCount > 0 || !m_outOfRangeGUIDs.empty(); }
+    [[nodiscard]] bool HasData() const { return m_blockCount > 0 || !m_outOfRangeGUIDs.empty() || !m_destroyGUIDs.empty(); }
     void Clear();
 
 protected:
+    uint32 m_map;
     uint32 m_blockCount;
     GuidVector m_outOfRangeGUIDs;
+    GuidVector m_destroyGUIDs;
     ByteBuffer m_data;
 };
 #endif

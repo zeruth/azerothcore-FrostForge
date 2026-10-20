@@ -122,7 +122,8 @@ public:
     explicit GameObject();
     ~GameObject() override;
 
-    void BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target) override;
+    void FillUpdateFields(UF::Values& values) const override;
+    void PatchUpdateFields(UF::Values& values, Player const* target) const override;
 
     void AddToWorld() override;
     void RemoveFromWorld() override;

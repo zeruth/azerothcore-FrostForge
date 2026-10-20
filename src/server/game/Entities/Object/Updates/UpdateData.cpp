@@ -20,10 +20,11 @@
 #include "Errors.h"
 #include "Log.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "World.h"
 #include "WorldPacket.h"
 
-UpdateData::UpdateData() : m_blockCount(0)
+UpdateData::UpdateData(uint32 mapId) : m_map(mapId), m_blockCount(0)
 {
     m_outOfRangeGUIDs.reserve(15);
 }
@@ -31,6 +32,11 @@ UpdateData::UpdateData() : m_blockCount(0)
 void UpdateData::AddOutOfRangeGUID(ObjectGuid guid)
 {
     m_outOfRangeGUIDs.push_back(guid);
+}
+
+void UpdateData::AddDestroyObject(ObjectGuid guid)
+{
+    m_destroyGUIDs.push_back(guid);
 }
 
 void UpdateData::AddUpdateBlock(ByteBuffer const& block)
@@ -43,25 +49,44 @@ void UpdateData::AddUpdateBlock(UpdateData const& block)
 {
     m_data.append(block.m_data);
     m_blockCount += block.m_blockCount;
+    m_outOfRangeGUIDs.insert(m_outOfRangeGUIDs.end(), block.m_outOfRangeGUIDs.begin(), block.m_outOfRangeGUIDs.end());
+    m_destroyGUIDs.insert(m_destroyGUIDs.end(), block.m_destroyGUIDs.begin(), block.m_destroyGUIDs.end());
+    if (m_map == NO_MAP)
+        m_map = block.m_map;
 }
 
 bool UpdateData::BuildPacket(WorldPacket& packet)
 {
     ASSERT(packet.empty());
 
-    packet.reserve(4 + (m_outOfRangeGUIDs.empty() ? 0 : 1 + 4 + 9 * m_outOfRangeGUIDs.size()) + m_data.wpos());
-
-    packet << (uint32) (!m_outOfRangeGUIDs.empty() ? m_blockCount + 1 : m_blockCount);
-
-    if (!m_outOfRangeGUIDs.empty())
+    if (m_map == NO_MAP)
     {
-        packet << (uint8) UPDATETYPE_OUT_OF_RANGE_OBJECTS;
-        packet << (uint32) m_outOfRangeGUIDs.size();
-
-        for (ObjectGuid const& guid : m_outOfRangeGUIDs)
-            packet << guid.WriteAsPacked();
+        // the client drops a message for another map: every block is built for a receiver, whose map it is
+        LOG_ERROR("network", "UpdateData::BuildPacket: SMSG_UPDATE_OBJECT with {} blocks has no map id", m_blockCount);
+        m_map = 0;
     }
 
+    bool hasRemoved = !m_outOfRangeGUIDs.empty() || !m_destroyGUIDs.empty();
+    packet.reserve(4 + 2 + 1 + (hasRemoved ? 6 + 18 * (m_outOfRangeGUIDs.size() + m_destroyGUIDs.size()) : 0) + 4 + m_data.size());
+
+    packet << uint32(m_blockCount);
+    packet << uint16(m_map);
+    packet.WriteBit(hasRemoved);
+    packet.FlushBits();
+
+    if (hasRemoved)
+    {
+        packet << uint16(m_destroyGUIDs.size());
+        packet << uint32(m_destroyGUIDs.size() + m_outOfRangeGUIDs.size());
+
+        for (ObjectGuid const& guid : m_destroyGUIDs)
+            Guid128::Write(packet, guid);
+
+        for (ObjectGuid const& guid : m_outOfRangeGUIDs)
+            Guid128::Write(packet, guid);
+    }
+
+    packet << uint32(m_data.size());
     packet.append(m_data);
     packet.SetOpcode(SMSG_UPDATE_OBJECT);
 
@@ -72,5 +97,6 @@ void UpdateData::Clear()
 {
     m_data.clear();
     m_outOfRangeGUIDs.clear();
+    m_destroyGUIDs.clear();
     m_blockCount = 0;
 }

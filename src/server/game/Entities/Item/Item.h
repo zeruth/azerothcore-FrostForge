@@ -229,6 +229,7 @@ public:
     [[nodiscard]] ItemTemplate const* GetTemplate() const;
 
     [[nodiscard]] ObjectGuid GetOwnerGUID() const { return GetGuidValue(ITEM_FIELD_OWNER); }
+    void FillUpdateFields(UF::Values& values) const override;
     void SetOwnerGUID(ObjectGuid guid) { SetGuidValue(ITEM_FIELD_OWNER, guid); }
     [[nodiscard]] Player* GetOwner() const;
 

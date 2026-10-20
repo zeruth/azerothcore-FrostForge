@@ -218,6 +218,10 @@ bool LoginQueryHolder::Initialize()
     stmt->SetData(0, rawGUID);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_OFFLINE_ACHIEVEMENTS_UPDATES, stmt);
 
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_CUSTOMIZATIONS);
+    stmt->SetData(0, _guid.GetCounter());
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_CUSTOMIZATIONS, stmt);
+
     return res;
 }
 

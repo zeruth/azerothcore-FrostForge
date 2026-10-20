@@ -1161,7 +1161,7 @@ void BattlegroundSA::SendTransportsRemove(Player* player)
 {
     if (BgObjects[BG_SA_BOAT_ONE] ||  BgObjects[BG_SA_BOAT_TWO])
     {
-        UpdateData transData;
+        UpdateData transData(player->GetMapId());
         if (BgObjects[BG_SA_BOAT_ONE])
             GetBGObject(BG_SA_BOAT_ONE)->BuildOutOfRangeUpdateBlock(&transData);
         if (BgObjects[BG_SA_BOAT_TWO])

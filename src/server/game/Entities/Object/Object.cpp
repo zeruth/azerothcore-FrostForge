@@ -21,7 +21,9 @@
 #include "CellImpl.h"
 #include "Chat.h"
 #include "Creature.h"
+#include "Corpse.h"
 #include "DBCStores.h"
+#include "DynamicObject.h"
 #include "DynamicVisibility.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
@@ -30,10 +32,12 @@
 #include "MapMgr.h"
 #include "MiscPackets.h"
 #include "MovementPacketBuilder.h"
+#include "MovementPackets.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "OutdoorPvPMgr.h"
+#include "PacketGuid128.h"
 #include "Physics.h"
 #include "Player.h"
 #include "ReputationMgr.h"
@@ -51,6 +55,7 @@
 #include "Transport.h"
 #include "UpdateData.h"
 #include "UpdateFieldFlags.h"
+#include "UpdateFieldsWriter.h"
 #include "UpdateMask.h"
 #include "Util.h"
 #include "Vehicle.h"
@@ -84,6 +89,7 @@ Object::Object() : m_PackGUID(sizeof(uint64) + 1)
 
     m_inWorld           = false;
     m_objectUpdated     = false;
+    m_ufCurrentValid    = false;
 
     sScriptMgr->OnConstructObject(this);
 }
@@ -172,79 +178,64 @@ void Object::RemoveFromWorld()
     ClearUpdateMask(true);
 }
 
-void Object::BuildMovementUpdateBlock(UpdateData* data, uint32 flags) const
-{
-    ByteBuffer buf(500);
-
-    buf << uint8(UPDATETYPE_MOVEMENT);
-    buf << GetPackGUID();
-
-    BuildMovementUpdate(&buf, flags);
-
-    data->AddUpdateBlock(buf);
-}
-
 void Object::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target)
 {
     if (!target)
         return;
 
-    uint8  updatetype = UPDATETYPE_CREATE_OBJECT;
-    uint16 flags      = m_updateFlag;
+    uint8 updateType = UPDATETYPE_CREATE_OBJECT;
+    uint8 objectType = GetClientObjectTypeId(target);
+    CreateObjectBits flags = m_updateFlag;
 
-    /** lower flag1 **/
     if (target == this)                                      // building packet for yourself
-        flags |= UPDATEFLAG_SELF;
-
-    if (flags & UPDATEFLAG_STATIONARY_POSITION)
     {
-        // UPDATETYPE_CREATE_OBJECT2 dynamic objects, corpses...
-        if (isType(TYPEMASK_DYNAMICOBJECT) || isType(TYPEMASK_CORPSE) || isType(TYPEMASK_PLAYER))
-            updatetype = UPDATETYPE_CREATE_OBJECT2;
+        flags.ThisIsYou = true;
+        flags.ActivePlayer = true;
+    }
 
-        // UPDATETYPE_CREATE_OBJECT2 for pets...
-        if (target->GetPetGUID() == GetGUID())
-            updatetype = UPDATETYPE_CREATE_OBJECT2;
+    // UPDATETYPE_CREATE_OBJECT2: dynamic objects, corpses, players, the receiver's pet and some gameobjects
+    if (isType(TYPEMASK_DYNAMICOBJECT) || isType(TYPEMASK_CORPSE) || isType(TYPEMASK_PLAYER))
+        updateType = UPDATETYPE_CREATE_OBJECT2;
 
-        // UPDATETYPE_CREATE_OBJECT2 for some gameobject types...
-        if (isType(TYPEMASK_GAMEOBJECT))
+    if (target->GetPetGUID() == GetGUID())
+        updateType = UPDATETYPE_CREATE_OBJECT2;
+
+    if (isType(TYPEMASK_GAMEOBJECT))
+    {
+        switch (((GameObject*)this)->GetGoType())
         {
-            switch (((GameObject*)this)->GetGoType())
-            {
-                case GAMEOBJECT_TYPE_TRAP:
-                case GAMEOBJECT_TYPE_DUEL_ARBITER:
-                case GAMEOBJECT_TYPE_FLAGSTAND:
-                case GAMEOBJECT_TYPE_FLAGDROP:
-                    updatetype = UPDATETYPE_CREATE_OBJECT2;
-                    break;
-                default:
-                    if (((GameObject*)this)->GetOwner())
-                        updatetype = UPDATETYPE_CREATE_OBJECT2;
-                    break;
-            }
-        }
-
-        if (IsUnit())
-        {
-            if (((Unit*)this)->GetVictim())
-                flags |= UPDATEFLAG_HAS_TARGET;
+            case GAMEOBJECT_TYPE_TRAP:
+            case GAMEOBJECT_TYPE_DUEL_ARBITER:
+            case GAMEOBJECT_TYPE_FLAGSTAND:
+            case GAMEOBJECT_TYPE_FLAGDROP:
+                updateType = UPDATETYPE_CREATE_OBJECT2;
+                break;
+            default:
+                if (((GameObject*)this)->GetOwner())
+                    updateType = UPDATETYPE_CREATE_OBJECT2;
+                break;
         }
     }
 
-    ByteBuffer buf(500);
-    buf << (uint8)updatetype;
-    buf << GetPackGUID();
-    buf << (uint8)m_objectTypeId;
+    if (IsUnit() && ToUnit()->GetVictim())
+        flags.CombatVictim = true;
 
-    BuildMovementUpdate(&buf, flags);
-    BuildValuesUpdate(updatetype, &buf, target);
+    ByteBuffer buf(500);
+    buf << uint8(updateType);
+    Guid128::Write(buf, GetGUID());
+    buf << uint8(objectType);
+
+    BuildMovementUpdate(&buf, flags, target);
+    BuildValuesCreate(&buf, target, objectType);
     data->AddUpdateBlock(buf);
+    if (data->GetMapId() == UpdateData::NO_MAP)
+        data->SetMapId(target->GetMapId());
 }
 
 void Object::SendUpdateToPlayer(Player* player)
 {
     // send create update to player
-    UpdateData upd;
+    UpdateData upd(player->GetMapId());
     WorldPacket packet;
 
     BuildCreateUpdateBlockForPlayer(&upd, player);
@@ -256,17 +247,25 @@ void Object::BuildValuesUpdateBlockForPlayer(UpdateData* data, Player* target)
 {
     ByteBuffer buf(500);
 
-    buf << (uint8) UPDATETYPE_VALUES;
-    buf << GetPackGUID();
+    buf << uint8(UPDATETYPE_VALUES);
+    Guid128::Write(buf, GetGUID());
 
-    BuildValuesUpdate(UPDATETYPE_VALUES, &buf, target);
+    if (!BuildValuesUpdate(&buf, target))
+        return;
 
     data->AddUpdateBlock(buf);
+    if (data->GetMapId() == UpdateData::NO_MAP)
+        data->SetMapId(target->GetMapId());
 }
 
 void Object::BuildOutOfRangeUpdateBlock(UpdateData* data) const
 {
     data->AddOutOfRangeGUID(GetGUID());
+}
+
+void Object::BuildDestroyUpdateBlock(UpdateData* data) const
+{
+    data->AddDestroyObject(GetGUID());
 }
 
 void Object::DestroyForPlayer(Player* target, bool onDeath) const
@@ -286,9 +285,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
         }
     }
 
-    // the 3.4.3 client has no SMSG_DESTROY_OBJECT: objects leave through SMSG_UPDATE_OBJECT's destroy and
-    // out-of-range lists, which is where this belongs once object updates are ported
+    // the 3.4.3 client has no SMSG_DESTROY_OBJECT: objects leave through SMSG_UPDATE_OBJECT's destroy
+    // list. The death animation flag 3.3.5 sent with it has no counterpart.
     (void)onDeath;
+    UpdateData updateData(target->GetMapId());
+    BuildDestroyUpdateBlock(&updateData);
+    WorldPacket packet;
+    updateData.BuildPacket(packet);
+    target->SendDirectMessage(&packet);
 }
 
 [[nodiscard]] int32 Object::GetInt32Value(uint16 index) const
@@ -335,189 +339,275 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
     return *((ObjectGuid*) &(m_uint32Values[index]));
 }
 
-void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
+namespace
 {
-    Unit const* unit = nullptr;
-    WorldObject const* object = nullptr;
-
-    if (IsUnit())
-        unit = ToUnit();
-    else
-        object = ((WorldObject*)this);
-
-    *data << uint16(flags);                                  // update flags
-
-    // 0x20
-    if (flags & UPDATEFLAG_LIVING)
+    /// A movement speed the client accepts: it rejects the whole create if one has |v| < 2.384e-7
+    /// (FUN_14076c640) or is not finite.
+    float ClientSpeed(float speed)
     {
-        unit->BuildMovementPacket(data);
-
-        *data << unit->GetSpeed(MOVE_WALK)
-              << unit->GetSpeed(MOVE_RUN)
-              << unit->GetSpeed(MOVE_RUN_BACK)
-              << unit->GetSpeed(MOVE_SWIM)
-              << unit->GetSpeed(MOVE_SWIM_BACK)
-              << unit->GetSpeed(MOVE_FLIGHT)
-              << unit->GetSpeed(MOVE_FLIGHT_BACK)
-              << unit->GetSpeed(MOVE_TURN_RATE)
-              << unit->GetSpeed(MOVE_PITCH_RATE);
-
-        // 0x08000000
-        if (unit->m_movementInfo.GetMovementFlags() & MOVEMENTFLAG_SPLINE_ENABLED)
-        {
-            Movement::PacketBuilder::WriteCreate(*unit->movespline, *data);
-        }
+        if (!std::isfinite(speed) || std::fabs(speed) < 0.001f)
+            return 0.001f;
+        return speed;
     }
-    else
+}
+
+void Object::BuildMovementUpdate(ByteBuffer* data, CreateObjectBits flags, Player const* target) const
+{
+    // the three bytes of create bits, MSB first (FUN_14070d910)
+    data->WriteBit(flags.NoBirthAnim);
+    data->WriteBit(flags.EnablePortals);
+    data->WriteBit(flags.PlayHoverAnim);
+    data->WriteBit(flags.MovementUpdate);
+    data->WriteBit(flags.MovementTransport);
+    data->WriteBit(flags.Stationary);
+    data->WriteBit(flags.CombatVictim);
+    data->WriteBit(flags.ServerTime);
+    data->WriteBit(flags.Vehicle);
+    data->WriteBit(flags.AnimKit);
+    data->WriteBit(flags.Rotation);
+    data->WriteBit(flags.AreaTrigger);
+    data->WriteBit(flags.GameObject);
+    data->WriteBit(flags.SmoothPhasing);
+    data->WriteBit(flags.ThisIsYou);
+    data->WriteBit(flags.SceneObject);
+    data->WriteBit(flags.ActivePlayer);
+    data->WriteBit(flags.Conversation);
+    data->FlushBits();
+
+    Unit const* unit = ToUnit();
+
+    if (flags.MovementUpdate)
     {
-        if (flags & UPDATEFLAG_POSITION)
-        {
-            Transport* transport = object->GetTransport();
+        ASSERT(unit);
+        WorldPackets::Movement::WriteUnitMovementInfo(*data, unit);
 
-            if (transport)
-                *data << transport->GetPackGUID();
-            else
-                *data << uint8(0);
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_WALK)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_RUN)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_RUN_BACK)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_SWIM)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_SWIM_BACK)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_FLIGHT)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_FLIGHT_BACK)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_TURN_RATE)));
+        *data << float(ClientSpeed(unit->GetSpeed(MOVE_PITCH_RATE)));
 
-            *data << object->GetPositionX();
-            *data << object->GetPositionY();
-            *data << object->GetPositionZ();
+        *data << uint32(0);                                     // MovementForces count
+        *data << float(1.0f);                                   // MovementForcesModMagnitude
 
-            if (transport)
-            {
-                *data << object->GetTransOffsetX();
-                *data << object->GetTransOffsetY();
-                *data << object->GetTransOffsetZ();
-            }
-            else
-            {
-                *data << object->GetPositionX();
-                *data << object->GetPositionY();
-                *data << object->GetPositionZ();
-            }
+        // the 17 advanced-flying constants the client reads here [values: TrinityCore 3.4.3]
+        *data << float(2.0f);                                   // AirFriction
+        *data << float(65.0f);                                  // MaxVel
+        *data << float(1.0f);                                   // LiftCoefficient
+        *data << float(3.0f);                                   // DoubleJumpVelMod
+        *data << float(10.0f);                                  // GlideStartMinHeight
+        *data << float(100.0f);                                 // AddImpulseMaxSpeed
+        *data << float(90.0f);                                  // MinBankingRate
+        *data << float(140.0f);                                 // MaxBankingRate
+        *data << float(180.0f);                                 // MinPitchingRateDown
+        *data << float(360.0f);                                 // MaxPitchingRateDown
+        *data << float(90.0f);                                  // MinPitchingRateUp
+        *data << float(270.0f);                                 // MaxPitchingRateUp
+        *data << float(30.0f);                                  // MinTurnVelocityThreshold
+        *data << float(80.0f);                                  // MaxTurnVelocityThreshold
+        *data << float(2.75f);                                  // SurfaceFriction
+        *data << float(7.0f);                                   // OverMaxDeceleration
+        *data << float(0.4f);                                   // LaunchSpeedCoefficient
 
-            *data << object->GetOrientation();
-
-            if (IsCorpse())
-                *data << float(object->GetOrientation());
-            else
-                *data << float(0);
-        }
-        else
-        {
-            // 0x40
-            if (flags & UPDATEFLAG_STATIONARY_POSITION)
-            {
-                *data << object->GetStationaryX();
-                *data << object->GetStationaryY();
-                *data << object->GetStationaryZ();
-                *data << object->GetStationaryO();
-            }
-        }
-    }
-
-    // 0x8
-    if (flags & UPDATEFLAG_UNKNOWN)
-    {
-        *data << uint32(0);
+        // HasSpline: a unit moving along a spline is created where it stands; its spline follows as
+        // SMSG_ON_MONSTER_MOVE. TODO: send the spline here (updateobject.md 3.4).
+        data->WriteBit(false);
+        data->FlushBits();
     }
 
-    // 0x10
-    if (flags & UPDATEFLAG_LOWGUID)
+    *data << uint32(0);                                         // PauseTimes count [TODO: static transports' pause times]
+
+    if (flags.Stationary)
     {
-        switch (GetTypeId())
-        {
-            case TYPEID_OBJECT:
-            case TYPEID_ITEM:
-            case TYPEID_CONTAINER:
-            case TYPEID_GAMEOBJECT:
-            case TYPEID_DYNAMICOBJECT:
-            case TYPEID_CORPSE:
-                *data << uint32(GetGUID().GetCounter());
-                break;
-            //! Unit, Player and default here are sending wrong values.
-            /// @todo Research the proper formula
-            case TYPEID_UNIT:
-                *data << uint32(0x0000000B);                // unk
-                break;
-            case TYPEID_PLAYER:
-                if (flags & UPDATEFLAG_SELF)
-                    *data << uint32(0x0000002F);            // unk
-                else
-                    *data << uint32(0x00000008);            // unk
-                break;
-            default:
-                *data << uint32(0x00000000);                // unk
-                break;
-        }
+        WorldObject const* self = static_cast<WorldObject const*>(this);
+        *data << float(self->GetStationaryX());
+        *data << float(self->GetStationaryY());
+        *data << float(self->GetStationaryZ());
+        *data << float(Position::NormalizeOrientation(self->GetStationaryO()));
     }
 
-    // 0x4
-    if (flags & UPDATEFLAG_HAS_TARGET)
+    if (flags.CombatVictim)
+        Guid128::Write(*data, unit->GetVictim()->GetGUID());
+
+    if (flags.ServerTime)
     {
-        if (Unit* victim = unit->GetVictim())
-            *data << victim->GetPackGUID();
-        else
-            *data << uint8(0);
+        uint32 time = GameTime::GetGameTimeMS().count();
+        if (GameObject const* go = ToGameObject())
+            if (Transport const* transport = go->ToTransport())
+                time = transport->GetPathProgress();
+        *data << uint32(time);
     }
 
-    // 0x2
-    if (flags & UPDATEFLAG_TRANSPORT)
+    if (flags.Vehicle)
     {
-        GameObject const* go = ToGameObject();
-        if (go && go->ToTransport())
-            *data << uint32(go->ToTransport()->GetPathProgress());
-        else
-            *data << uint32(0);
-    }
-
-    // 0x80
-    if (flags & UPDATEFLAG_VEHICLE)
-    {
-        /// @todo Allow players to aquire this updateflag.
-        *data << uint32(unit->GetVehicleKit()->GetVehicleInfo()->m_ID);
+        *data << uint32(unit->GetVehicleKit()->GetVehicleInfo()->m_ID);   // VehicleRecID
         if (unit->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
-            *data << float(unit->GetTransOffsetO());
+            *data << float(unit->GetTransOffsetO());            // InitialRawFacing
         else
             *data << float(unit->GetOrientation());
     }
 
-    // 0x200
-    if (flags & UPDATEFLAG_ROTATION)
-    {
+    if (flags.Rotation)
         *data << int64(ToGameObject()->GetPackedWorldRotation());
-    }
-}
 
-void Object::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target)
-{
-    if (!target)
-        return;
-
-    ByteBuffer fieldBuffer;
-    UpdateMask updateMask;
-    updateMask.SetCount(m_valuesCount);
-
-    uint32* flags = nullptr;
-    uint32 visibleFlag = GetUpdateFieldData(target, flags);
-
-    for (uint16 index = 0; index < m_valuesCount; ++index)
+    if (flags.ActivePlayer)
     {
-        if (_fieldNotifyFlags & flags[index] ||
-                ((updateType == UPDATETYPE_VALUES ? _changesMask.GetBit(index) : m_uint32Values[index]) && (flags[index] & visibleFlag)))
+        Player* player = const_cast<Player*>(ToPlayer());
+        ASSERT(player);
+        bool hasRuneState = player->getClass() == CLASS_DEATH_KNIGHT;
+
+        data->WriteBit(false);                                  // HasSceneInstanceIDs
+        data->WriteBit(hasRuneState);
+        data->WriteBit(true);                                   // HasActionButtons
+        data->FlushBits();
+
+        if (hasRuneState)
         {
-            updateMask.SetBit(index);
-            fieldBuffer << m_uint32Values[index];
+            *data << uint8((1 << MAX_RUNES) - 1);               // RechargingRuneMask: the runes that exist
+            *data << uint8(player->GetRunesState());            // UsableRuneMask
+            *data << uint32(MAX_RUNES);
+            for (uint8 i = 0; i < MAX_RUNES; ++i)
+            {
+                uint32 cooldown = std::min<uint32>(player->GetRuneCooldown(i), RUNE_BASE_COOLDOWN);
+                *data << uint8((RUNE_BASE_COOLDOWN - cooldown) * 255 / RUNE_BASE_COOLDOWN);
+            }
+        }
+
+        // ActionButtons[180]: the low 32 bits of SMSG_UPDATE_ACTION_BUTTONS' entries (action | type << 24)
+        for (uint8 button = 0; button < 180; ++button)
+        {
+            ActionButton const* ab = button < MAX_ACTION_BUTTONS ? player->GetActionButton(button) : nullptr;
+            *data << uint32(ab ? uint32(ab->packedData) : 0);
         }
     }
 
-    *data << uint8(updateMask.GetBlockCount());
-    updateMask.AppendToPacket(data);
-    data->append(fieldBuffer);
+    (void)target;
+}
+
+uint8 Object::GetClientObjectTypeId(Player const* target) const
+{
+    switch (GetTypeId())
+    {
+        case TYPEID_ITEM:          return UF::OBJECT_TYPE_ITEM;
+        case TYPEID_CONTAINER:     return UF::OBJECT_TYPE_CONTAINER;
+        case TYPEID_UNIT:          return UF::OBJECT_TYPE_UNIT;
+        case TYPEID_PLAYER:        return target == this ? UF::OBJECT_TYPE_ACTIVE_PLAYER : UF::OBJECT_TYPE_PLAYER;
+        case TYPEID_GAMEOBJECT:    return UF::OBJECT_TYPE_GAMEOBJECT;
+        case TYPEID_DYNAMICOBJECT: return UF::OBJECT_TYPE_DYNAMICOBJECT;
+        case TYPEID_CORPSE:        return UF::OBJECT_TYPE_CORPSE;
+        default:                   return UF::OBJECT_TYPE_OBJECT;
+    }
+}
+
+uint8 Object::GetUpdateFieldFlagsFor(Player const* target) const
+{
+    uint8 flags = UF::FIELD_FLAG_NONE;
+    switch (GetTypeId())
+    {
+        case TYPEID_ITEM:
+        case TYPEID_CONTAINER:
+            if (((Item const*)this)->GetOwnerGUID() == target->GetGUID())
+                flags |= UF::FIELD_FLAG_OWNER;
+            break;
+        case TYPEID_UNIT:
+        case TYPEID_PLAYER:
+        {
+            Unit const* unit = ToUnit();
+            if (target == this || unit->GetOwnerGUID() == target->GetGUID())
+                flags |= UF::FIELD_FLAG_OWNER;
+
+            if (HasDynamicFlag(UNIT_DYNFLAG_SPECIALINFO))
+                if (unit->HasAuraTypeWithCaster(SPELL_AURA_EMPATHY, target->GetGUID()))
+                    flags |= UF::FIELD_FLAG_EMPATH;
+
+            Player* plr = unit->GetCharmerOrOwnerPlayerOrPlayerItself();
+            if (plr && plr->IsInSameRaidWith(target))
+                flags |= UF::FIELD_FLAG_PARTY_MEMBER;
+            break;
+        }
+        case TYPEID_GAMEOBJECT:
+            if (ToGameObject()->GetOwnerGUID() == target->GetGUID())
+                flags |= UF::FIELD_FLAG_OWNER;
+            break;
+        case TYPEID_DYNAMICOBJECT:
+            if (((DynamicObject const*)this)->GetCasterGUID() == target->GetGUID())
+                flags |= UF::FIELD_FLAG_OWNER;
+            break;
+        case TYPEID_CORPSE:
+            if (ToCorpse()->GetOwnerGUID() == target->GetGUID())
+                flags |= UF::FIELD_FLAG_OWNER;
+            break;
+        default:
+            break;
+    }
+    return flags;
+}
+
+UF::Values const& Object::GetCurrentUpdateFields()
+{
+    if (!m_ufCurrent || !m_ufCurrentValid)
+    {
+        m_ufCurrent = std::make_unique<UF::Values>();
+        FillUpdateFields(*m_ufCurrent);
+        m_ufCurrentValid = true;
+    }
+    return *m_ufCurrent;
+}
+
+UF::Values Object::MakeUpdateFieldsFor(UF::Values const& base, Player const* target) const
+{
+    UF::Values view = base;
+    PatchUpdateFields(view, target);
+    return view;
+}
+
+void Object::BuildValuesCreate(ByteBuffer* data, Player const* target, uint8 objectTypeId)
+{
+    UF::Values const& current = GetCurrentUpdateFields();
+    if (!m_ufSent)
+        m_ufSent = std::make_unique<UF::Values>(current);
+
+    UF::WriteValuesCreate(*data, MakeUpdateFieldsFor(current, target), objectTypeId, GetUpdateFieldFlagsFor(target));
+}
+
+bool Object::BuildValuesUpdate(ByteBuffer* data, Player const* target)
+{
+    if (!target)
+        return false;
+
+    // AC's UF_FLAG_DYNAMIC fields go out with every values update: their value depends on the viewer
+    static constexpr UF::ForcedField ForcedFields[] =
+    {
+        { UF::STRUCT_OBJECT, UF::ObjectFields::DynamicFlags.Offset },
+        { UF::STRUCT_UNIT, UF::UnitFields::NpcFlags.At(0) },
+        { UF::STRUCT_UNIT, UF::UnitFields::NpcFlags.At(1) },
+        { UF::STRUCT_CORPSE, UF::CorpseFields::DynamicFlags.Offset },
+    };
+
+    uint8 forceVis = (_fieldNotifyFlags & UF_FLAG_PARTY_MEMBER) ? uint8(UF::FIELD_FLAG_PARTY_MEMBER) : uint8(0);
+
+    std::vector<UF::ForcedField> forced(std::begin(ForcedFields), std::end(ForcedFields));
+    for (auto const& [structId, offset] : m_ufForced)
+        forced.push_back({ UF::StructId(structId), offset });
+
+    UF::Values const& current = GetCurrentUpdateFields();
+    UF::Values view = MakeUpdateFieldsFor(current, target);
+    Optional<UF::Values> oldView;
+    if (m_ufSent)
+        oldView = MakeUpdateFieldsFor(*m_ufSent, target);
+
+    return UF::WriteValuesUpdate(*data, view, oldView ? &*oldView : nullptr, GetClientObjectTypeId(target),
+        GetUpdateFieldFlagsFor(target), forceVis, forced);
 }
 
 void Object::AddToObjectUpdateIfNeeded()
 {
+    m_ufCurrentValid = false;
+
     if (m_inWorld && !m_objectUpdated)
     {
         AddToObjectUpdate();
@@ -528,6 +618,11 @@ void Object::AddToObjectUpdateIfNeeded()
 void Object::ClearUpdateMask(bool remove)
 {
     _changesMask.Clear();
+    m_ufForced.clear();
+
+    // what the receivers now have: the values this update was built from
+    if (m_ufCurrent && m_ufCurrentValid && m_ufSent)
+        *m_ufSent = *m_ufCurrent;
 
     if (m_objectUpdated)
     {
@@ -543,7 +638,7 @@ void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map)
 
     if (iter == data_map.end())
     {
-        std::pair<UpdateDataMapType::iterator, bool> p = data_map.insert(UpdateDataMapType::value_type(player, UpdateData()));
+        std::pair<UpdateDataMapType::iterator, bool> p = data_map.emplace(player, UpdateData(player->GetMapId()));
         ASSERT(p.second);
         iter = p.first;
     }
@@ -551,57 +646,12 @@ void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map)
     BuildValuesUpdateBlockForPlayer(&iter->second, iter->first);
 }
 
-uint32 Object::GetUpdateFieldData(Player const* target, uint32*& flags) const
+void Object::FillUpdateFields(UF::Values& values) const
 {
-    uint32 visibleFlag = UF_FLAG_PUBLIC;
-
-    if (target == this)
-        visibleFlag |= UF_FLAG_PRIVATE;
-
-    switch (GetTypeId())
-    {
-        case TYPEID_ITEM:
-        case TYPEID_CONTAINER:
-            flags = ItemUpdateFieldFlags;
-            if (((Item*)this)->GetOwnerGUID() == target->GetGUID())
-                visibleFlag |= UF_FLAG_OWNER | UF_FLAG_ITEM_OWNER;
-            break;
-        case TYPEID_UNIT:
-        case TYPEID_PLAYER:
-            {
-                Player* plr = ToUnit()->GetCharmerOrOwnerPlayerOrPlayerItself();
-                flags = UnitUpdateFieldFlags;
-                if (ToUnit()->GetOwnerGUID() == target->GetGUID())
-                    visibleFlag |= UF_FLAG_OWNER;
-
-                if (HasDynamicFlag(UNIT_DYNFLAG_SPECIALINFO))
-                    if (ToUnit()->HasAuraTypeWithCaster(SPELL_AURA_EMPATHY, target->GetGUID()))
-                        visibleFlag |= UF_FLAG_SPECIAL_INFO;
-
-                if (plr && plr->IsInSameRaidWith(target))
-                    visibleFlag |= UF_FLAG_PARTY_MEMBER;
-                break;
-            }
-        case TYPEID_GAMEOBJECT:
-            flags = GameObjectUpdateFieldFlags;
-            if (ToGameObject()->GetOwnerGUID() == target->GetGUID())
-                visibleFlag |= UF_FLAG_OWNER;
-            break;
-        case TYPEID_DYNAMICOBJECT:
-            flags = DynamicObjectUpdateFieldFlags;
-            if (((DynamicObject*)this)->GetCasterGUID() == target->GetGUID())
-                visibleFlag |= UF_FLAG_OWNER;
-            break;
-        case TYPEID_CORPSE:
-            flags = CorpseUpdateFieldFlags;
-            if (ToCorpse()->GetOwnerGUID() == target->GetGUID())
-                visibleFlag |= UF_FLAG_OWNER;
-            break;
-        case TYPEID_OBJECT:
-            break;
-    }
-
-    return visibleFlag;
+    UF::Data& object = values.Add(UF::STRUCT_OBJECT);
+    object.Set(UF::ObjectFields::EntryID, GetEntry());
+    object.SetFloat(UF::ObjectFields::Scale, GetObjectScale());
+    // DynamicFlags: per type (FillUpdateFields of Unit, GameObject); items and corpses keep theirs in their own struct
 }
 
 bool Object::_LoadIntoDataField(std::string const& data, uint32 startOffset, uint32 count)
@@ -2155,6 +2205,27 @@ void WorldObject::SendPlayMusic(uint32 Music, bool OnlySelf)
 void Object::ForceValuesUpdateAtIndex(uint32 i)
 {
     _changesMask.SetBit(i);
+
+    // the viewer-dependent values AC forces out when a viewer's side changed (aura states per caster,
+    // lootability, cross-faction group display, gameobject state per viewer): their 3.4.3 fields
+    UF::ForcedField forced{ UF::STRUCT_COUNT, 0 };
+    if (isType(TYPEMASK_UNIT))
+    {
+        switch (i)
+        {
+            case UNIT_FIELD_AURASTATE:      forced = { UF::STRUCT_UNIT, UF::UnitFields::AuraState.Offset }; break;
+            case UNIT_DYNAMIC_FLAGS:        forced = { UF::STRUCT_OBJECT, UF::ObjectFields::DynamicFlags.Offset }; break;
+            case UNIT_FIELD_BYTES_2:        forced = { UF::STRUCT_UNIT, UF::UnitFields::PvpFlags.Offset }; break;
+            case UNIT_FIELD_FACTIONTEMPLATE: forced = { UF::STRUCT_UNIT, UF::UnitFields::FactionTemplate.Offset }; break;
+            default: break;
+        }
+    }
+    else if (isType(TYPEMASK_GAMEOBJECT) && i == GAMEOBJECT_BYTES_1)
+        forced = { UF::STRUCT_GAMEOBJECT, UF::GameObjectFields::State.Offset };
+
+    if (forced.Struct != UF::STRUCT_COUNT)
+        m_ufForced.emplace_back(uint8(forced.Struct), forced.Offset);
+
     AddToObjectUpdateIfNeeded();
 }
 

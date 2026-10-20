@@ -15588,6 +15588,23 @@ void Player::_LoadGlyphs(PreparedQueryResult result)
     } while (result->NextRow());
 }
 
+void Player::_LoadCustomizations(PreparedQueryResult result)
+{
+    // SELECT chrCustomizationOptionID, chrCustomizationChoiceID FROM character_customizations WHERE guid = ?
+    m_customizations.clear();
+    if (!result)
+        return;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        ChrCustomizationChoice choice;
+        choice.ChrCustomizationOptionID = fields[0].Get<uint32>();
+        choice.ChrCustomizationChoiceID = fields[1].Get<uint32>();
+        m_customizations.push_back(choice);
+    } while (result->NextRow());
+}
+
 void Player::_SaveGlyphs(CharacterDatabaseTransaction trans)
 {
     if (!NeedToSaveGlyphs())

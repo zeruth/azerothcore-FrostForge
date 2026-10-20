@@ -103,7 +103,36 @@ enum SpellCastResult : uint8;
 
 struct PositionFullTerrainStatus;
 
+namespace UF
+{
+    class Values;
+}
+
 typedef std::unordered_map<Player*, UpdateData> UpdateDataMapType;
+
+/// The create block's flags (SMSG_UPDATE_OBJECT, FrostLite docs/updateobject.md 3): which
+/// movement and type sub-blocks follow the object's type id, in the client's bit order.
+struct CreateObjectBits
+{
+    bool NoBirthAnim = false;
+    bool EnablePortals = false;
+    bool PlayHoverAnim = false;
+    bool MovementUpdate = false;
+    bool MovementTransport = false;
+    bool Stationary = false;
+    bool CombatVictim = false;
+    bool ServerTime = false;
+    bool Vehicle = false;
+    bool AnimKit = false;
+    bool Rotation = false;
+    bool AreaTrigger = false;
+    bool GameObject = false;
+    bool SmoothPhasing = false;
+    bool ThisIsYou = false;
+    bool SceneObject = false;
+    bool ActivePlayer = false;
+    bool Conversation = false;
+};
 
 static constexpr Milliseconds HEARTBEAT_INTERVAL = 5s + 200ms;
 
@@ -140,9 +169,22 @@ public:
 
     void BuildValuesUpdateBlockForPlayer(UpdateData* data, Player* target);
     void BuildOutOfRangeUpdateBlock(UpdateData* data) const;
-    void BuildMovementUpdateBlock(UpdateData* data, uint32 flags = 0) const;
+    void BuildDestroyUpdateBlock(UpdateData* data) const;
 
     virtual void DestroyForPlayer(Player* target, bool onDeath = false) const;
+
+    /// The 3.4.3 object type id this object is created as for `target` (updateobject.md 2): the
+    /// player's own character is ActivePlayer (7).
+    [[nodiscard]] virtual uint8 GetClientObjectTypeId(Player const* target) const;
+
+    /// The FieldFlags `target` sees this object's update fields with (UF::FieldFlag).
+    [[nodiscard]] virtual uint8 GetUpdateFieldFlagsFor(Player const* target) const;
+
+    /// Fills the 3.4.3 update-field values that do not depend on the viewer.
+    virtual void FillUpdateFields(UF::Values& values) const;
+
+    /// Adjusts the values for one viewer (AC's per-viewer patches: npc flags, tapped flags, ...).
+    virtual void PatchUpdateFields(UF::Values& /*values*/, Player const* /*target*/) const { }
 
     [[nodiscard]] int32 GetInt32Value(uint16 index) const;
     [[nodiscard]] uint32 GetUInt32Value(uint16 index) const;
@@ -251,15 +293,26 @@ protected:
     [[nodiscard]] std::string _ConcatFields(uint16 startIndex, uint16 size) const;
     bool _LoadIntoDataField(std::string const& data, uint32 startOffset, uint32 count);
 
-    uint32 GetUpdateFieldData(Player const* target, uint32*& flags) const;
+    void BuildMovementUpdate(ByteBuffer* data, CreateObjectBits flags, Player const* target) const;
 
-    void BuildMovementUpdate(ByteBuffer* data, uint16 flags) const;
-    virtual void BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target);
+    /// The values of a create block: u32 size, u8 FieldFlags, every struct of the type.
+    void BuildValuesCreate(ByteBuffer* data, Player const* target, uint8 objectTypeId);
+    /// The values of a values update block; false (nothing written) when nothing changed for `target`.
+    bool BuildValuesUpdate(ByteBuffer* data, Player const* target);
+
+    /// This object's update-field values now (cached until a value changes or the update is sent).
+    UF::Values const& GetCurrentUpdateFields();
+    UF::Values MakeUpdateFieldsFor(UF::Values const& base, Player const* target) const;
 
     uint16 m_objectType;
 
     TypeID m_objectTypeId;
-    uint16 m_updateFlag;
+    CreateObjectBits m_updateFlag;
+
+    std::unique_ptr<UF::Values> m_ufSent;       // the values the last values update (or first create) sent
+    std::unique_ptr<UF::Values> m_ufCurrent;    // a fill of the current values
+    bool m_ufCurrentValid;
+    std::vector<std::pair<uint8, uint16>> m_ufForced;   // fields ForceValuesUpdateAtIndex asked to resend
 
     union
     {

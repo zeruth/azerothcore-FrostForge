@@ -736,7 +736,7 @@ void OpcodeTable::Initialize()
     /*0x27C8*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ITEM_COOLDOWN,                                              STATUS_NEVER,      LAYOUT_335);
     /*0x27C9*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_EMOTE,                                                      STATUS_NEVER,      LAYOUT_335);
     /*0x27CA*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_TRIGGER_CINEMATIC,                                          STATUS_NEVER,      LAYOUT_335);
-    /*0x27CB*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UPDATE_OBJECT,                                              STATUS_NEVER,      LAYOUT_335);
+    /*0x27CB*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UPDATE_OBJECT,                                              STATUS_NEVER,      LAYOUT_343);
     /*0x27CC*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_REALM_LOOKUP_INFO,                                          STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27CD*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNDELETE_CHARACTER_RESPONSE,                                STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27CE*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNDELETE_COOLDOWN_STATUS_RESPONSE,                          STATUS_NEVER,      LAYOUT_343);

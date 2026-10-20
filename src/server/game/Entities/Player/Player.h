@@ -935,6 +935,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_CHARACTER_SETTINGS           = 36,
     PLAYER_LOGIN_QUERY_LOAD_PET_SLOTS                    = 37,
     PLAYER_LOGIN_QUERY_LOAD_OFFLINE_ACHIEVEMENTS_UPDATES = 38,
+    PLAYER_LOGIN_QUERY_LOAD_CUSTOMIZATIONS               = 39,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2085,6 +2086,10 @@ public:
     void SetSession(WorldSession* sess) { m_session = sess; }
 
     void BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) override;
+    void FillUpdateFields(UF::Values& values) const override;
+
+    /// The character's appearance (ChrCustomizationChoice rows, D5).
+    [[nodiscard]] std::vector<ChrCustomizationChoice> const& GetCustomizations() const { return m_customizations; }
     void DestroyForPlayer(Player* target, bool onDeath = false) const override;
     void SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool recruitAFriend = false, float group_rate = 1.0f);
 
@@ -2843,6 +2848,7 @@ protected:
     void _LoadEquipmentSets(PreparedQueryResult result);
     void _LoadEntryPointData(PreparedQueryResult result);
     void _LoadGlyphs(PreparedQueryResult result);
+    void _LoadCustomizations(PreparedQueryResult result);
     void _LoadTalents(PreparedQueryResult result);
     void _LoadInstanceTimeRestrictions(PreparedQueryResult result);
     void _LoadBrewOfTheMonth(PreparedQueryResult result);
@@ -2933,6 +2939,7 @@ protected:
     uint8 m_specsCount;
 
     uint32 m_Glyphs[MAX_TALENT_SPECS][MAX_GLYPH_SLOT_INDEX];
+    std::vector<ChrCustomizationChoice> m_customizations;
 
     ActionButtonList m_actionButtons;
 
