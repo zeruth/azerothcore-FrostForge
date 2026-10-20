@@ -932,6 +932,8 @@ public:                                                 // opcodes handlers
 
     void HandleDuelAcceptedOpcode(WorldPacket& recvPacket);
     void HandleDuelCancelledOpcode(WorldPacket& recvPacket);
+    void HandleDuelCancelled(ObjectGuid arbiter);
+    void HandleCanDuel(WorldPacket& recvPacket);
 
     void HandleAcceptTradeOpcode(WorldPacket& recvPacket);
     void HandleBeginTradeOpcode(WorldPacket& recvPacket);

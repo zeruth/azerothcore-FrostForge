@@ -6669,8 +6669,10 @@ void Player::DuelComplete(DuelCompleteType type)
 
     LOG_DEBUG("entities.unit", "Player::DuelComplete: Player '{}' ({}), Opponent: '{}' ({})", GetName(), GetGUID().ToString(), opponent->GetName(), opponent->GetGUID().ToString());
 
+    // SMSG_DUEL_COMPLETE, 3.4.3: bit Started, flush
     WorldPacket data(SMSG_DUEL_COMPLETE, (1));
-    data << uint8((type != DUEL_INTERRUPTED) ? 1 : 0);
+    data.WriteBit(type != DUEL_INTERRUPTED);
+    data.FlushBits();
     SendDirectMessage(&data);
     if (opponent->GetSession())
     {
@@ -6679,10 +6681,19 @@ void Player::DuelComplete(DuelCompleteType type)
 
     if (type != DUEL_INTERRUPTED)
     {
-        data.Initialize(SMSG_DUEL_WINNER, (1 + 20)); // we guess size
-        data << uint8(type == DUEL_WON ? 0 : 1);     // 0 = just won; 1 = fled
-        data << opponent->GetName();
-        data << GetName();
+        // SMSG_DUEL_WINNER, 3.4.3 (handler FUN_141bea380): 6/6-bit name lengths, bit Fled, flush, two realm
+        // addresses, the names, formatted as %1 and %2 of DUEL_WINNER_KNOCKOUT / _RETREAT in 3.3.5's order
+        std::string_view name1 = std::string_view(opponent->GetName()).substr(0, std::min<std::size_t>(opponent->GetName().size(), 0x3F));
+        std::string_view name2 = std::string_view(GetName()).substr(0, std::min<std::size_t>(GetName().size(), 0x3F));
+        data.Initialize(SMSG_DUEL_WINNER, 2 + 8 + name1.size() + name2.size());
+        data.WriteBits(name1.size(), 6);
+        data.WriteBits(name2.size(), 6);
+        data.WriteBit(type != DUEL_WON);             // Fled
+        data.FlushBits();
+        data << uint32(Guid128::VirtualRealmAddress());
+        data << uint32(Guid128::VirtualRealmAddress());
+        data.WriteString(name1);
+        data.WriteString(name2);
         SendMessageToSet(&data, true);
     }
 
@@ -14950,6 +14961,13 @@ void Player::BuildPetTalentsInfoData(WorldPacket* data)
 // The 3.3.5 builders (BuildPlayerTalentsInfoData/BuildPetTalentsInfoData) stay for SMSG_INSPECT_RESULT.
 void Player::SendTalentsInfoData(bool pet)
 {
+    WorldPacket data(SMSG_UPDATE_TALENT_DATA, 64);
+    BuildClassicTalentInfoUpdate(data, pet);
+    SendDirectMessage(&data);
+}
+
+void Player::BuildClassicTalentInfoUpdate(ByteBuffer& data, bool pet)
+{
     struct TalentGroup
     {
         std::vector<std::pair<uint32, uint8>> Talents;
@@ -15013,7 +15031,6 @@ void Player::SendTalentsInfoData(bool pet)
         }
     }
 
-    WorldPacket data(SMSG_UPDATE_TALENT_DATA, 64);
     data << uint32(unspent);
     data << uint8(activeGroup);
     data << uint32(groups.size());
@@ -15034,7 +15051,6 @@ void Player::SendTalentsInfoData(bool pet)
     }
     data.WriteBit(pet);                                     // IsPetTalents
     data.FlushBits();
-    SendDirectMessage(&data);
 }
 
 void Player::BuildEnchantmentsInfoData(WorldPacket* data)

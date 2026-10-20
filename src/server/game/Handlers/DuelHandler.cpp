@@ -17,19 +17,32 @@
 
 #include "GameTime.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
 void WorldSession::HandleDuelAcceptedOpcode(WorldPacket& recvPacket)
 {
+    // CMSG_DUEL_RESPONSE, 3.4.3 (writer FUN_14075d3d0): PackedGuid128 ArbiterGUID, bits Accepted, Forfeited,
+    // flush. 3.3.5 had an opcode for accepting and one for cancelling.
+    ObjectGuid guid = Guid128::Read(recvPacket);
+    bool accepted = recvPacket.ReadBit();
+    recvPacket.ReadBit();                                   // Forfeited
+    recvPacket.ResetBitReader();
+
+    if (!accepted)
+    {
+        HandleDuelCancelled(guid);
+        return;
+    }
+
     Player* player = GetPlayer();
+    // the requester's client accepts by itself: only the challenged one starts the countdown
     if (!player->duel || player == player->duel->Initiator || player->duel->State != DUEL_STATE_CHALLENGED)
         return;
-
-    ObjectGuid guid;
-    recvPacket >> guid;
 
     Player* target = player->duel->Opponent;
     if (target->GetGuidValue(PLAYER_DUEL_ARBITER) != guid)
@@ -51,10 +64,32 @@ void WorldSession::HandleDuelAcceptedOpcode(WorldPacket& recvPacket)
 
 void WorldSession::HandleDuelCancelledOpcode(WorldPacket& recvPacket)
 {
-    Player* player = GetPlayer();
+    HandleDuelCancelled(Guid128::Read(recvPacket));
+}
 
-    ObjectGuid guid;
-    recvPacket >> guid;
+void WorldSession::HandleCanDuel(WorldPacket& recvPacket)
+{
+    // CMSG_CAN_DUEL, 3.4.3 (writer FUN_140765770): PackedGuid128 TargetGUID, bit ToTheDeath, flush. The
+    // answer, SMSG_CAN_DUEL_RESULT (PackedGuid128 target, bits Result, ToTheDeath), makes the client cast the
+    // duel spell at the target.
+    ObjectGuid target = Guid128::Read(recvPacket);
+    recvPacket.ReadBit();
+    recvPacket.ResetBitReader();
+
+    Player* other = ObjectAccessor::FindPlayer(target);
+    bool result = other && !GetPlayer()->duel && !other->duel;
+
+    WorldPacket data(SMSG_CAN_DUEL_RESULT, 18 + 1);
+    Guid128::Write(data, target);
+    data.WriteBit(result);
+    data.WriteBit(false);
+    data.FlushBits();
+    SendPacket(&data);
+}
+
+void WorldSession::HandleDuelCancelled(ObjectGuid /*arbiter*/)
+{
+    Player* player = GetPlayer();
 
     // no duel requested
     if (!player->duel || player->duel->State == DUEL_STATE_COMPLETED)

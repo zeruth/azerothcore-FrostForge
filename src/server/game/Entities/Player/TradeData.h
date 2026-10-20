@@ -61,6 +61,16 @@ public:                                                 // constructors
     [[nodiscard]] bool IsInAcceptProcess() const { return m_acceptProccess; }
     void SetInAcceptProcess(bool state) { m_acceptProccess = state; }
 
+    // 3.4.3: the trade's id (SMSG_TRADE_STATUS INITIATED and every SMSG_TRADE_UPDATED carry it), the
+    // client's own change count (1 + its SET_TRADE_ITEM / CLEAR_TRADE_ITEM / SET_TRADE_GOLD requests,
+    // echoed in its own-side updates) and the server's count of this side's changes (echoed back by
+    // CMSG_ACCEPT_TRADE)
+    [[nodiscard]] uint32 GetTradeId() const { return _tradeId; }
+    void SetTradeId(uint32 id) { _tradeId = id; }
+    [[nodiscard]] uint32 GetClientStateIndex() const { return _clientStateIndex; }
+    void UpdateClientStateIndex() { ++_clientStateIndex; }
+    [[nodiscard]] uint32 GetServerStateIndex() const { return _serverStateIndex; }
+
 private:                                                // internal functions
     void Update(bool for_trader = true);
 
@@ -77,6 +87,10 @@ private:                                                // fields
     ObjectGuid m_spellCastItem;                         // applied spell casted by item use
 
     ObjectGuid m_items[TRADE_SLOT_COUNT];               // traded itmes from m_player side including non-traded slot
+
+    uint32     _tradeId = 0;
+    uint32     _clientStateIndex = 1;
+    uint32     _serverStateIndex = 1;
 };
 
 #endif

@@ -21,6 +21,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
@@ -29,30 +30,40 @@
 #include "SpellMgr.h"
 #include "TC9Sidecar.h"
 #include "World.h"
+#include "ItemPackets.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
 void WorldSession::SendTradeStatus(TradeStatusInfo const& info)
 {
-    WorldPacket data(SMSG_TRADE_STATUS, 13);
-    data << uint32(info.Status);
+    // SMSG_TRADE_STATUS, 3.4.3 (inline in the client switch, handler FUN_141bac580): bit
+    // PartnerIsSameBnetAccount, 5-bit Status (3.3.5's numbering: 1 the request to the target, 2 opens
+    // both windows, 12 a failure), [12: bit FailureForYou], flush, then by status: 12 i32 BagResult (the
+    // client's InventoryResult) and i32 ItemID; 2 u32 trade id; 1 PackedGuid128 partner and its account;
+    // 22 / 23 u8 trade slot
+    WorldPacket data(SMSG_TRADE_STATUS, 1 + 36);
+    data.WriteBit(false);
+    data.WriteBits(uint32(info.Status), 5);
+    if (info.Status == TRADE_STATUS_CLOSE_WINDOW)
+        data.WriteBit(!info.IsTargetResult);                // FailureForYou: the problem is the receiver's own
+    data.FlushBits();
 
     switch (info.Status)
     {
         case TRADE_STATUS_BEGIN_TRADE:
-            data << info.TraderGuid;                        // CGTradeInfo::m_tradingPlayer
+            Guid128::Write(data, info.TraderGuid);          // Partner
+            Guid128::Write(data, ObjectGuid::Empty);        // PartnerAccount
             break;
         case TRADE_STATUS_OPEN_WINDOW:
-            data << uint32(0);                              // CGTradeInfo::m_tradeID
+            data << uint32(_player->GetTradeData() ? _player->GetTradeData()->GetTradeId() : 0);
             break;
         case TRADE_STATUS_CLOSE_WINDOW:
-            data << uint32(info.Result);                    // InventoryResult
-            data << uint8(info.IsTargetResult);             // bool isTargetError; used for: EQUIP_ERR_BAG_FULL, EQUIP_ERR_CANT_CARRY_MORE_OF_THIS, EQUIP_ERR_MISSING_REAGENT, EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED
-            data << uint32(info.ItemLimitedByLimitCategory);// when result 84 - Item Id that was limited by ItemLimitCategory.dbc
+            data << int32(ClientInventoryResult(info.Result));
+            data << int32(info.ItemLimitedByLimitCategory);
             break;
         case TRADE_STATUS_WRONG_REALM:
         case TRADE_STATUS_NOT_ON_TAPLIST:
-            data << uint8(info.Slot);                       // Trade slot; -1 here clears CGTradeInfo::m_tradeMoney
+            data << uint8(info.Slot);                       // Trade slot; 0xFF clears the offered gold
             break;
         default:
             break;
@@ -75,45 +86,50 @@ void WorldSession::SendUpdateTrade(bool trader_data /*= true*/)
 {
     TradeData* view_trade = trader_data ? _player->GetTradeData()->GetTraderData() : _player->GetTradeData();
 
-    WorldPacket data(SMSG_TRADE_UPDATED, 1 + 4 + 4 + 4 + 4 + 4 + 7 * (1 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 4 + 4));
-    data << uint8(trader_data);                             // 1 means traders data, 0 means own
-    data << uint32(0);                                      // CGTradeInfo::m_tradeID
-    data << uint32(TRADE_SLOT_COUNT);                       // trade slots count/number?, = next field in most cases
-    data << uint32(TRADE_SLOT_COUNT);                       // trade slots count/number?, = prev field in most cases
-    data << uint32(view_trade->GetMoney());                 // trader gold
-    data << uint32(view_trade->GetSpell());                 // spell casted on lowest slot item
-
+    // SMSG_TRADE_UPDATED, 3.4.3 (FUN_140706810, items FUN_14071a3b0, handler FUN_141baca90): u8 WhichPlayer
+    // (0 the receiver's own offer), u32 trade id, u32 ClientStateIndex (checked on the own side: 1 + the
+    // receiver's change requests), u32 CurrentStateIndex, u64 gold, i32 currency type and quantity, i32
+    // ProposedEnchantment, u32 item count, per occupied slot {u8 slot, i32 stack count, PackedGuid128
+    // gift creator, ItemInstance, bit HasUnwrapped, flush, [enchant, on-use enchant, creator, charges,
+    // max durability, durability, 2-bit gem count, bit Lock, flush, gems]}
+    TradeData* my_trade = _player->GetTradeData();
+    std::vector<std::pair<uint8, Item*>> items;
     for (uint8 i = 0; i < TRADE_SLOT_COUNT; ++i)
-    {
-        data << uint8(i);                                  // trade slot number, if not specified, then end of packet
-
         if (Item* item = view_trade->GetItem(TradeSlots(i)))
+            items.emplace_back(i, item);
+
+    WorldPacket data(SMSG_TRADE_UPDATED, 40 + items.size() * 80);
+    data << uint8(trader_data);
+    data << uint32(my_trade->GetTradeId());
+    data << uint32(view_trade->GetClientStateIndex());
+    data << uint32(view_trade->GetServerStateIndex());
+    data << uint64(view_trade->GetMoney());
+    data << int32(0);                                       // CurrencyType
+    data << int32(0);                                       // CurrencyQuantity
+    data << int32(view_trade->GetSpell());                  // ProposedEnchantment
+    data << uint32(items.size());
+
+    for (auto const& [slot, item] : items)
+    {
+        data << uint8(slot);
+        data << int32(item->GetCount());
+        Guid128::Write(data, item->GetGuidValue(ITEM_FIELD_GIFTCREATOR));
+        WorldPackets::Item::WriteItemInstance(data, item->GetEntry(), int32(item->GetItemSuffixFactor()), item->GetItemRandomPropertyId());
+        // wrapped: hide stats but show giftcreator name
+        bool unwrapped = !item->IsWrapped();
+        data.WriteBit(unwrapped);
+        data.FlushBits();
+        if (unwrapped)
         {
-            data << uint32(item->GetTemplate()->ItemId);       // entry
-            data << uint32(item->GetTemplate()->DisplayInfoID);// display id
-            data << uint32(item->GetCount());               // stack count
-            // wrapped: hide stats but show giftcreator name
-            data << uint32(item->IsWrapped() ? 1 : 0);
-            data << item->GetGuidValue(ITEM_FIELD_GIFTCREATOR);
-            // perm. enchantment and gems
-            data << uint32(item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT));
-            for (uint32 enchant_slot = SOCK_ENCHANTMENT_SLOT; enchant_slot < SOCK_ENCHANTMENT_SLOT + MAX_GEM_SOCKETS; ++enchant_slot)
-                data << uint32(item->GetEnchantmentId(EnchantmentSlot(enchant_slot)));
-            // creator
-            data << item->GetGuidValue(ITEM_FIELD_CREATOR);
-            data << uint32(item->GetSpellCharges());        // charges
-            data << uint32(item->GetItemSuffixFactor());    // SuffixFactor
-            data << int32(item->GetItemRandomPropertyId()); // random properties id
-            data << uint32(item->GetTemplate()->LockID);       // lock id
-            // max durability
+            data << int32(item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT));
+            data << int32(item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));    // OnUseEnchantmentID
+            Guid128::Write(data, item->GetGuidValue(ITEM_FIELD_CREATOR));
+            data << int32(item->GetSpellCharges());
             data << uint32(item->GetUInt32Value(ITEM_FIELD_MAXDURABILITY));
-            // durability
             data << uint32(item->GetUInt32Value(ITEM_FIELD_DURABILITY));
-        }
-        else
-        {
-            for (uint8 j = 0; j < 18; ++j)
-                data << uint32(0);
+            data.WriteBits(0, 2);                           // gems
+            data.WriteBit(item->GetTemplate()->LockID != 0);
+            data.FlushBits();
         }
     }
     SendPacket(&data);
@@ -720,8 +736,8 @@ void WorldSession::HandleCancelTradeOpcode(WorldPacket& /*recvPacket*/)
 
 void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
 {
-    ObjectGuid ID;
-    recvPacket >> ID;
+    // 3.4.3 (writer FUN_14075e1a0): PackedGuid128 Guid
+    ObjectGuid ID = Guid128::Read(recvPacket);
 
     if (GetPlayer()->GetTradeData())
         return;
@@ -845,6 +861,10 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
     // OK start trade
     _player->m_trade = new TradeData(_player, pOther);
     pOther->m_trade = new TradeData(pOther, _player);
+    static std::atomic<uint32> nextTradeId{0};
+    uint32 tradeId = ++nextTradeId;
+    _player->m_trade->SetTradeId(tradeId);
+    pOther->m_trade->SetTradeId(tradeId);
 
     // WorldPacket data(SMSG_TRADE_STATUS, 12);
     // data << uint32(TRADE_STATUS_BEGIN_TRADE);
@@ -857,12 +877,15 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
 
 void WorldSession::HandleSetTradeGoldOpcode(WorldPacket& recvPacket)
 {
-    uint32 gold;
-    recvPacket >> gold;
+    // 3.4.3 (writer FUN_140760a40): u64 Coinage, the whole amount offered
+    uint64 gold64 = recvPacket.read<uint64>();
+    uint32 gold = uint32(std::min<uint64>(gold64, std::numeric_limits<uint32>::max()));
 
     TradeData* my_trade = _player->GetTradeData();
     if (!my_trade)
         return;
+
+    my_trade->UpdateClientStateIndex();
 
     my_trade->SetMoney(gold);
 }
@@ -870,17 +893,19 @@ void WorldSession::HandleSetTradeGoldOpcode(WorldPacket& recvPacket)
 void WorldSession::HandleSetTradeItemOpcode(WorldPacket& recvPacket)
 {
     // send update
-    uint8 tradeSlot;
-    uint8 bag;
-    uint8 slot;
-
-    recvPacket >> tradeSlot;
-    recvPacket >> bag;
-    recvPacket >> slot;
+    // 3.4.3 (writer FUN_140760a80): u8 TradeSlot, u8 PackSlot (the bag's InvSlots index, 0xFF the player),
+    // u8 ItemSlotInPack
+    uint8 tradeSlot = recvPacket.read<uint8>();
+    uint8 clientBag = recvPacket.read<uint8>();
+    uint8 clientSlot = recvPacket.read<uint8>();
+    uint8 bag, slot;
+    ServerItemPos(clientBag, clientSlot, bag, slot);
 
     TradeData* my_trade = _player->GetTradeData();
     if (!my_trade)
         return;
+
+    my_trade->UpdateClientStateIndex();
 
     TradeStatusInfo info;
     // invalid slot number
@@ -934,12 +959,14 @@ void WorldSession::HandleSetTradeItemOpcode(WorldPacket& recvPacket)
 
 void WorldSession::HandleClearTradeItemOpcode(WorldPacket& recvPacket)
 {
-    uint8 tradeSlot;
-    recvPacket >> tradeSlot;
+    // 3.4.3 (writer FUN_14075b8d0): u8 TradeSlot
+    uint8 tradeSlot = recvPacket.read<uint8>();
 
     TradeData* my_trade = _player->m_trade;
     if (!my_trade)
         return;
+
+    my_trade->UpdateClientStateIndex();
 
     // invalid slot number
     if (tradeSlot >= TRADE_SLOT_COUNT)

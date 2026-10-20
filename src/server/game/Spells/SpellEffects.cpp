@@ -4411,9 +4411,14 @@ void Spell::EffectDuel(SpellEffIndex effIndex)
     //END
 
     // Send request
-    WorldPacket data(SMSG_DUEL_REQUESTED, 8 + 8);
-    data << pGameObj->GetGUID();
-    data << caster->GetGUID();
+    // SMSG_DUEL_REQUESTED, 3.4.3 (inline in the PvP switch, handler FUN_141bea100): PackedGuid128 ArbiterGUID,
+    // RequestedByGUID, RequestedByWowAccount, bit ToTheDeath, flush. The requester's client accepts by itself.
+    WorldPacket data(SMSG_DUEL_REQUESTED, 18 * 3 + 1);
+    Guid128::Write(data, pGameObj->GetGUID());
+    Guid128::Write(data, caster->GetGUID());
+    Guid128::Write(data, ObjectGuid::Empty);
+    data.WriteBit(false);
+    data.FlushBits();
     caster->SendDirectMessage(&data);
     target->SendDirectMessage(&data);
 

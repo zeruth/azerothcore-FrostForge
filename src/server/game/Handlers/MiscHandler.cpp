@@ -45,6 +45,7 @@
 #include "OutdoorPvP.h"
 #include "Pet.h"
 #include "Player.h"
+#include "ItemPackets.h"
 #include "PacketGuid128.h"
 #include "QueryPackets.h"
 #include "ReputationMgr.h"
@@ -1175,8 +1176,8 @@ void WorldSession::HandlePlayedTime(WorldPackets::Character::PlayedTimeClient& p
 
 void WorldSession::HandleInspectOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    recv_data >> guid;
+    // 3.4.3 (writer FUN_14075e1e0): PackedGuid128 Target
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     Player* player = ObjectAccessor::GetPlayer(*_player, guid);
     if (!player)
@@ -1195,23 +1196,103 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recv_data)
         return;
     }
 
-    uint32 talent_points = 0x47;
-    uint32 guid_size = player->GetPackGUID().size();
-    WorldPacket data(SMSG_INSPECT_RESULT, guid_size + 4 + talent_points);
-    data << player->GetPackGUID();
+    // SMSG_INSPECT_RESULT, 3.4.3 (FUN_1406c2780 -> FUN_1406ff210, handler FUN_141735940; the client applies it
+    // only for the GUID of its last CMSG_INSPECT):
+    // PlayerModelDisplayInfo (FUN_140718160): PackedGuid128, i32 SpecializationID, u32 item count, 6-bit name
+    // length, flush, u8 gender, race, class, u32 customization count, the name, the customizations, the
+    // items (InspectItemData FUN_14070c200: creator, u8 slot, u32 azerite power and essence counts,
+    // ItemInstance, bit Usable, 4-bit enchant and 2-bit gem counts, flush, {i32 id, u8 slot} enchants);
+    // u32 glyph count, i32 ItemLevel, u8 LifetimeMaxRank, u16 today / yesterday kills, u32 lifetime kills,
+    // u32 HonorLevel, the glyphs, ClassicTalentInfoUpdate (as SMSG_UPDATE_TALENT_DATA), bits HasGuildData,
+    // HasAzeriteLevel, flush, seven PVPBracketData (u8, 17 i32, Disqualified bit: 70 bytes), [guild GUID,
+    // members, achievement points], TraitInspectInfo (i32 level, i32 spec, an empty TraitConfig)
+    struct InspectItem
+    {
+        Item* Item;
+        uint8 Slot;
+        std::vector<std::pair<uint32, uint8>> Enchants;
+    };
+    std::vector<InspectItem> items;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        InspectItem& entry = items.emplace_back(InspectItem{ item, slot, {} });
+        for (uint8 e = PERM_ENCHANTMENT_SLOT; e <= TEMP_ENCHANTMENT_SLOT && entry.Enchants.size() < 15; ++e)
+            if (uint32 enchant = item->GetEnchantmentId(EnchantmentSlot(e)))
+                entry.Enchants.emplace_back(enchant, e);
+    }
+
+    std::string_view name = std::string_view(player->GetName()).substr(0, std::min<std::size_t>(player->GetName().size(), 0x3F));
+    std::vector<ChrCustomizationChoice> const& customizations = player->GetCustomizations();
+
+    WorldPacket data(SMSG_INSPECT_RESULT, 600 + items.size() * 64);
+    Guid128::Write(data, player->GetGUID());
+    data << int32(0);                                       // SpecializationID
+    data << uint32(items.size());
+    data.WriteBits(name.size(), 6);
+    data.FlushBits();
+    data << uint8(player->getGender());
+    data << uint8(player->getRace());
+    data << uint8(player->getClass());
+    data << uint32(customizations.size());
+    data.WriteString(name);
+    for (ChrCustomizationChoice const& c : customizations)
+        data << uint32(c.ChrCustomizationOptionID) << uint32(c.ChrCustomizationChoiceID);
+    for (InspectItem const& entry : items)
+    {
+        Guid128::Write(data, entry.Item->GetGuidValue(ITEM_FIELD_CREATOR));
+        data << uint8(entry.Slot);
+        data << uint32(0);                                  // AzeritePowers
+        data << uint32(0);                                  // AzeriteEssences
+        WorldPackets::Item::WriteItemInstance(data, entry.Item->GetEntry(), int32(entry.Item->GetItemSuffixFactor()), entry.Item->GetItemRandomPropertyId());
+        data.WriteBit(true);                                // Usable
+        data.WriteBits(entry.Enchants.size(), 4);
+        data.WriteBits(0, 2);                               // gems
+        data.FlushBits();
+        for (auto const& [id, slot] : entry.Enchants)
+            data << int32(id) << uint8(slot);
+    }
+
+    data << uint32(0);                                      // glyphs: they travel in the talent groups
+    data << int32(0);                                       // ItemLevel
+    data << uint8(0);                                       // LifetimeMaxRank
+    data << uint16(0);                                      // TodayHK
+    data << uint16(0);                                      // YesterdayHK
+    data << uint32(player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS));
+    data << uint32(0);                                      // HonorLevel
 
     if (sWorld->getBoolConfig(CONFIG_TALENTS_INSPECTING) || _player->CanBeGameMaster())
-    {
-        player->BuildPlayerTalentsInfoData(&data);
-    }
+        player->BuildClassicTalentInfoUpdate(data, false);
     else
     {
-        data << uint32(0);                                  // unspentTalentPoints
-        data << uint8(0);                                   // talentGroupCount
-        data << uint8(0);                                   // talentGroupIndex
+        data << uint32(0);                                  // Unspent
+        data << uint8(0);                                   // ActiveGroup
+        data << uint32(0);                                  // GroupCount
+        data.WriteBit(false);                               // IsPetTalents
+        data.FlushBits();
     }
 
-    player->BuildEnchantmentsInfoData(&data);
+    data.WriteBit(false);                                   // HasGuildData
+    data.WriteBit(false);                                   // HasAzeriteLevel
+    data.FlushBits();
+    for (uint8 bracket = 0; bracket < 7; ++bracket)
+    {
+        data << uint8(bracket);
+        for (uint8 i = 0; i < 17; ++i)
+            data << int32(0);
+        data.WriteBit(false);                               // Disqualified
+        data.FlushBits();
+    }
+
+    data << int32(player->GetLevel());                      // TraitInspectInfo.Level
+    data << int32(0);                                       // ChrSpecializationID
+    data << int32(0);                                       // TraitConfig.ID
+    data << int32(0);                                       // Type
+    data << uint32(0);                                      // entries
+    data.WriteBits(0, 9);                                   // name
+    data.FlushBits();
     SendPacket(&data);
 }
 

@@ -114,6 +114,7 @@ void TradeData::SetMoney(uint32 money)
 
 void TradeData::Update(bool forTarget /*= true*/)
 {
+    ++_serverStateIndex;
     if (forTarget)
         _trader->GetSession()->SendUpdateTrade(true);      // player state for trader
     else
