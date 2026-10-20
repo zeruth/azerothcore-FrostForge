@@ -330,7 +330,8 @@ enum PlayerInteractionType : uint32
     PLAYER_INTERACTION_BANKER           = 8,
     PLAYER_INTERACTION_MAIL_INFO        = 17,
     PLAYER_INTERACTION_SPIRIT_HEALER    = 18,
-    PLAYER_INTERACTION_BINDER           = 20
+    PLAYER_INTERACTION_BINDER           = 20,
+    PLAYER_INTERACTION_STABLE_MASTER    = 22
 };
 
 enum PlayTimeFlag : uint32
@@ -441,6 +442,7 @@ struct CharacterCustomizeInfo : public CharacterRenameInfo
 
 protected:
     uint8 Gender = GENDER_NONE;
+    std::vector<ChrCustomizationChoice> Customizations;    // 3.4.3: the appearance as ChrCustomizationChoice rows
     uint8 Skin = 0;
     uint8 Face = 0;
     uint8 HairStyle = 0;
@@ -499,7 +501,7 @@ public:
     bool ProcessMovementInfo(MovementInfo& movementInfo, Unit* mover, Player* plrMover, WorldPacket& recvData);
 
     void SendPacket(WorldPacket const* packet);
-    void SendPetNameInvalid(uint32 error, std::string const& name, DeclinedName* declinedName);
+    void SendPetNameInvalid(uint32 error, ObjectGuid petGuid, uint32 petNumber, std::string const& name, DeclinedName* declinedName);
     void SendPartyResult(PartyOperation operation, std::string const& member, PartyResult res, uint32 val = 0);
 
     void SendAreaTriggerMessage(std::string_view str);
@@ -627,7 +629,7 @@ public:
     void HandleCastMoveUpdate(MovementInfo& movementInfo);
 
     // Pet
-    void SendPetNameQuery(ObjectGuid guid, uint32 petnumber);
+    void SendPetNameQuery(ObjectGuid guid);
     void SendStablePet(ObjectGuid guid);
     void SendStablePetCallback(ObjectGuid guid, PreparedQueryResult result);
     void SendStableResult(uint8 guid);

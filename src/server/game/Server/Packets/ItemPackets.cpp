@@ -173,19 +173,32 @@ WorldPacket const* WorldPackets::Item::ItemEnchantTimeUpdate::Write()
     return &_worldPacket;
 }
 
+// CMSG_WRAP_ITEM, 3.4.3 (writer FUN_140761970): InvUpdate of 2 positions in InvSlots numbering: the wrapping
+// paper, then the item
 void WorldPackets::Item::WrapItem::Read()
 {
-    _worldPacket >> GiftBag;
-    _worldPacket >> GiftSlot;
-    _worldPacket >> ItemBag;
-    _worldPacket >> ItemSlot;
+    uint32 count = _worldPacket.ReadBits(2);
+    _worldPacket.ResetBitReader();
+    uint8 pos[2][2] = { };
+    for (uint32 i = 0; i < count; ++i)
+    {
+        uint8 container = _worldPacket.read<uint8>();
+        uint8 slot = _worldPacket.read<uint8>();
+        if (i < 2)
+            ServerItemPos(container, slot, pos[i][0], pos[i][1]);
+    }
+    GiftBag = pos[0][0];
+    GiftSlot = pos[0][1];
+    ItemBag = pos[1][0];
+    ItemSlot = pos[1][1];
 }
 
+// CMSG_SOCKET_GEMS, 3.4.3 (writer FUN_140760b70): PackedGuid128 item, 3 x PackedGuid128 gem (empty: none)
 void WorldPackets::Item::SocketGems::Read()
 {
-    _worldPacket >> ItemGuid;
+    ItemGuid = Guid128::Read(_worldPacket);
     for (int i = 0; i < MAX_GEM_SOCKETS; ++i)
-        _worldPacket >> GemGuids[i];
+        GemGuids[i] = Guid128::Read(_worldPacket);
 }
 
 void WorldPackets::Item::CancelTempEnchantment::Read()
@@ -193,12 +206,14 @@ void WorldPackets::Item::CancelTempEnchantment::Read()
     _worldPacket >> EquipmentSlot;
 }
 
+// CMSG_GET_ITEM_PURCHASE_DATA, 3.4.3 (writer FUN_14075d5e0): PackedGuid128 ItemGUID
 void WorldPackets::Item::ItemRefundInfo::Read()
 {
-    _worldPacket >> ItemGuid;
+    ItemGuid = Guid128::Read(_worldPacket);
 }
 
+// CMSG_ITEM_PURCHASE_REFUND, 3.4.3 (writer FUN_14075e300): PackedGuid128 ItemGUID
 void WorldPackets::Item::ItemRefund::Read()
 {
-    _worldPacket >> ItemGuid;
+    ItemGuid = Guid128::Read(_worldPacket);
 }

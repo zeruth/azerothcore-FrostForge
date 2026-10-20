@@ -12658,7 +12658,7 @@ void Unit::SendPetActionSound(PetAction action) const
 void Unit::SendPetDismissSound() const
 {
     if (CreatureDisplayInfoEntry const* displayInfo = sCreatureDisplayInfoStore.LookupEntry(GetNativeDisplayId()))
-        SendMessageToSet(WorldPackets::Pet::PetDismissSound(static_cast<int32>(displayInfo->ModelId), GetPosition()).Write(), false);
+        SendMessageToSet(WorldPackets::Pet::PetDismissSound(GetGUID(), static_cast<int32>(displayInfo->ModelId), GetPosition()).Write(), false);
 }
 
 void Unit::SendPetAIReaction(ObjectGuid guid) const

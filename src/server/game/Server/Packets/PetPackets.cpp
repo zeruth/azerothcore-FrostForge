@@ -41,14 +41,18 @@ void WorldPackets::Pet::PetSpellAutocast::Read()
     AutocastEnabled = _worldPacket.ReadBit();
 }
 
+// SMSG_PET_LEARNED_SPELLS / SMSG_PET_UNLEARNED_SPELLS, 3.4.3 (inline in the spell switch, handlers FUN_1417403f0 /
+// FUN_141740570): u32 count, the spells
 WorldPacket const* WorldPackets::Pet::PetLearnedSpell::Write()
 {
+    _worldPacket << uint32(1);
     _worldPacket << uint32(SpellID);
     return &_worldPacket;
 }
 
 WorldPacket const* WorldPackets::Pet::PetUnlearnedSpell::Write()
 {
+    _worldPacket << uint32(1);
     _worldPacket << uint32(SpellID);
     return &_worldPacket;
 }
@@ -61,8 +65,11 @@ WorldPacket const* WorldPackets::Pet::PetActionSound::Write()
     return &_worldPacket;
 }
 
+// SMSG_PET_DISMISS_SOUND, 3.4.3 (FUN_1406c7030, handler FUN_14178d020): PackedGuid128 UnitGUID, i32 ModelId, the
+// position
 WorldPacket const* WorldPackets::Pet::PetDismissSound::Write()
 {
+    Guid128::Write(_worldPacket, UnitGUID);
     _worldPacket << int32(ModelId);
     _worldPacket << float(ModelPosition.x);
     _worldPacket << float(ModelPosition.y);

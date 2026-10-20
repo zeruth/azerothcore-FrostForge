@@ -15190,9 +15190,11 @@ void Player::SetEquipmentSet(uint32 index, EquipmentSet eqset)
     {
         eqslot.Guid = sObjectMgr->GenerateEquipmentSetGuid();
 
-        WorldPacket data(SMSG_EQUIPMENT_SET_ID, 4 + 1);
+        // SMSG_EQUIPMENT_SET_ID, 3.4.3 (handler FUN_141a7eb00): u64 GUID, i32 Type (0 an equipment set), u32 SetID
+        WorldPacket data(SMSG_EQUIPMENT_SET_ID, 8 + 4 + 4);
+        data << uint64(eqslot.Guid);
+        data << int32(0);
         data << uint32(index);
-        data.appendPackGUID(eqslot.Guid);
         SendDirectMessage(&data);
     }
 
@@ -16218,6 +16220,40 @@ void Player::DeleteRefundReference(ObjectGuid itemGUID)
         m_refundableItems.erase(itr);
 }
 
+/// ItemPurchaseContents, 3.4.3 (FUN_1406ff820): u64 Money, 5 x {u32 ItemID, u32 Count}, 5 x {u32 CurrencyID, u32
+/// Count}. Honor and arena points are currencies in 3.4.3 [inferred ids: Honor 1901, Arena 1900].
+void Player::WriteItemPurchaseContents(ByteBuffer& data, uint32 money, ItemExtendedCostEntry const* iece)
+{
+    data << uint64(money);
+    for (uint8 i = 0; i < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++i)
+    {
+        data << uint32(iece ? iece->reqitem[i] : 0);
+        data << uint32(iece ? iece->reqitemcount[i] : 0);
+    }
+    std::pair<uint32, uint32> currencies[5] = { };
+    uint8 n = 0;
+    if (iece && iece->reqhonorpoints)
+        currencies[n++] = { 1901, iece->reqhonorpoints };
+    if (iece && iece->reqarenapoints)
+        currencies[n++] = { 1900, iece->reqarenapoints };
+    for (auto const& [currency, count] : currencies)
+        data << uint32(currency) << uint32(count);
+}
+
+/// SMSG_ITEM_PURCHASE_REFUND_RESULT, 3.4.3 (inline, handler FUN_141714ad0): PackedGuid128 ItemGUID, u8 Result (0
+/// success, 9 bags full, 10 currency cap, else "unable to refund"), bit HasContents, flush, [ItemPurchaseContents]
+void Player::SendItemRefundResult(ObjectGuid itemGuid, uint8 result, uint32 money, ItemExtendedCostEntry const* iece)
+{
+    WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 18 + 2 + 88);
+    Guid128::Write(data, itemGuid);
+    data << uint8(result);
+    data.WriteBit(result == 0);
+    data.FlushBits();
+    if (result == 0)
+        WriteItemPurchaseContents(data, money, iece);
+    SendDirectMessage(&data);
+}
+
 void Player::SendRefundInfo(Item* item)
 {
     // This function call unsets ITEM_FLAGS_REFUNDABLE if played time is over 2 hours.
@@ -16243,16 +16279,11 @@ void Player::SendRefundInfo(Item* item)
         return;
     }
 
-    WorldPacket data(SMSG_SET_ITEM_PURCHASE_DATA, 8 + 4 + 4 + 4 + 4 * 4 + 4 * 4 + 4 + 4);
-    data << item->GetGUID();                            // item guid
-    data << uint32(item->GetPaidMoney());               // money cost
-    data << uint32(iece->reqhonorpoints);               // honor point cost
-    data << uint32(iece->reqarenapoints);               // arena point cost
-    for (uint8 i = 0; i < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++i)                       // item cost data
-    {
-        data << uint32(iece->reqitem[i]);
-        data << uint32(iece->reqitemcount[i]);
-    }
+    // SMSG_SET_ITEM_PURCHASE_DATA, 3.4.3 (inline, handler FUN_141714f50): PackedGuid128 ItemGUID,
+    // ItemPurchaseContents, u32 Flags, u32 PurchaseTime (played seconds since the purchase)
+    WorldPacket data(SMSG_SET_ITEM_PURCHASE_DATA, 18 + 88 + 8);
+    Guid128::Write(data, item->GetGUID());
+    WriteItemPurchaseContents(data, item->GetPaidMoney(), iece);
     data << uint32(0);
     data << uint32(GetTotalPlayedTime() - item->GetPlayedTime());
     SendDirectMessage(&data);
@@ -16300,10 +16331,7 @@ void Player::RefundItem(Item* item)
     if (item->IsRefundExpired())    // item refund has expired
     {
         item->SetNotRefundable(this);
-        WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4);
-        data << item->GetGUID();                     // Guid
-        data << uint32(10);                          // Error!
-        SendDirectMessage(&data);
+        SendItemRefundResult(item->GetGUID(), 1, 0, nullptr);
         return;
     }
 
@@ -16341,25 +16369,11 @@ void Player::RefundItem(Item* item)
 
     if (store_error)
     {
-        WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4);
-        data << item->GetGUID();                         // Guid
-        data << uint32(10);                              // Error!
-        SendDirectMessage(&data);
+        SendItemRefundResult(item->GetGUID(), 9, 0, nullptr);   // 9: the client's "inventory is full"
         return;
     }
 
-    WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4 + 4 + 4 + 4 + 4 * 4 + 4 * 4);
-    data << item->GetGUID();                            // item guid
-    data << uint32(0);                                  // 0, or error code
-    data << uint32(item->GetPaidMoney());               // money cost
-    data << uint32(iece->reqhonorpoints);               // honor point cost
-    data << uint32(iece->reqarenapoints);               // arena point cost
-    for (uint8 i = 0; i < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++i) // item cost data
-    {
-        data << uint32(iece->reqitem[i]);
-        data << uint32(iece->reqitemcount[i]);
-    }
-    SendDirectMessage(&data);
+    SendItemRefundResult(item->GetGUID(), 0, item->GetPaidMoney(), iece);
 
     uint32 moneyRefund = item->GetPaidMoney();  // item-> will be invalidated in DestroyItem
 

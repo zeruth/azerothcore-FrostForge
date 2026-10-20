@@ -2064,7 +2064,9 @@ void GameObject::Use(Unit* user)
                 // fallback, will always work
                 player->TeleportTo(GetMapId(), GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation(), TELE_TO_NOT_LEAVE_TRANSPORT | TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET);
 
-                WorldPacket data(SMSG_ENABLE_BARBER_SHOP, 0);
+                // SMSG_ENABLE_BARBER_SHOP, 3.4.3 (FUN_1406beee0, handler FUN_141a02a10): u8 CustomizationScope
+                WorldPacket data(SMSG_ENABLE_BARBER_SHOP, 1);
+                data << uint8(0);
                 player->SendDirectMessage(&data);
 
                 player->SetStandState(UNIT_STAND_STATE_SIT_LOW_CHAIR + info->barberChair.chairheight);

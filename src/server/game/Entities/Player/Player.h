@@ -867,7 +867,7 @@ struct EquipmentSet
     EquipmentSetUpdateState state{EQUIPMENT_SET_NEW};
 };
 
-#define MAX_EQUIPMENT_SET_INDEX 10                          // client limit
+#define MAX_EQUIPMENT_SET_INDEX 20                          // client limit (3.4.3: FUN_141a7f260 allows 20)
 
 typedef std::map<uint32, EquipmentSet> EquipmentSets;
 
@@ -2168,6 +2168,8 @@ public:
 
     /// The character's appearance (ChrCustomizationChoice rows, D5).
     [[nodiscard]] std::vector<ChrCustomizationChoice> const& GetCustomizations() const { return m_customizations; }
+    void SetCustomizations(std::vector<ChrCustomizationChoice> customizations) { m_customizations = std::move(customizations); }
+    [[nodiscard]] EquipmentSets const& GetEquipmentSets() const { return m_EquipmentSets; }
     void DestroyForPlayer(Player* target, bool onDeath = false) const override;
     void SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool recruitAFriend = false, float group_rate = 1.0f);
 
@@ -3141,6 +3143,8 @@ private:
     typedef GuidSet RefundableItemsSet;
     RefundableItemsSet m_refundableItems;
     void SendRefundInfo(Item* item);
+    static void WriteItemPurchaseContents(ByteBuffer& data, uint32 money, ItemExtendedCostEntry const* iece);
+    void SendItemRefundResult(ObjectGuid itemGuid, uint8 result, uint32 money, ItemExtendedCostEntry const* iece);
     void RefundItem(Item* item);
 
     // know currencies are not removed at any point (0 displayed)

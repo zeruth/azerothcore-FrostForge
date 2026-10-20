@@ -111,11 +111,12 @@ namespace WorldPackets
         class PetDismissSound final : public ServerPacket
         {
         public:
-            PetDismissSound(int32 modelId, G3D::Vector3 modelPosition)
-                : ServerPacket(SMSG_PET_DISMISS_SOUND, 4 + 12), ModelId(modelId), ModelPosition(modelPosition) { }
+            PetDismissSound(ObjectGuid unitGuid, int32 modelId, G3D::Vector3 modelPosition)
+                : ServerPacket(SMSG_PET_DISMISS_SOUND, 18 + 4 + 12), UnitGUID(unitGuid), ModelId(modelId), ModelPosition(modelPosition) { }
 
             WorldPacket const* Write() override;
 
+            ObjectGuid UnitGUID;
             int32 ModelId = 0;
             G3D::Vector3 ModelPosition;
         };

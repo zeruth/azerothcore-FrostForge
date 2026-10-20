@@ -618,25 +618,24 @@ void WorldSession::HandlePetNameQuery(WorldPacket& recvData)
 {
     LOG_DEBUG("network.opcode", "HandlePetNameQuery. CMSG_QUERY_PET_NAME");
 
-    uint32 petnumber;
-    ObjectGuid petguid;
+    // 3.4.3 (writer FUN_14075f5d0): PackedGuid128 UnitGUID, no pet number
+    ObjectGuid petguid = Guid128::Read(recvData);
 
-    recvData >> petnumber;
-    recvData >> petguid;
-
-    SendPetNameQuery(petguid, petnumber);
+    SendPetNameQuery(petguid);
 }
 
-void WorldSession::SendPetNameQuery(ObjectGuid petguid, uint32 petnumber)
+/// SMSG_QUERY_PET_NAME_RESPONSE, 3.4.3 (FUN_140702cf0, handler FUN_1403477c0): PackedGuid128 UnitGUID, bit Allow,
+/// [8-bit name length, bit HasDeclined, 5 x 7-bit declined name lengths], flush, [the declined names, u64
+/// Timestamp, the name]. Allow 0 drops the client's cache entry.
+void WorldSession::SendPetNameQuery(ObjectGuid petguid)
 {
     Creature* pet = ObjectAccessor::GetCreatureOrPetOrVehicle(*_player, petguid);
     if (!pet)
     {
-        WorldPacket data(SMSG_QUERY_PET_NAME_RESPONSE, (4 + 1 + 4 + 1));
-        data << uint32(petnumber);
-        data << uint8(0);
-        data << uint32(0);
-        data << uint8(0);
+        WorldPacket data(SMSG_QUERY_PET_NAME_RESPONSE, 18 + 1);
+        Guid128::Write(data, petguid);
+        data.WriteBit(false);
+        data.FlushBits();
         SendPacket(&data);
         return;
     }
@@ -654,20 +653,25 @@ void WorldSession::SendPetNameQuery(ObjectGuid petguid, uint32 petnumber)
     else
         name = pet->GetName();
 
-    WorldPacket data(SMSG_QUERY_PET_NAME_RESPONSE, (4 + 4 + name.size() + 1));
-    data << uint32(petnumber);
-    data << name.c_str();
-    data << uint32(pet->GetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP));
+    std::string_view nameView = std::string_view(name).substr(0, 0xFF);
+    DeclinedName const* declined = pet->IsPet() ? ((Pet*)pet)->GetDeclinedNames() : nullptr;
+    std::string_view declinedNames[MAX_DECLINED_NAME_CASES];
+    for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+        if (declined)
+            declinedNames[i] = std::string_view(declined->name[i]).substr(0, 0x7F);
 
-    if (pet->IsPet() && ((Pet*)pet)->GetDeclinedNames())
-    {
-        data << uint8(1);
-        for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
-            data << ((Pet*)pet)->GetDeclinedNames()->name[i];
-    }
-    else
-        data << uint8(0);
-
+    WorldPacket data(SMSG_QUERY_PET_NAME_RESPONSE, 18 + 6 + 8 + nameView.size() + 64);
+    Guid128::Write(data, petguid);
+    data.WriteBit(true);                                    // Allow
+    data.WriteBits(nameView.size(), 8);
+    data.WriteBit(declined != nullptr);
+    for (std::string_view d : declinedNames)
+        data.WriteBits(d.size(), 7);
+    data.FlushBits();
+    for (std::string_view d : declinedNames)
+        data.WriteString(d);
+    data << uint64(pet->GetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP));
+    data.WriteString(nameView);
     SendPacket(&data);
 }
 
@@ -847,15 +851,23 @@ void WorldSession::HandlePetRename(WorldPacket& recvData)
 {
     LOG_DEBUG("network.opcode", "HandlePetRename. CMSG_PET_RENAME");
 
-    ObjectGuid petguid;
-    uint8 isdeclined;
+    // 3.4.3 (writer FUN_140768730 -> PetRenameData FUN_14074f0a0): PackedGuid128 PetGUID, i32 PetNumber, 8-bit name
+    // length, bit HasDeclinedNames, [5 x 7-bit lengths], flush, [the declined names], the name
+    ObjectGuid petguid = Guid128::Read(recvData);
+    uint32 petNumber = recvData.read<uint32>();
+    uint32 nameLength = recvData.ReadBits(8);
+    bool isdeclined = recvData.ReadBit();
+    uint32 declinedLength[MAX_DECLINED_NAME_CASES] = { };
+    if (isdeclined)
+        for (uint32& length : declinedLength)
+            length = recvData.ReadBits(7);
+    recvData.ResetBitReader();
 
-    std::string name;
     DeclinedName declinedname;
-
-    recvData >> petguid;
-    recvData >> name;
-    recvData >> isdeclined;
+    if (isdeclined)
+        for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+            declinedname.name[i] = recvData.ReadString(declinedLength[i]);
+    std::string name = recvData.ReadString(nameLength);
 
     PetStable* petStable = _player->GetPetStable();
 
@@ -873,7 +885,7 @@ void WorldSession::HandlePetRename(WorldPacket& recvData)
     PetNameInvalidReason res = ObjectMgr::CheckPetName(name);
     if (res != PET_NAME_SUCCESS)
     {
-        SendPetNameInvalid(res, name, nullptr);
+        SendPetNameInvalid(res, petguid, petNumber, name, nullptr);
         return;
     }
 
@@ -890,16 +902,11 @@ void WorldSession::HandlePetRename(WorldPacket& recvData)
 
     if (isdeclined)
     {
-        for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
-        {
-            recvData >> declinedname.name[i];
-        }
-
         std::wstring wname;
         Utf8toWStr(name, wname);
         if (!ObjectMgr::CheckDeclinedNames(wname, declinedname))
         {
-            SendPetNameInvalid(PET_NAME_DECLENSION_DOESNT_MATCH_BASE_NAME, name, &declinedname);
+            SendPetNameInvalid(PET_NAME_DECLENSION_DOESNT_MATCH_BASE_NAME, petguid, petNumber, name, &declinedname);
             return;
         }
     }
@@ -1121,19 +1128,26 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
         caster->AddUnitState(UNIT_STATE_FOLLOW);
 }
 
-void WorldSession::SendPetNameInvalid(uint32 error, std::string const& name, DeclinedName* declinedName)
+/// SMSG_PET_NAME_INVALID, 3.4.3 (FUN_1406c71c0, handler FUN_1417369b0): u8 Result (AC's PetNameInvalidReason), then
+/// the PetRenameData of the request: PackedGuid128 PetGUID, i32 PetNumber, 8-bit name length, bit HasDeclinedNames,
+/// [5 x 7-bit lengths], flush, [the declined names], the name
+void WorldSession::SendPetNameInvalid(uint32 error, ObjectGuid petGuid, uint32 petNumber, std::string const& name, DeclinedName* declinedName)
 {
-    WorldPacket data(SMSG_PET_NAME_INVALID, 4 + name.size() + 1 + 1);
-    data << uint32(error);
-    data << name;
+    std::string_view nameView = std::string_view(name).substr(0, 0xFF);
+    WorldPacket data(SMSG_PET_NAME_INVALID, 1 + 18 + 4 + 6 + nameView.size() + 64);
+    data << uint8(error);
+    Guid128::Write(data, petGuid);
+    data << int32(petNumber);
+    data.WriteBits(nameView.size(), 8);
+    data.WriteBit(declinedName != nullptr);
     if (declinedName)
-    {
-        data << uint8(1);
         for (uint32 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
-            data << declinedName->name[i];
-    }
-    else
-        data << uint8(0);
+            data.WriteBits(std::min<std::size_t>(declinedName->name[i].size(), 0x7F), 7);
+    data.FlushBits();
+    if (declinedName)
+        for (uint32 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+            data.WriteString(std::string_view(declinedName->name[i]).substr(0, 0x7F));
+    data.WriteString(nameView);
     SendPacket(&data);
 }
 

@@ -38,12 +38,13 @@
 
 enum StableResultCode
 {
+    // 3.4.3's numbers (handler FUN_141a3e390): 6 is silent, 12 shows "internal error", 11 the exotic error
     STABLE_ERR_MONEY        = 0x01,                         // "you don't have enough money"
-    STABLE_ERR_STABLE       = 0x06,                         // currently used in most fail cases
+    STABLE_ERR_STABLE       = 0x0C,                         // currently used in most fail cases
     STABLE_SUCCESS_STABLE   = 0x08,                         // stable success
     STABLE_SUCCESS_UNSTABLE = 0x09,                         // unstable/swap success
     STABLE_SUCCESS_BUY_SLOT = 0x0A,                         // buy slot success
-    STABLE_ERR_EXOTIC       = 0x0C,                         // "you are unable to control exotic creatures"
+    STABLE_ERR_EXOTIC       = 0x0B,                         // "you are unable to control exotic creatures"
 };
 
 void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
@@ -344,7 +345,7 @@ void WorldSession::HandleListStabledPetsOpcode(WorldPacket& recvData)
     LOG_DEBUG("network", "WORLD: Recv CMSG_REQUEST_STABLED_PETS");
     ObjectGuid npcGUID;
 
-    recvData >> npcGUID;
+    npcGUID = Guid128::Read(recvData);                     // 3.4.3: PackedGuid128 StableMaster
 
     if (!CheckStableMaster(npcGUID))
         return;
@@ -357,70 +358,15 @@ void WorldSession::HandleListStabledPetsOpcode(WorldPacket& recvData)
     if (GetPlayer()->IsMounted())
         GetPlayer()->RemoveAurasByType(SPELL_AURA_MOUNTED);
 
-    SendStablePet(npcGUID);
+    // the list is ActivePlayerData.PetStable in 3.4.3 (see SendStablePet)
 }
 
+/// 3.4.3 has no stable list message: the stable master's window opens with SMSG_NPC_INTERACTION_OPEN_RESULT
+/// (type 22, StableMaster), the client then sends CMSG_REQUEST_STABLED_PETS, and the pets travel in
+/// ActivePlayerData.PetStable [TODO: the update fields do not carry PetStable yet, so the window lists nothing]
 void WorldSession::SendStablePet(ObjectGuid guid)
 {
-    LOG_DEBUG("network", "WORLD: Recv CMSG_REQUEST_STABLED_PETS Send.");
-
-    WorldPacket data(CMSG_REQUEST_STABLED_PETS, 200);           // guess size
-    data << guid;
-    std::size_t wpos = data.wpos();
-    data << uint8(0);                                       // place holder for slot show number
-
-    PetStable* petStable = GetPlayer()->GetPetStable();
-    if (!petStable)
-    {
-        data << uint8(0);                                   // stable slots
-        SendPacket(&data);
-        return;
-    }
-
-    data << uint8(petStable->MaxStabledPets);
-
-    uint8 num = 0;                                          // counter for place holder
-
-    // not let move dead pet in slot
-    if (petStable->CurrentPet)
-    {
-        PetStable::PetInfo const& pet = *petStable->CurrentPet;
-        data << uint32(pet.PetNumber);
-        data << uint32(pet.CreatureId);
-        data << uint32(pet.Level);
-        data << pet.Name;                                   // petname
-        data << uint8(1);                                   // flags: 1 active, 2 inactive
-        ++num;
-    }
-    else
-    {
-        if (PetStable::PetInfo const* pet = petStable->GetUnslottedHunterPet())
-        {
-            data << uint32(pet->PetNumber);
-            data << uint32(pet->CreatureId);
-            data << uint32(pet->Level);
-            data << pet->Name;                                   // petname
-            data << uint8(1);                                   // flags: 1 active, 2 inactive
-            ++num;
-        }
-    }
-
-    for (Optional<PetStable::PetInfo> const& stabledSlot : petStable->StabledPets)
-    {
-        if (stabledSlot)
-        {
-            PetStable::PetInfo const& pet = *stabledSlot;
-            data << uint32(pet.PetNumber);
-            data << uint32(pet.CreatureId);
-            data << uint32(pet.Level);
-            data << pet.Name;                               // petname
-            data << uint8(2);                               // flags: 1 active, 2 inactive
-            ++num;
-        }
-    }
-
-    data.put<uint8>(wpos, num);                             // set real data to placeholder
-    SendPacket(&data);
+    SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_STABLE_MASTER, true);
 }
 
 void WorldSession::SendStableResult(uint8 res)
@@ -435,7 +381,7 @@ void WorldSession::HandleStablePet(WorldPacket& recvData)
     LOG_DEBUG("network", "WORLD: Recv CMSG_STABLE_PET");
     ObjectGuid npcGUID;
 
-    recvData >> npcGUID;
+    npcGUID = Guid128::Read(recvData);                     // 3.4.3: PackedGuid128 StableMaster
 
     if (!GetPlayer()->IsAlive())
     {
@@ -504,7 +450,9 @@ void WorldSession::HandleUnstablePet(WorldPacket& recvData)
     ObjectGuid npcGUID;
     uint32 petnumber;
 
-    recvData >> npcGUID >> petnumber;
+    // 3.4.3: u32 PetNumber, then PackedGuid128 StableMaster
+    recvData >> petnumber;
+    npcGUID = Guid128::Read(recvData);
 
     if (!CheckStableMaster(npcGUID))
     {
@@ -617,7 +565,7 @@ void WorldSession::HandleBuyStableSlot(WorldPacket& recvData)
     LOG_DEBUG("network", "WORLD: Recv CMSG_BUY_STABLE_SLOT.");
     ObjectGuid npcGUID;
 
-    recvData >> npcGUID;
+    npcGUID = Guid128::Read(recvData);                     // 3.4.3: PackedGuid128 StableMaster
 
     if (!CheckStableMaster(npcGUID))
     {
@@ -657,7 +605,9 @@ void WorldSession::HandleStableSwapPet(WorldPacket& recvData)
     ObjectGuid npcGUID;
     uint32 petId;
 
-    recvData >> npcGUID >> petId;
+    // 3.4.3: u32 PetNumber, then PackedGuid128 StableMaster
+    recvData >> petId;
+    npcGUID = Guid128::Read(recvData);
 
     if (!CheckStableMaster(npcGUID))
     {

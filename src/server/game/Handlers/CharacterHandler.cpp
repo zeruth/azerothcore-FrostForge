@@ -232,6 +232,37 @@ namespace
 
     using CustomizationsByGuid = std::unordered_map<ObjectGuid::LowType, std::vector<ChrCustomizationChoice>>;
 
+    /// One choice per option, at most MAX_CHARACTER_CUSTOMIZATIONS; sorts them by option
+    bool ValidCustomizationChoices(std::vector<ChrCustomizationChoice>& choices)
+    {
+        if (choices.size() > MAX_CHARACTER_CUSTOMIZATIONS)
+            return false;
+        std::sort(choices.begin(), choices.end(), [](ChrCustomizationChoice const& a, ChrCustomizationChoice const& b)
+        {
+            return a.ChrCustomizationOptionID < b.ChrCustomizationOptionID;
+        });
+        return std::adjacent_find(choices.begin(), choices.end(), [](ChrCustomizationChoice const& a, ChrCustomizationChoice const& b)
+        {
+            return a.ChrCustomizationOptionID == b.ChrCustomizationOptionID;
+        }) == choices.end();
+    }
+
+    /// Replaces the character's ChrCustomizationChoice rows (character_customizations, D5)
+    void SaveCustomizationChoices(CharacterDatabaseTransaction trans, ObjectGuid::LowType lowGuid, std::vector<ChrCustomizationChoice> const& choices)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_CUSTOMIZATIONS);
+        stmt->SetData(0, lowGuid);
+        trans->Append(stmt);
+        for (ChrCustomizationChoice const& choice : choices)
+        {
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_CUSTOMIZATION);
+            stmt->SetData(0, lowGuid);
+            stmt->SetData(1, choice.ChrCustomizationOptionID);
+            stmt->SetData(2, choice.ChrCustomizationChoiceID);
+            trans->Append(stmt);
+        }
+    }
+
     constexpr uint32 VISUAL_ITEM_SLOTS = 34;
 
     // CharacterInfo of SMSG_ENUM_CHARACTERS_RESULT, 3.4.3 (FUN_1407109f0), from CHAR_SEL_ENUM's row:
@@ -1589,8 +1620,11 @@ void WorldSession::HandleCharRenameOpcode(WorldPacket& recvData)
 {
     std::shared_ptr<CharacterRenameInfo> renameInfo = std::make_shared<CharacterRenameInfo>();
 
-    recvData >> renameInfo->Guid
-             >> renameInfo->Name;
+    // 3.4.3 (writer FUN_140765bd0, Lua RenameCharacter): PackedGuid128 Guid, 6-bit name length, flush, the name
+    renameInfo->Guid = Guid128::ReadPlayer(recvData);
+    uint32 nameLength = recvData.ReadBits(6);
+    recvData.ResetBitReader();
+    renameInfo->Name = recvData.ReadString(nameLength);
 
     // prevent character rename to invalid name
     if (!normalizePlayerName(renameInfo->Name))
@@ -1679,8 +1713,15 @@ void WorldSession::HandleSetPlayerDeclinedNames(WorldPacket& recvData)
     if (!sWorld->getBoolConfig(CONFIG_DECLINED_NAMES_USED))
         return;
 
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_1407693f0): PackedGuid128 Player, 5 x 7-bit lengths, flush, the declined names
+    ObjectGuid guid = Guid128::ReadPlayer(recvData);
+    uint32 declinedLength[MAX_DECLINED_NAME_CASES];
+    for (uint32& length : declinedLength)
+        length = recvData.ReadBits(7);
+    recvData.ResetBitReader();
+    DeclinedName declinedFromClient;
+    for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+        declinedFromClient.name[i] = recvData.ReadString(declinedLength[i]);
 
     // not accept declined names for unsupported languages
     std::string name;
@@ -1703,20 +1744,11 @@ void WorldSession::HandleSetPlayerDeclinedNames(WorldPacket& recvData)
         return;
     }
 
-    std::string name2;
-    DeclinedName declinedname;
-
-    recvData >> name2;
-
-    if (name2 != name)                                       // character have different name
-    {
-        SendSetPlayerDeclinedNamesResult(DECLINED_NAMES_RESULT_ERROR, guid);
-        return;
-    }
+    DeclinedName declinedname;                              // 3.4.3 no longer repeats the base name
 
     for (int i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
     {
-        recvData >> declinedname.name[i];
+        declinedname.name[i] = declinedFromClient.name[i];
         if (!normalizePlayerName(declinedname.name[i]))
         {
             SendSetPlayerDeclinedNamesResult(DECLINED_NAMES_RESULT_ERROR, guid);
@@ -1756,68 +1788,71 @@ void WorldSession::HandleAlterAppearance(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_ALTER_APPEARANCE");
 
-    uint32 Hair, Color, FacialHair, SkinColor;
-    recvData >> Hair >> Color >> FacialHair >> SkinColor;
+    // 3.4.3 (writer FUN_14075b9f0, C_BarberShop.ApplyCustomizationChoices): u32 customization count, u8 NewSex, i32
+    // CustomizedRace, i32 CustomizedChrModelID, the customizations {u32 option, u32 choice}
+    uint32 customizationsCount = recvData.read<uint32>();
+    uint8 newSex = recvData.read<uint8>();
+    int32 race = recvData.read<int32>();
+    recvData.read_skip<int32>();                            // CustomizedChrModelID
+    if (customizationsCount > MAX_CHARACTER_CUSTOMIZATIONS)
+    {
+        recvData.rfinish();
+        return;
+    }
+    std::vector<ChrCustomizationChoice> customizations(customizationsCount);
+    for (ChrCustomizationChoice& choice : customizations)
+        recvData >> choice.ChrCustomizationOptionID >> choice.ChrCustomizationChoiceID;
 
-    BarberShopStyleEntry const* bs_hair = sBarberShopStyleStore.LookupEntry(Hair);
-
-    if (!bs_hair || bs_hair->type != 0 || bs_hair->race != _player->getRace() || bs_hair->gender != _player->getGender())
+    if (newSex != _player->getGender() || race != _player->getRace() || !ValidCustomizationChoices(customizations))
         return;
 
-    BarberShopStyleEntry const* bs_facialHair = sBarberShopStyleStore.LookupEntry(FacialHair);
-
-    if (!bs_facialHair || bs_facialHair->type != 2 || bs_facialHair->race != _player->getRace() || bs_facialHair->gender != _player->getGender())
-        return;
-
-    BarberShopStyleEntry const* bs_skinColor = sBarberShopStyleStore.LookupEntry(SkinColor);
-
-    if (bs_skinColor && (bs_skinColor->type != 3 || bs_skinColor->race != _player->getRace() || bs_skinColor->gender != _player->getGender()))
-        return;
+    // SMSG_BARBER_SHOP_RESULT, 3.4.3 (FUN_1406b89a0, handler FUN_141a02690): u32 Result (0 ok, 1 / 3 not enough money,
+    // 2 not sitting in a barber chair), bit, flush
+    auto sendResult = [this](uint32 result)
+    {
+        WorldPacket data(SMSG_BARBER_SHOP_RESULT, 4 + 1);
+        data << uint32(result);
+        data.WriteBit(false);
+        data.FlushBits();
+        SendPacket(&data);
+    };
 
     GameObject* go = _player->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_BARBER_CHAIR, 5.0f);
-    if (!go)
+    if (!go || _player->getStandState() != UNIT_STAND_STATE_SIT_LOW_CHAIR + go->GetGOInfo()->barberChair.chairheight)
     {
-        WorldPacket data(SMSG_BARBER_SHOP_RESULT, 4);
-        data << uint32(2);
-        SendPacket(&data);
+        sendResult(2);
         return;
     }
 
-    if (_player->getStandState() != UNIT_STAND_STATE_SIT_LOW_CHAIR + go->GetGOInfo()->barberChair.chairheight)
+    // the price: the level's base barber cost per changed option [TODO: ChrCustomizationOption's
+    // BarberShopCostModifier once the server loads the 3.4.3 customization tables]
+    uint32 changed = 0;
+    std::vector<ChrCustomizationChoice> const& current = _player->GetCustomizations();
+    for (ChrCustomizationChoice const& choice : customizations)
     {
-        WorldPacket data(SMSG_BARBER_SHOP_RESULT, 4);
-        data << uint32(2);
-        SendPacket(&data);
-        return;
+        auto itr = std::find_if(current.begin(), current.end(), [&](ChrCustomizationChoice const& c) { return c.ChrCustomizationOptionID == choice.ChrCustomizationOptionID; });
+        if (itr == current.end() || itr->ChrCustomizationChoiceID != choice.ChrCustomizationChoiceID)
+            ++changed;
     }
 
-    uint32 cost = _player->GetBarberShopCost(bs_hair->hair_id, Color, bs_facialHair->hair_id, bs_skinColor);
-
-    // 0 - ok
-    // 1, 3 - not enough money
-    // 2 - you have to seat on barber chair
+    uint8 level = std::min<uint8>(_player->GetLevel(), GT_MAX_LEVEL);
+    GtBarberShopCostBaseEntry const* bsc = sGtBarberShopCostBaseStore.LookupEntry(level - 1);
+    uint32 cost = bsc ? uint32(bsc->cost * changed) : 0;
     if (!_player->HasEnoughMoney(cost))
     {
-        WorldPacket data(SMSG_BARBER_SHOP_RESULT, 4);
-        data << uint32(1);                                  // no money
-        SendPacket(&data);
+        sendResult(1);
         return;
     }
-    else
-    {
-        WorldPacket data(SMSG_BARBER_SHOP_RESULT, 4);
-        data << uint32(0);                                  // ok
-        SendPacket(&data);
-    }
+
+    sendResult(0);
 
     _player->ModifyMoney(-int32(cost));                     // it isn't free
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_AT_BARBER, cost);
 
-    _player->SetByteValue(PLAYER_BYTES, 2, uint8(bs_hair->hair_id));
-    _player->SetByteValue(PLAYER_BYTES, 3, uint8(Color));
-    _player->SetByteValue(PLAYER_BYTES_2, 0, uint8(bs_facialHair->hair_id));
-    if (bs_skinColor)
-        _player->SetByteValue(PLAYER_BYTES, 0, uint8(bs_skinColor->hair_id));
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    SaveCustomizationChoices(trans, _player->GetGUID().GetCounter(), customizations);
+    CharacterDatabase.CommitTransaction(trans);
+    _player->SetCustomizations(std::move(customizations));
 
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_VISIT_BARBER_SHOP, 1);
 
@@ -1868,7 +1903,23 @@ void WorldSession::HandleCharCustomize(WorldPacket& recvData)
 {
     std::shared_ptr<CharacterCustomizeInfo> customizeInfo = std::make_shared<CharacterCustomizeInfo>();
 
-    recvData >> customizeInfo->Guid;
+    // 3.4.3 (writer FUN_140765970): PackedGuid128 CharGUID, u8 SexID, u32 customization count, the customizations
+    // {u32 option, u32 choice}, 6-bit name length, flush, the name
+    customizeInfo->Guid = Guid128::ReadPlayer(recvData);
+    customizeInfo->Gender = recvData.read<uint8>();
+    uint32 customizationsCount = recvData.read<uint32>();
+    if (customizationsCount > MAX_CHARACTER_CUSTOMIZATIONS)
+    {
+        recvData.rfinish();
+        SendCharCustomize(CHAR_CREATE_ERROR, customizeInfo.get());
+        return;
+    }
+    customizeInfo->Customizations.resize(customizationsCount);
+    for (ChrCustomizationChoice& choice : customizeInfo->Customizations)
+        recvData >> choice.ChrCustomizationOptionID >> choice.ChrCustomizationChoiceID;
+    uint32 nameLength = recvData.ReadBits(6);
+    recvData.ResetBitReader();
+    customizeInfo->Name = recvData.ReadString(nameLength);
 
     if (!IsLegitCharacterForAccount(customizeInfo->Guid))
     {
@@ -1882,20 +1933,15 @@ void WorldSession::HandleCharCustomize(WorldPacket& recvData)
     // pussywizard:
     if (ObjectAccessor::FindConnectedPlayer(customizeInfo->Guid) || sWorldSessionMgr->FindOfflineSessionForCharacterGUID(customizeInfo->Guid.GetCounter()))
     {
-        recvData.rfinish();
-        WorldPacket data(SMSG_CHAR_CUSTOMIZE_SUCCESS, 1);
-        data << uint8(CHAR_CREATE_ERROR);
-        SendPacket(&data);
+        SendCharCustomize(CHAR_CREATE_ERROR, customizeInfo.get());
         return;
     }
 
-    recvData >> customizeInfo->Name
-             >> customizeInfo->Gender
-             >> customizeInfo->Skin
-             >> customizeInfo->HairColor
-             >> customizeInfo->HairStyle
-             >> customizeInfo->FacialHair
-             >> customizeInfo->Face;
+    if (!ValidCustomizationChoices(customizeInfo->Customizations))
+    {
+        SendCharCustomize(CHAR_CREATE_ERROR, customizeInfo.get());
+        return;
+    }
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_CUSTOMIZE_INFO);
     stmt->SetData(0, customizeInfo->Guid.GetCounter());
@@ -1969,6 +2015,7 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
 
     /// Customize
     Player::Customize(customizeInfo.get(), trans);
+    SaveCustomizationChoices(trans, lowGuid, customizeInfo->Customizations);
 
     /// Name Change and update atLogin flags
     {
@@ -2002,25 +2049,34 @@ void WorldSession::HandleEquipmentSetSave(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_SAVE_EQUIPMENT_SET");
 
-    uint64 setGuid;
-    recvData.readPackGUID(setGuid);
-
-    uint32 index;
-    recvData >> index;
-    if (index >= MAX_EQUIPMENT_SET_INDEX)                    // client set slots amount
-        return;
-
-    std::string name;
-    recvData >> name;
-
-    if (name.length() > 16) // Client limitation
+    // 3.4.3 (writer FUN_1407601d0 -> EquipmentSetData FUN_14074e300): i32 Type, u64 Guid, u32 SetID, u32 IgnoreMask,
+    // 19 x {PackedGuid128 piece, i32 appearance}, i32 enchants[2], i32 x 4 secondary appearances, bit
+    // HasAssignedSpecIndex, 8-bit name length, 9-bit icon length, flush, [i32 spec], the name, the icon
+    int32 type = recvData.read<int32>();
+    uint64 setGuid = recvData.read<uint64>();
+    uint32 index = recvData.read<uint32>();
+    uint32 ignoreMask = recvData.read<uint32>();
+    ObjectGuid pieces[EQUIPMENT_SLOT_END];
+    for (uint32 i = 0; i < EQUIPMENT_SLOT_END; ++i)
     {
-        LOG_ERROR("entities.player.cheat", "Character GUID {} tried to create equipment set {} with too long a name!", _player->GetGUID().ToString(), setGuid);
-        return;
+        pieces[i] = Guid128::Read(recvData);
+        recvData.read_skip<int32>();                        // appearance
     }
+    recvData.read_skip<int32>();
+    recvData.read_skip<int32>();                            // enchants
+    for (uint8 i = 0; i < 4; ++i)
+        recvData.read_skip<int32>();                        // secondary appearances
+    bool hasSpecIndex = recvData.ReadBit();
+    uint32 nameLength = recvData.ReadBits(8);
+    uint32 iconLength = recvData.ReadBits(9);
+    recvData.ResetBitReader();
+    if (hasSpecIndex)
+        recvData.read_skip<int32>();
+    std::string name = recvData.ReadString(nameLength);
+    std::string iconName = recvData.ReadString(iconLength);
 
-    std::string iconName;
-    recvData >> iconName;
+    if (type != 0 || index >= MAX_EQUIPMENT_SET_INDEX)      // equipment sets only; transmog sets are not offered
+        return;
 
     if (iconName.length() > 100) // DB limitation
     {
@@ -2034,24 +2090,16 @@ void WorldSession::HandleEquipmentSetSave(WorldPacket& recvData)
     eqSet.Name      = name;
     eqSet.IconName  = iconName;
     eqSet.state     = EQUIPMENT_SET_NEW;
+    eqSet.IgnoreMask = ignoreMask & ((1 << EQUIPMENT_SLOT_END) - 1);
 
     for (uint32 i = 0; i < EQUIPMENT_SLOT_END; ++i)
     {
-        ObjectGuid itemGuid;
-        recvData >> itemGuid.ReadAsPacked();
+        ObjectGuid itemGuid = pieces[i];
 
-        // xinef: if client sends 0, it means empty slot
-        if (!itemGuid)
+        // the ignored slots are only in IgnoreMask; an empty GUID is an empty slot
+        if ((eqSet.IgnoreMask & (1 << i)) || !itemGuid)
         {
             eqSet.Items[i].Clear();
-            continue;
-        }
-
-        // equipment manager sends "1" (as raw GUID) for slots set to "ignore" (don't touch slot at equip set)
-        if (itemGuid.GetRawValue() == 1)
-        {
-            // ignored slots saved as bit mask because we have no free special values for Items[i]
-            eqSet.IgnoreMask |= 1 << i;
             continue;
         }
 
@@ -2073,8 +2121,8 @@ void WorldSession::HandleEquipmentSetDelete(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_EQUIPMENT_SET_DELETE");
 
-    uint64 setGuid;
-    recvData.readPackGUID(setGuid);
+    // 3.4.3 (writer FUN_14075d2a0): u64 SetGUID
+    uint64 setGuid = recvData.read<uint64>();
 
     _player->DeleteEquipmentSet(setGuid);
 }
@@ -2083,20 +2131,45 @@ void WorldSession::HandleEquipmentSetUse(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_USE_EQUIPMENT_SET");
 
+    // 3.4.3 (writer FUN_1407616e0, EquipmentManager): InvUpdate (2-bit count, flush, {u8, u8}), 19 x {PackedGuid128
+    // Item, u8 ContainerSlot, u8 Slot}, u64 set GUID. An ignored slot (or a missing item) carries a sentinel GUID
+    // (low ~0) that names no item: that slot is left alone. An empty GUID unequips the slot.
+    uint32 invCount = recvData.ReadBits(2);
+    recvData.ResetBitReader();
+    for (uint32 i = 0; i < invCount; ++i)
+        recvData.read_skip<uint16>();
+
+    struct UsedPiece
+    {
+        ObjectGuid Guid;
+        bool Ignored = false;
+    };
+    UsedPiece pieces[EQUIPMENT_SLOT_END];
+    for (UsedPiece& piece : pieces)
+    {
+        uint64 low, high;
+        Guid128::ReadPacked(recvData, low, high);
+        piece.Ignored = low == ~uint64(0);
+        if (!piece.Ignored)
+            piece.Guid = Guid128::Decode(low, high);
+        recvData.read_skip<uint8>();                        // ContainerSlot
+        recvData.read_skip<uint8>();                        // Slot
+    }
+    uint64 setGuid = recvData.read<uint64>();
+
+    uint32 ignoreMask = 0;
+    for (auto const& [setIndex, set] : _player->GetEquipmentSets())
+        if (set.Guid == setGuid)
+            ignoreMask = set.IgnoreMask;
+
     std::vector<std::unique_ptr<SavedItem>> savedItems;
     uint8 errorId = 0;
     for (uint32 i = 0; i < EQUIPMENT_SLOT_END; ++i)
     {
-        ObjectGuid itemGuid;
-        recvData >> itemGuid.ReadAsPacked();
+        ObjectGuid itemGuid = pieces[i].Guid;
 
-        uint8 srcbag, srcslot;
-        recvData >> srcbag >> srcslot;
-
-        LOG_DEBUG("entities.player.items", "Item {}: srcbag {}, srcslot {}", itemGuid.ToString(), srcbag, srcslot);
-
-        // check if item slot is set to "ignored" (raw value == 1), must not be unequipped then
-        if (itemGuid.GetRawValue() == 1)
+        // ignored slots must not be unequipped
+        if (pieces[i].Ignored || (ignoreMask & (1 << i)))
             continue;
 
         // Only equip weapons in combat
@@ -2167,7 +2240,9 @@ void WorldSession::HandleEquipmentSetUse(WorldPacket& recvData)
         }
     }
 
-    WorldPacket data(SMSG_USE_EQUIPMENT_SET_RESULT, 1);
+    // SMSG_USE_EQUIPMENT_SET_RESULT, 3.4.3 (handler FUN_141a7f140): u64 set GUID, u8 Reason (0 success, 4 bags full)
+    WorldPacket data(SMSG_USE_EQUIPMENT_SET_RESULT, 8 + 1);
+    data << uint64(setGuid);
     data << uint8(errorId);                                       // 4 - equipment swap failed - inventory is full
     SendPacket(&data);
 }
@@ -2176,7 +2251,26 @@ void WorldSession::HandleCharFactionOrRaceChange(WorldPacket& recvData)
 {
     std::shared_ptr<CharacterFactionChangeInfo> factionChangeInfo = std::make_shared<CharacterFactionChangeInfo>();
 
-    recvData >> factionChangeInfo->Guid;
+    // 3.4.3 (writer FUN_140765ab0): bit FactionChange, 6-bit name length, flush, PackedGuid128 Guid, u8 SexID, u8
+    // RaceID, u8 InitialRaceID, u32 customization count, the name, the customizations
+    factionChangeInfo->FactionChange = recvData.ReadBit();
+    uint32 nameLength = recvData.ReadBits(6);
+    recvData.ResetBitReader();
+    factionChangeInfo->Guid = Guid128::ReadPlayer(recvData);
+    factionChangeInfo->Gender = recvData.read<uint8>();
+    factionChangeInfo->Race = recvData.read<uint8>();
+    recvData.read_skip<uint8>();                            // InitialRaceID
+    uint32 customizationsCount = recvData.read<uint32>();
+    factionChangeInfo->Name = recvData.ReadString(nameLength);
+    if (customizationsCount > MAX_CHARACTER_CUSTOMIZATIONS)
+    {
+        recvData.rfinish();
+        SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
+        return;
+    }
+    factionChangeInfo->Customizations.resize(customizationsCount);
+    for (ChrCustomizationChoice& choice : factionChangeInfo->Customizations)
+        recvData >> choice.ChrCustomizationOptionID >> choice.ChrCustomizationChoiceID;
 
     if (!IsLegitCharacterForAccount(factionChangeInfo->Guid))
     {
@@ -2187,14 +2281,11 @@ void WorldSession::HandleCharFactionOrRaceChange(WorldPacket& recvData)
         return;
     }
 
-    recvData >> factionChangeInfo->Name
-             >> factionChangeInfo->Gender
-             >> factionChangeInfo->Skin
-             >> factionChangeInfo->HairColor
-             >> factionChangeInfo->HairStyle
-             >> factionChangeInfo->FacialHair
-             >> factionChangeInfo->Face
-             >> factionChangeInfo->Race;
+    if (!ValidCustomizationChoices(factionChangeInfo->Customizations))
+    {
+        SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
+        return;
+    }
 
     // pussywizard:
     if (ObjectAccessor::FindConnectedPlayer(factionChangeInfo->Guid) || sWorldSessionMgr->FindOfflineSessionForCharacterGUID(factionChangeInfo->Guid.GetCounter()))
@@ -2202,8 +2293,6 @@ void WorldSession::HandleCharFactionOrRaceChange(WorldPacket& recvData)
         SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
         return;
     }
-
-    factionChangeInfo->FactionChange = (recvData.GetOpcode() == CMSG_CHAR_RACE_OR_FACTION_CHANGE);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_RACE_OR_FACTION_CHANGE_INFOS);
     stmt->SetData(0, factionChangeInfo->Guid.GetCounter());
@@ -2387,6 +2476,7 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
     // Customize
     Player::Customize(factionChangeInfo.get(), trans);
+    SaveCustomizationChoices(trans, lowGuid, factionChangeInfo->Customizations);
 
     // Race Change
     {
@@ -2996,59 +3086,81 @@ void WorldSession::SendCharLoginFailed(LoginFailureReason reason)
     SendPacket(&data);
 };
 
+/// SMSG_CHARACTER_RENAME_RESULT, 3.4.3 (FUN_1406bb5d0, handler FUN_14167af40): u8 Result, bit HasGuid, 6-bit name
+/// length, flush, [PackedGuid128 Guid], the name
 void WorldSession::SendCharRename(ResponseCodes result, CharacterRenameInfo const* renameInfo)
 {
-    WorldPacket data(SMSG_CHARACTER_RENAME_RESULT, 1 + 8 + renameInfo->Name.size() + 1);
+    bool success = result == RESPONSE_SUCCESS;
+    std::string_view name = success ? std::string_view(renameInfo->Name).substr(0, 63) : std::string_view();
+    WorldPacket data(SMSG_CHARACTER_RENAME_RESULT, 2 + 18 + name.size());
     data << uint8(result);
-    if (result == RESPONSE_SUCCESS)
-    {
-        data << renameInfo->Guid;
-        data << renameInfo->Name;
-    }
+    data.WriteBit(success);
+    data.WriteBits(name.size(), 6);
+    data.FlushBits();
+    if (success)
+        Guid128::WritePlayer(data, renameInfo->Guid);
+    data.WriteString(name);
     SendPacket(&data);
 }
 
+/// SMSG_CHAR_FACTION_CHANGE_RESULT, 3.4.3 (FUN_1406bb420, handler FUN_141681ba0): u8 Result, PackedGuid128 Guid, bit
+/// HasDisplayInfo, flush, [6-bit name length, flush, u8 SexID, u8 RaceID, u32 customization count, the name, the
+/// customizations]
 void WorldSession::SendCharFactionChange(ResponseCodes result, CharacterFactionChangeInfo const* factionChangeInfo)
 {
-    WorldPacket data(SMSG_CHAR_FACTION_CHANGE_RESULT, 1 + 8 + factionChangeInfo->Name.size() + 1 + 7);
+    bool success = result == RESPONSE_SUCCESS;
+    std::string_view name = std::string_view(factionChangeInfo->Name).substr(0, 63);
+    WorldPacket data(SMSG_CHAR_FACTION_CHANGE_RESULT, 1 + 18 + 8 + name.size() + factionChangeInfo->Customizations.size() * 8);
     data << uint8(result);
-    if (result == RESPONSE_SUCCESS)
+    Guid128::WritePlayer(data, factionChangeInfo->Guid);
+    data.WriteBit(success);
+    data.FlushBits();
+    if (success)
     {
-        data << factionChangeInfo->Guid;
-        data << factionChangeInfo->Name;
+        data.WriteBits(name.size(), 6);
+        data.FlushBits();
         data << uint8(factionChangeInfo->Gender);
-        data << uint8(factionChangeInfo->Skin);
-        data << uint8(factionChangeInfo->Face);
-        data << uint8(factionChangeInfo->HairStyle);
-        data << uint8(factionChangeInfo->HairColor);
-        data << uint8(factionChangeInfo->FacialHair);
         data << uint8(factionChangeInfo->Race);
+        data << uint32(factionChangeInfo->Customizations.size());
+        data.WriteString(name);
+        for (ChrCustomizationChoice const& c : factionChangeInfo->Customizations)
+            data << uint32(c.ChrCustomizationOptionID) << uint32(c.ChrCustomizationChoiceID);
     }
     SendPacket(&data);
 }
 
+/// 3.4.3 splits the answer: SMSG_CHAR_CUSTOMIZE_SUCCESS (FUN_1406bb2e0, handler FUN_141681a90): PackedGuid128 CharGUID,
+/// u8 SexID, u32 customization count, the customizations, 6-bit name length, flush, the name;
+/// SMSG_CHAR_CUSTOMIZE_FAILURE (FUN_1406bb280, handler FUN_141681a50): u8 Result, PackedGuid128 CharGUID
 void WorldSession::SendCharCustomize(ResponseCodes result, CharacterCustomizeInfo const* customizeInfo)
 {
-    WorldPacket data(SMSG_CHAR_CUSTOMIZE_SUCCESS, 1 + 8 + customizeInfo->Name.size() + 1 + 6);
-    data << uint8(result);
-    if (result == RESPONSE_SUCCESS)
+    if (result != RESPONSE_SUCCESS)
     {
-        data << customizeInfo->Guid;
-        data << customizeInfo->Name;
-        data << uint8(customizeInfo->Gender);
-        data << uint8(customizeInfo->Skin);
-        data << uint8(customizeInfo->Face);
-        data << uint8(customizeInfo->HairStyle);
-        data << uint8(customizeInfo->HairColor);
-        data << uint8(customizeInfo->FacialHair);
+        WorldPacket data(SMSG_CHAR_CUSTOMIZE_FAILURE, 1 + 18);
+        data << uint8(result);
+        Guid128::WritePlayer(data, customizeInfo->Guid);
+        SendPacket(&data);
+        return;
     }
+
+    std::string_view name = std::string_view(customizeInfo->Name).substr(0, 63);
+    WorldPacket data(SMSG_CHAR_CUSTOMIZE_SUCCESS, 18 + 5 + customizeInfo->Customizations.size() * 8 + 1 + name.size());
+    Guid128::WritePlayer(data, customizeInfo->Guid);
+    data << uint8(customizeInfo->Gender);
+    data << uint32(customizeInfo->Customizations.size());
+    for (ChrCustomizationChoice const& c : customizeInfo->Customizations)
+        data << uint32(c.ChrCustomizationOptionID) << uint32(c.ChrCustomizationChoiceID);
+    data.WriteBits(name.size(), 6);
+    data.FlushBits();
+    data.WriteString(name);
     SendPacket(&data);
 }
 
+/// SMSG_SET_PLAYER_DECLINED_NAMES_RESULT, 3.4.3 (inline, handler FUN_14167b8a0): u32 ResultCode, PackedGuid128 Player
 void WorldSession::SendSetPlayerDeclinedNamesResult(DeclinedNameResult result, ObjectGuid guid)
 {
-    WorldPacket data(SMSG_SET_PLAYER_DECLINED_NAMES_RESULT, 4 + 8);
+    WorldPacket data(SMSG_SET_PLAYER_DECLINED_NAMES_RESULT, 4 + 18);
     data << uint32(result);
-    data << guid;
+    Guid128::WritePlayer(data, guid);
     SendPacket(&data);
 }

@@ -1068,10 +1068,10 @@ bool Item::IsLimitedToAnotherMapOrZone(uint32 cur_mapId, uint32 cur_zoneId) cons
 
 void Item::SendUpdateSockets()
 {
-    WorldPacket data(SMSG_SOCKET_GEMS_SUCCESS, 8 + 4 + 4 + 4 + 4);
-    data << GetGUID();
-    for (uint32 i = SOCK_ENCHANTMENT_SLOT; i <= BONUS_ENCHANTMENT_SLOT; ++i)
-        data << uint32(GetEnchantmentId(EnchantmentSlot(i)));
+    // SMSG_SOCKET_GEMS_SUCCESS, 3.4.3 (FUN_1406b8960, handler FUN_1417378b0): PackedGuid128 Item; the enchantments
+    // travel in the item's update fields
+    WorldPacket data(SMSG_SOCKET_GEMS_SUCCESS, 18);
+    Guid128::Write(data, GetGUID());
 
     GetOwner()->SendDirectMessage(&data);
 }
