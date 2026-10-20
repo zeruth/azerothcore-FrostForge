@@ -611,14 +611,16 @@ void WorldSession::HandleCharacterAuraFrozen(PreparedQueryResult result)
     } while (result->NextRow());
 }
 
+/// CMSG_BUG_REPORT, 3.4.3 (FUN_140764cb0, Lua ReportBug / ReportSuggestion): bit Type (0 bug, 1 suggestion), bits(12)
+/// DiagInfoLen, bits(10) TextLen, flush, DiagInfo, Text
 void WorldSession::HandleBugOpcode(WorldPacket& recv_data)
 {
-    uint32 suggestion, contentlen, typelen;
-    std::string content, type;
-
-    recv_data >> suggestion >> contentlen >> content;
-
-    recv_data >> typelen >> type;
+    bool suggestion = recv_data.ReadBit();
+    uint32 diagLength = recv_data.ReadBits(12);
+    uint32 textLength = recv_data.ReadBits(10);
+    std::string diagInfo = recv_data.ReadString(diagLength);
+    std::string content = recv_data.ReadString(textLength);
+    std::string type = suggestion ? "Suggestion" : "Bug";
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_BUG_REPORT);
 
@@ -1439,7 +1441,9 @@ void WorldSession::HandleComplainOpcode(WorldPackets::Misc::Complain& packet)
     // if it's mail spam - ALL mails from this spammer automatically removed by client
 
     // Complaint Received message
-    SendPacket(WorldPackets::Misc::ComplainResult().Write());
+    WorldPackets::Misc::ComplainResult result;
+    result.ComplaintType = packet.SpamType;
+    SendPacket(result.Write());
 
     if (sWorld->getBoolConfig(CONFIG_LOGSPAMREPORTS))
     {
@@ -1846,8 +1850,8 @@ void WorldSession::HandleRequestPetInfo(WorldPackets::Pet::RequestPetInfo& /*pac
 
 void WorldSession::HandleSetTaxiBenchmarkOpcode(WorldPacket& recv_data)
 {
-    uint8 mode;
-    recv_data >> mode;
+    // 3.4.3 (writer FUN_1407609a0): bit Enable, flush
+    uint8 mode = recv_data.ReadBit() ? 1 : 0;
 
     mode ? _player->SetPlayerFlag(PLAYER_FLAGS_TAXI_BENCHMARK) : _player->RemovePlayerFlag(PLAYER_FLAGS_TAXI_BENCHMARK);
 
@@ -1997,17 +2001,21 @@ void WorldSession::HandleUpdateMissileTrajectory(WorldPacket& recvPacket)
 {
     LOG_DEBUG("network", "WORLD: CMSG_UPDATE_MISSILE_TRAJECTORY");
 
-    ObjectGuid guid;
+    // 3.4.3 (writer FUN_140761580): PackedGuid128 Guid, PackedGuid128 CastID, u16 MoveMsgID, i32 SpellID, f32 Pitch,
+    // f32 Speed, f32 FirePos x/y/z, f32 ImpactPos x/y/z, bit HasStatus, flush, [the movement status, as the MoveMsgID
+    // opcode would carry it]
+    ObjectGuid guid = Guid128::Read(recvPacket);
+    Guid128::Read(recvPacket);                              // CastID
+    uint16 moveMsgId;
     uint32 spellId;
     float elevation, speed;
     float curX, curY, curZ;
     float targetX, targetY, targetZ;
-    uint8 moveStop;
 
-    recvPacket >> guid >> spellId >> elevation >> speed;
+    recvPacket >> moveMsgId >> spellId >> elevation >> speed;
     recvPacket >> curX >> curY >> curZ;
     recvPacket >> targetX >> targetY >> targetZ;
-    recvPacket >> moveStop;
+    bool moveStop = recvPacket.ReadBit();
 
     Unit* caster = ObjectAccessor::GetUnit(*_player, guid);
     Spell* spell = caster ? caster->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
@@ -2030,9 +2038,7 @@ void WorldSession::HandleUpdateMissileTrajectory(WorldPacket& recvPacket)
 
     if (moveStop)
     {
-        uint32 opcode;
-        recvPacket >> opcode;
-        recvPacket.SetOpcode(opcode);
+        recvPacket.SetOpcode(moveMsgId);
         HandleMovementOpcodes(recvPacket);
     }
 }

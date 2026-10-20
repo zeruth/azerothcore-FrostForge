@@ -21,6 +21,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "QueryResult.h"
 #include <unordered_map>
@@ -500,27 +501,51 @@ std::string CalendarEvent::BuildCalendarMailBody() const
     return strm.str();
 }
 
+uint32 CalendarMgr::GetWireFlags(CalendarEvent const& calendarEvent)
+{
+    return calendarEvent.GetFlags() | (calendarEvent.IsGuildEvent() ? 0x800 : 0);
+}
+
+uint64 CalendarMgr::GetClubId(CalendarEvent const& calendarEvent)
+{
+    return (calendarEvent.IsGuildEvent() || calendarEvent.IsGuildAnnouncement()) ? uint64(calendarEvent.GetGuildId()) : 0;
+}
+
+uint8 CalendarMgr::GetWireError(CalendarError err)
+{
+    // 3.4.3's table (handler FUN_141c345e0): AzerothCore's 0..9 and 38..40 keep their numbers, 10..29 move up by
+    // one, EVENT_WRONG_SERVER is 37, and INVITE_WRONG_SERVER has no counterpart (INTERNAL)
+    uint32 e = uint32(err);
+    if (e >= 10 && e <= 29)
+        return uint8(e + 1);
+    if (err == CALENDAR_ERROR_EVENT_WRONG_SERVER)
+        return 37;
+    if (err == CALENDAR_ERROR_INVITE_WRONG_SERVER)
+        return uint8(CALENDAR_ERROR_INTERNAL);
+    return uint8(e);
+}
+
+/// SMSG_CALENDAR_INVITE_ADDED, 3.4.3 (FUN_1406ba0a0): PackedGuid128 InviteGuid, u64 EventID, u64 InviteID, u8 Level,
+/// u8 Status, u8 Type (1: a sign-up), packed ResponseTime, bit ClearPending, flush
 void CalendarMgr::SendCalendarEventInvite(CalendarInvite const& invite)
 {
     CalendarEvent* calendarEvent = GetEvent(invite.GetEventId());
-    time_t statusTime = invite.GetStatusTime();
-    bool hasStatusTime = statusTime != 946684800;   // 01/01/2000 00:00:00
 
     ObjectGuid invitee = invite.GetInviteeGUID();
     Player* player = ObjectAccessor::FindConnectedPlayer(invitee);
 
     uint8 level = player ? player->GetLevel() : sCharacterCache->GetCharacterLevelByGuid(invitee);
 
-    WorldPacket data(SMSG_CALENDAR_INVITE_ADDED, 8 + 8 + 8 + 1 + 1 + 1 + (statusTime ? 4 : 0) + 1);
-    data << invitee.WriteAsPacked();
+    WorldPacket data(SMSG_CALENDAR_INVITE_ADDED, 18 + 8 + 8 + 3 + 4 + 1);
+    Guid128::Write(data, invitee);
     data << uint64(invite.GetEventId());
     data << uint64(invite.GetInviteId());
     data << uint8(level);
     data << uint8(invite.GetStatus());
-    data << uint8(hasStatusTime);
-    if (hasStatusTime)
-        data.AppendPackedTime(statusTime);
-    data << uint8(invite.GetSenderGUID() != invite.GetInviteeGUID()); // false only if the invite is sign-up
+    data << uint8(invite.GetSenderGUID() == invite.GetInviteeGUID() ? 1 : 0);
+    data.AppendPackedTime(invite.GetStatusTime());
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
 
     if (!calendarEvent) // Pre-invite
     {
@@ -534,86 +559,110 @@ void CalendarMgr::SendCalendarEventInvite(CalendarInvite const& invite)
     }
 }
 
+/// SMSG_CALENDAR_EVENT_UPDATED_ALERT, 3.4.3 (FUN_1406b9ee0): u64 EventClubID, u64 EventID, packed OriginalDate, Date,
+/// LockDate, u32 Flags, i32 TextureID, u8 EventType, bits(8) NameLen, bits(11) DescriptionLen, bit ClearPending, flush,
+/// the strings
 void CalendarMgr::SendCalendarEventUpdateAlert(CalendarEvent const& calendarEvent, time_t oldEventTime)
 {
-    WorldPacket data(SMSG_CALENDAR_EVENT_UPDATED_ALERT, 1 + 8 + 4 + 4 + 4 + 1 + 4 +
-                     calendarEvent.GetTitle().size() + calendarEvent.GetDescription().size() + 1 + 4 + 4);
-    data << uint8(1);       // unk
+    std::string const& title = calendarEvent.GetTitle();
+    std::string const& description = calendarEvent.GetDescription();
+    WorldPacket data(SMSG_CALENDAR_EVENT_UPDATED_ALERT, 8 + 8 + 12 + 4 + 4 + 1 + 3 + title.size() + description.size());
+    data << uint64(GetClubId(calendarEvent));
     data << uint64(calendarEvent.GetEventId());
     data.AppendPackedTime(oldEventTime);
-    data << uint32(calendarEvent.GetFlags());
     data.AppendPackedTime(calendarEvent.GetEventTime());
-    data << uint8(calendarEvent.GetType());
+    data << uint32(0);                                      // LockDate
+    data << uint32(GetWireFlags(calendarEvent));
     data << int32(calendarEvent.GetDungeonId());
-    data << calendarEvent.GetTitle();
-    data << calendarEvent.GetDescription();
-    data << uint8(CALENDAR_REPEAT_NEVER);   // repeatable
-    data << uint32(CALENDAR_MAX_INVITES);
-    data << uint32(0);      // unk
+    data << uint8(calendarEvent.GetType());
+    data.WriteBits(title.size(), 8);
+    data.WriteBits(description.size(), 11);
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
+    data.WriteString(title);
+    data.WriteString(description);
 
     SendPacketToAllEventRelatives(data, calendarEvent);
 }
 
+/// SMSG_CALENDAR_INVITE_STATUS, 3.4.3 (FUN_1406ba5f0): PackedGuid128 InviteGuid, u64 EventID, packed Date, u32 Flags,
+/// u8 Status, packed ResponseTime, bit ClearPending, flush. 3.3.5's rank is gone.
 void CalendarMgr::SendCalendarEventStatus(CalendarEvent const& calendarEvent, CalendarInvite const& invite)
 {
-    WorldPacket data(SMSG_CALENDAR_INVITE_STATUS, 8 + 8 + 4 + 4 + 1 + 1 + 4);
-    data << invite.GetInviteeGUID().WriteAsPacked();
+    WorldPacket data(SMSG_CALENDAR_INVITE_STATUS, 18 + 8 + 4 + 4 + 1 + 4 + 1);
+    Guid128::Write(data, invite.GetInviteeGUID());
     data << uint64(calendarEvent.GetEventId());
     data.AppendPackedTime(calendarEvent.GetEventTime());
-    data << uint32(calendarEvent.GetFlags());
+    data << uint32(GetWireFlags(calendarEvent));
     data << uint8(invite.GetStatus());
-    data << uint8(invite.GetRank());
     data.AppendPackedTime(invite.GetStatusTime());
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
 
     SendPacketToAllEventRelatives(data, calendarEvent);
 }
 
+/// SMSG_CALENDAR_EVENT_REMOVED_ALERT, 3.4.3 (FUN_1406b9e50): u64 EventID, packed Date, bit ClearPending, flush
 void CalendarMgr::SendCalendarEventRemovedAlert(CalendarEvent const& calendarEvent)
 {
-    WorldPacket data(SMSG_CALENDAR_EVENT_REMOVED_ALERT, 1 + 8 + 1);
-    data << uint8(1); // FIXME: If true does not SignalEvent(EVENT_CALENDAR_ACTION_PENDING)
+    WorldPacket data(SMSG_CALENDAR_EVENT_REMOVED_ALERT, 8 + 4 + 1);
     data << uint64(calendarEvent.GetEventId());
     data.AppendPackedTime(calendarEvent.GetEventTime());
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
 
     SendPacketToAllEventRelatives(data, calendarEvent);
 }
 
+/// SMSG_CALENDAR_INVITE_REMOVED, 3.4.3 (FUN_1406ba530): PackedGuid128 InviteGuid, u64 EventID, u32 Flags, bit
+/// ClearPending, flush
 void CalendarMgr::SendCalendarEventInviteRemove(CalendarEvent const& calendarEvent, CalendarInvite const& invite, uint32 flags)
 {
-    WorldPacket data(SMSG_CALENDAR_INVITE_REMOVED, 8 + 4 + 4 + 1);
-    data<< invite.GetInviteeGUID().WriteAsPacked();
+    WorldPacket data(SMSG_CALENDAR_INVITE_REMOVED, 18 + 8 + 4 + 1);
+    Guid128::Write(data, invite.GetInviteeGUID());
     data << uint64(invite.GetEventId());
-    data << uint32(flags);
-    data << uint8(1); // FIXME
+    data << uint32(flags | (calendarEvent.IsGuildEvent() ? 0x800 : 0));
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
 
     SendPacketToAllEventRelatives(data, calendarEvent);
 }
 
+/// SMSG_CALENDAR_MODERATOR_STATUS, 3.4.3 (FUN_1406ba700): PackedGuid128 InviteGuid, u64 EventID, u8 Status (the
+/// rank), bit ClearPending, flush
 void CalendarMgr::SendCalendarEventModeratorStatusAlert(CalendarEvent const& calendarEvent, CalendarInvite const& invite)
 {
-    WorldPacket data(SMSG_CALENDAR_MODERATOR_STATUS, 8 + 8 + 1 + 1);
-    data << invite.GetInviteeGUID().WriteAsPacked();
+    WorldPacket data(SMSG_CALENDAR_MODERATOR_STATUS, 18 + 8 + 1 + 1);
+    Guid128::Write(data, invite.GetInviteeGUID());
     data << uint64(invite.GetEventId());
     data << uint8(invite.GetRank());
-    data << uint8(1); // Unk boolean - Display to client?
+    data.WriteBit(true);                                    // ClearPending
+    data.FlushBits();
 
     SendPacketToAllEventRelatives(data, calendarEvent);
 }
 
+/// SMSG_CALENDAR_INVITE_ALERT, 3.4.3 (FUN_1406ba1d0): u64 EventID, packed Date, u32 Flags, u8 EventType, i32
+/// TextureID, u64 EventClubID, u64 InviteID, u8 Status, u8 ModeratorStatus, PackedGuid128 OwnerGuid, PackedGuid128
+/// InvitedByGuid, bits(8) NameLen, flush, Name
 void CalendarMgr::SendCalendarEventInviteAlert(CalendarEvent const& calendarEvent, CalendarInvite const& invite)
 {
-    WorldPacket data(SMSG_CALENDAR_INVITE_ALERT);
+    std::string const& title = calendarEvent.GetTitle();
+    WorldPacket data(SMSG_CALENDAR_INVITE_ALERT, 8 + 4 + 4 + 1 + 4 + 8 + 8 + 2 + 36 + 1 + title.size());
     data << uint64(calendarEvent.GetEventId());
-    data << calendarEvent.GetTitle();
     data.AppendPackedTime(calendarEvent.GetEventTime());
-    data << uint32(calendarEvent.GetFlags());
-    data << uint32(calendarEvent.GetType());
+    data << uint32(GetWireFlags(calendarEvent));
+    data << uint8(calendarEvent.GetType());
     data << int32(calendarEvent.GetDungeonId());
+    data << uint64(GetClubId(calendarEvent));
     data << uint64(invite.GetInviteId());
     data << uint8(invite.GetStatus());
     data << uint8(invite.GetRank());
-    data << calendarEvent.GetCreatorGUID().WriteAsPacked();
-    data << invite.GetSenderGUID().WriteAsPacked();
+    Guid128::Write(data, calendarEvent.GetCreatorGUID());
+    Guid128::Write(data, invite.GetSenderGUID());
+    data.WriteBits(title.size(), 8);
+    data.FlushBits();
+    data.WriteString(title);
 
     if (calendarEvent.IsGuildEvent() || calendarEvent.IsGuildAnnouncement())
     {
@@ -624,6 +673,10 @@ void CalendarMgr::SendCalendarEventInviteAlert(CalendarEvent const& calendarEven
         player->SendDirectMessage(&data);
 }
 
+/// SMSG_CALENDAR_SEND_EVENT, 3.4.3 (FUN_1406f9180): u8 EventType (get / add / copy), PackedGuid128 OwnerGuid, u64
+/// EventID, u8 GetEventType, i32 TextureID, u32 Flags, packed Date, packed LockDate, u64 EventClubID, u32 InviteCount,
+/// bits(8) NameLen, bits(11) DescriptionLen, flush, the invites (PackedGuid128, u64 InviteID, u8 Level, u8 Status, u8
+/// Moderator, u8 InviteType, packed ResponseTime, bits(8) NotesLen, flush, Notes), the strings
 void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calendarEvent, CalendarSendEventType sendType)
 {
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
@@ -631,23 +684,24 @@ void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calend
         return;
 
     CalendarInviteStore const& eventInviteeList = _invites[calendarEvent.GetEventId()];
+    std::string const& title = calendarEvent.GetTitle();
+    std::string const& description = calendarEvent.GetDescription();
 
-    WorldPacket data(SMSG_CALENDAR_SEND_EVENT, 60 + eventInviteeList.size() * 32);
+    WorldPacket data(SMSG_CALENDAR_SEND_EVENT, 60 + title.size() + description.size() + eventInviteeList.size() * 40);
     data << uint8(sendType);
-    data << calendarEvent.GetCreatorGUID().WriteAsPacked();
+    Guid128::Write(data, calendarEvent.GetCreatorGUID());
     data << uint64(calendarEvent.GetEventId());
-    data << calendarEvent.GetTitle();
-    data << calendarEvent.GetDescription();
     data << uint8(calendarEvent.GetType());
-    data << uint8(CALENDAR_REPEAT_NEVER);   // repeatable
-    data << uint32(CALENDAR_MAX_INVITES);
     data << int32(calendarEvent.GetDungeonId());
-    data << uint32(calendarEvent.GetFlags());
+    data << uint32(GetWireFlags(calendarEvent));
     data.AppendPackedTime(calendarEvent.GetEventTime());
-    data.AppendPackedTime(calendarEvent.GetTimeZoneTime());
-    data << uint32(calendarEvent.GetGuildId());
-
+    data << uint32(0);                                      // LockDate
+    data << uint64(GetClubId(calendarEvent));
     data << uint32(eventInviteeList.size());
+    data.WriteBits(title.size(), 8);
+    data.WriteBits(description.size(), 11);
+    data.FlushBits();
+
     for (CalendarInviteStore::const_iterator itr = eventInviteeList.begin(); itr != eventInviteeList.end(); ++itr)
     {
         CalendarInvite const* calendarInvite = (*itr);
@@ -656,20 +710,28 @@ void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calend
 
         uint8 inviteeLevel = invitee ? invitee->GetLevel() : sCharacterCache->GetCharacterLevelByGuid(inviteeGuid);
         uint32 inviteeGuildId = invitee ? invitee->GetGuildId() : sCharacterCache->GetCharacterGuildIdByGuid(inviteeGuid);
+        std::string const& notes = calendarInvite->GetText();
 
-        data << inviteeGuid.WriteAsPacked();
+        Guid128::Write(data, inviteeGuid);
+        data << uint64(calendarInvite->GetInviteId());
         data << uint8(inviteeLevel);
         data << uint8(calendarInvite->GetStatus());
         data << uint8(calendarInvite->GetRank());
-        data << uint8(calendarEvent.IsGuildEvent() && calendarEvent.GetGuildId() == inviteeGuildId);
-        data << uint64(calendarInvite->GetInviteId());
+        data << uint8(calendarEvent.IsGuildEvent() && calendarEvent.GetGuildId() == inviteeGuildId ? 1 : 0);
         data.AppendPackedTime(calendarInvite->GetStatusTime());
-        data << calendarInvite->GetText();
+        data.WriteBits(std::min<std::size_t>(notes.size(), 255), 8);
+        data.FlushBits();
+        data.WriteString(std::string_view(notes).substr(0, 255));
     }
+
+    data.WriteString(title);
+    data.WriteString(description);
 
     player->SendDirectMessage(&data);
 }
 
+/// SMSG_CALENDAR_INVITE_REMOVED_ALERT, 3.4.3 (raw, handler FUN_141c3fce0): u64 EventID, packed Date, u32 Flags, u8
+/// Status
 void CalendarMgr::SendCalendarEventInviteRemoveAlert(ObjectGuid guid, CalendarEvent const& calendarEvent, CalendarInviteStatus status)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
@@ -677,7 +739,7 @@ void CalendarMgr::SendCalendarEventInviteRemoveAlert(ObjectGuid guid, CalendarEv
         WorldPacket data(SMSG_CALENDAR_INVITE_REMOVED_ALERT, 8 + 4 + 4 + 1);
         data << uint64(calendarEvent.GetEventId());
         data.AppendPackedTime(calendarEvent.GetEventTime());
-        data << uint32(calendarEvent.GetFlags());
+        data << uint32(GetWireFlags(calendarEvent));
         data << uint8(status);
 
         player->SendDirectMessage(&data);
@@ -693,26 +755,31 @@ void CalendarMgr::SendCalendarClearPendingAction(ObjectGuid guid)
     }
 }
 
+/// SMSG_CALENDAR_COMMAND_RESULT, 3.4.3 (FUN_1406b9cb0): u8 Command (unread), u8 Result (GetWireError), bits(9)
+/// NameLen, flush, Name (the %s of the errors that have one)
 void CalendarMgr::SendCalendarCommandResult(ObjectGuid guid, CalendarError err, char const* param /*= nullptr*/)
 {
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
     {
-        WorldPacket data(SMSG_CALENDAR_COMMAND_RESULT, 0);
-        data << uint32(0);
-        data << uint8(0);
+        std::string_view name;
         switch (err)
         {
             case CALENDAR_ERROR_OTHER_INVITES_EXCEEDED:
             case CALENDAR_ERROR_ALREADY_INVITED_TO_EVENT_S:
             case CALENDAR_ERROR_IGNORING_YOU_S:
-                data << param;
+                if (param)
+                    name = param;
                 break;
             default:
-                data << uint8(0);
                 break;
         }
 
-        data << uint32(err);
+        WorldPacket data(SMSG_CALENDAR_COMMAND_RESULT, 2 + 2 + name.size());
+        data << uint8(0);
+        data << uint8(GetWireError(err));
+        data.WriteBits(name.size(), 9);
+        data.FlushBits();
+        data.WriteString(name);
 
         player->SendDirectMessage(&data);
     }

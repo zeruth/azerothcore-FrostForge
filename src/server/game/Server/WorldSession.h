@@ -809,6 +809,10 @@ public:                                                 // opcodes handlers
     void HandleGMTicketSystemStatusOpcode(WorldPacket& recvPacket);
     void HandleGMSurveySubmit(WorldPacket& recvPacket);
     void HandleReportLag(WorldPacket& recvPacket);
+    void HandleSupportTicketSubmitBug(WorldPacket& recvData);
+    void HandleSupportTicketSubmitComplaint(WorldPacket& recvData);
+    void HandleGMTicketGetCaseStatusOpcode(WorldPacket& recvData);
+    void CreateSupportTicket(uint32 mapId, float x, float y, float z, std::string const& message);
 
     void HandleTogglePvP(WorldPacket& recvPacket);
 
@@ -1240,6 +1244,7 @@ public:                                                 // opcodes handlers
     void HandleCalendarComplain(WorldPackets::Calendar::CalendarComplain& packet);
     void HandleCalendarGetNumPending(WorldPacket& recvData);
     void HandleCalendarEventSignup(WorldPacket& recvData);
+    void HandleCalendarCommunityInvite(WorldPacket& recvData);
 
     void SendCalendarRaidLockout(InstanceSave const* save, bool add);
     void SendCalendarRaidLockoutUpdated(InstanceSave const* save, bool isExtended);

@@ -18,11 +18,13 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "Vehicle.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+/// CMSG_MOVE_DISMISS_VEHICLE, 3.4.3 (writer FUN_140761d40): the movement status only (it starts with the mover)
 void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_MOVE_DISMISS_VEHICLE");
@@ -35,8 +37,9 @@ void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
         return;
     }
 
-    ObjectGuid guid;
-    recvData >> guid.ReadAsPacked();
+    MovementInfo mi;
+    ReadMovementInfo(recvData, &mi);
+    ObjectGuid guid = mi.guid;
 
     // pussywizard: typical check for incomming movement packets
     if (!_player->m_mover || !_player->m_mover->IsInWorld() || _player->m_mover->IsDuringRemoveFromWorld() || guid != _player->m_mover->GetGUID())
@@ -46,10 +49,6 @@ void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
         return;
     }
 
-    MovementInfo mi;
-    mi.guid = guid;
-    ReadMovementInfo(recvData, &mi);
-
     if (_player->m_mover->IsRooted()) // for some reason client sends it without it even if rooted
         mi.AddMovementFlag(MOVEMENTFLAG_ROOT);
 
@@ -58,6 +57,9 @@ void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
     _player->ExitVehicle();
 }
 
+/// 3.4.3: CMSG_REQUEST_VEHICLE_PREV_SEAT / NEXT_SEAT (FUN_140760080 / FUN_140760060) are empty;
+/// CMSG_REQUEST_VEHICLE_SWITCH_SEAT (FUN_1407600a0): PackedGuid128 Vehicle, u8 SeatIndex;
+/// CMSG_MOVE_CHANGE_VEHICLE_SEATS (FUN_140761c10): the movement status, PackedGuid128 DstVehicle, u8 DstSeatIndex
 void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_MOVE_CHANGE_VEHICLE_SEATS");
@@ -88,26 +90,20 @@ void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
             break;
         case CMSG_MOVE_CHANGE_VEHICLE_SEATS:
             {
-                ObjectGuid guid;        // current vehicle guid
-                recvData >> guid.ReadAsPacked();
+                MovementInfo movementInfo;
+                ReadMovementInfo(recvData, &movementInfo);
 
                 // pussywizard:
-                if (vehicle_base->GetGUID() != guid)
+                if (vehicle_base->GetGUID() != movementInfo.guid)
                 {
                     recvData.rfinish(); // prevent warnings spam
                     return;
                 }
 
-                MovementInfo movementInfo;
-                movementInfo.guid = guid;
-                ReadMovementInfo(recvData, &movementInfo);
                 vehicle_base->m_movementInfo = movementInfo;
 
-                ObjectGuid accessory;        //  accessory guid
-                recvData >> accessory.ReadAsPacked();
-
-                int8 seatId;
-                recvData >> seatId;
+                ObjectGuid accessory = Guid128::Read(recvData);
+                int8 seatId = recvData.read<int8>();
 
                 if (!accessory)
                     GetPlayer()->ChangeSeat(-1, seatId > 0); // prev/next
@@ -121,11 +117,8 @@ void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
             }
         case CMSG_REQUEST_VEHICLE_SWITCH_SEAT:
             {
-                ObjectGuid guid;        // current vehicle guid
-                recvData >> guid.ReadAsPacked();
-
-                int8 seatId;
-                recvData >> seatId;
+                ObjectGuid guid = Guid128::Read(recvData);  // current vehicle guid
+                int8 seatId = recvData.read<int8>();
 
                 if (vehicle_base->GetGUID() == guid)
                     GetPlayer()->ChangeSeat(seatId);
@@ -140,11 +133,10 @@ void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
     }
 }
 
+/// CMSG_RIDE_VEHICLE_INTERACT, 3.4.3 (FUN_1407600f0): PackedGuid128 Vehicle
 void WorldSession::HandleEnterPlayerVehicle(WorldPacket& data)
 {
-    // Read guid
-    ObjectGuid guid;
-    data >> guid;
+    ObjectGuid guid = Guid128::Read(data);
 
     if (Player* player = ObjectAccessor::GetPlayer(*_player, guid))
     {
@@ -172,8 +164,7 @@ void WorldSession::HandleEjectPassenger(WorldPacket& data)
         return;
     }
 
-    ObjectGuid guid;
-    data >> guid;
+    ObjectGuid guid = Guid128::Read(data);                 // 3.4.3 (FUN_14075d480): PackedGuid128 Passenger
 
     if (guid.IsPlayer())
     {

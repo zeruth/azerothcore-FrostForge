@@ -339,6 +339,14 @@ public:
     void SendCalendarCommandResult(ObjectGuid guid, CalendarError err, char const* param = nullptr);
 
     void SendPacketToAllEventRelatives(WorldPacket packet, CalendarEvent const& calendarEvent);
+
+    /// 3.4.3's view of an event's flags: 0x400 alone is a community event, a guild event is 0x800 (the client creates
+    /// guild sign-ups with 0xC00), so AzerothCore's guild events go out with 0x800 added
+    static uint32 GetWireFlags(CalendarEvent const& calendarEvent);
+    /// The event's club: the guild for a guild event or announcement, otherwise none
+    static uint64 GetClubId(CalendarEvent const& calendarEvent);
+    /// CalendarError in 3.4.3's numbering (the client inserted COMMUNITY_PLAYER_NOT_IN_COMMUNITY at 10)
+    static uint8 GetWireError(CalendarError err);
 };
 
 #define sCalendarMgr CalendarMgr::instance()

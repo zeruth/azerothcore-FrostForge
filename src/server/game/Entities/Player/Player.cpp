@@ -13299,7 +13299,19 @@ void Player::SetClientControl(Unit* target, bool allowMove, bool packetOnly /*= 
         SetViewpoint(target, allowMove);
 
     if (allowMove)
+    {
+        Unit* previousMover = m_mover;
         SetMover(target);
+
+        // SMSG_MOVE_SET_ACTIVE_MOVER, 3.4.3 (handler FUN_141735da0): PackedGuid128 MoverGUID. The client switches the
+        // unit it drives (a vehicle or charm, or itself again) and answers CMSG_SET_ACTIVE_MOVER.
+        if (previousMover != target)
+        {
+            WorldPacket mover(SMSG_MOVE_SET_ACTIVE_MOVER, 18);
+            Guid128::Write(mover, target->GetGUID());
+            SendDirectMessage(&mover);
+        }
+    }
 
     // Xinef: disable moving if target has disable move flag
     if (!target->IsCreature())

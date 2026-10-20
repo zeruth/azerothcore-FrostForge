@@ -17,14 +17,17 @@
 
 #include "CalendarPackets.h"
 #include "Packet.h"
+#include "PacketGuid128.h"
 
 void WorldPackets::Calendar::GetEvent::Read()
 {
     _worldPacket >> EventId;
 }
 
+/// CMSG_CALENDAR_COMPLAIN, 3.4.3 (FUN_140765110): PackedGuid128 InvitedByGUID, u64 EventID, u64 InviteID
 void WorldPackets::Calendar::CalendarComplain::Read()
 {
+    ComplainGuid = Guid128::Read(_worldPacket);
     _worldPacket >> EventId;
-    _worldPacket >> ComplainGuid;
+    _worldPacket.read_skip<uint64>();                       // InviteID
 }

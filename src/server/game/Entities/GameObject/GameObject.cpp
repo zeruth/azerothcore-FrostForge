@@ -2369,13 +2369,14 @@ void GameObject::ModifyHealth(int32 change, Unit* attackerOrHealer /*= nullptr*/
     /// @todo: is there any packet for healing?
     if (player)
     {
-        WorldPacket data(SMSG_DESTRUCTIBLE_BUILDING_DAMAGE, 8 + 8 + 8 + 4 + 4);
-        data << GetPackGUID();
-        data << attackerOrHealer->GetPackGUID();
-        data << player->GetPackGUID();
-        data << uint32(-change);                    // change  < 0 triggers SPELL_BUILDING_HEAL combat log event
+        // 3.4.3 (FUN_1406be620): PackedGuid128 Target, Owner (the attacker), Caster (the player), i32 Damage, i32 SpellID
+        WorldPacket data(SMSG_DESTRUCTIBLE_BUILDING_DAMAGE, 18 * 3 + 4 + 4);
+        Guid128::Write(data, GetGUID());
+        Guid128::Write(data, attackerOrHealer->GetGUID());
+        Guid128::Write(data, player->GetGUID());
+        data << int32(-change);                     // change  < 0 triggers SPELL_BUILDING_HEAL combat log event
         // change >= 0 triggers SPELL_BUILDING_DAMAGE event
-        data << uint32(spellId);
+        data << int32(spellId);
         player->SendDirectMessage(&data);
     }
 

@@ -50,10 +50,13 @@ void WorldSession::HandleGrantLevel(WorldPacket& recvData)
 
     if (error)
     {
-        WorldPacket data(SMSG_RECRUIT_A_FRIEND_FAILURE, 24);
+        // 3.4.3 (FUN_1406c92e0): u32 Reason, bits(6) StrLen, flush, Str
+        std::string name = error == ERR_REFER_A_FRIEND_NOT_IN_GROUP ? target->GetName() : "";
+        WorldPacket data(SMSG_RECRUIT_A_FRIEND_FAILURE, 4 + 1 + name.size());
         data << uint32(error);
-        if (error == ERR_REFER_A_FRIEND_NOT_IN_GROUP)
-            data << target->GetName();
+        data.WriteBits(name.size(), 6);
+        data.FlushBits();
+        data.WriteString(name);
 
         SendPacket(&data);
         return;

@@ -829,10 +829,24 @@ void WorldSession::HandleMoveNotActiveMover(WorldPacket& recvData)
     _player->m_mover->m_movementInfo = mi;
 }
 
-void WorldSession::HandleMountSpecialAnimOpcode(WorldPacket& /*recvData*/)
+/// CMSG_MOUNT_SPECIAL_ANIM, 3.4.3 (FUN_14075ed30): u32 Count, u32 SequenceVariation, Count x u32 SpellVisualKitID.
+/// SMSG_SPECIAL_MOUNT_ANIM (FUN_1406caff0) echoes them after a PackedGuid128 UnitGUID.
+void WorldSession::HandleMountSpecialAnimOpcode(WorldPacket& recvData)
 {
-    WorldPacket data(SMSG_SPECIAL_MOUNT_ANIM, 8);
-    data << GetPlayer()->GetGUID();
+    uint32 count = recvData.read<uint32>();
+    uint32 sequenceVariation = recvData.read<uint32>();
+    if (count > 16)
+    {
+        recvData.rfinish();
+        return;
+    }
+
+    WorldPacket data(SMSG_SPECIAL_MOUNT_ANIM, 18 + 8 + count * 4);
+    Guid128::Write(data, GetPlayer()->GetGUID());
+    data << uint32(count);
+    data << uint32(sequenceVariation);
+    for (uint32 i = 0; i < count; ++i)
+        data << recvData.read<uint32>();
 
     GetPlayer()->SendMessageToSet(&data, false);
 }

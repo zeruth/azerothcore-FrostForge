@@ -625,9 +625,9 @@ public:
                         Creature* cannon = (*itr)->ToCreature();
                         cannon->CastSpell(cannon, SPELL_EJECT_ALL_PASSENGERS, true);
 
-                        WorldPacket data(SMSG_SET_VEHICLE_REC_ID, cannon->GetPackGUID().size() + 4);
-                        data << cannon->GetPackGUID();
-                        data << uint32(0);
+                        WorldPacket data(SMSG_SET_VEHICLE_REC_ID, 18 + 4);   // 3.4.3: PackedGuid128, i32 VehicleRecID
+                        Guid128::Write(data, cannon->GetGUID());
+                        data << int32(0);
                         cannon->SendMessageToSet(&data, true);
 
                         cannon->RemoveVehicleKit();

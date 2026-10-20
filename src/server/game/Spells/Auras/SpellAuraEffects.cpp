@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "PacketGuid128.h"
 #include "SpellAuraEffects.h"
 #include "AreaDefines.h"
 #include "BattlefieldMgr.h"
@@ -6110,9 +6111,10 @@ void AuraEffect::HandleAuraSetVehicle(AuraApplication const* aurApp, uint8 mode,
     else if (target->GetVehicleKit())
         target->RemoveVehicleKit();
 
-    WorldPacket data(SMSG_SET_VEHICLE_REC_ID, target->GetPackGUID().size() + 4);
-    data << target->GetPackGUID();
-    data << uint32(apply ? vehicleId : 0);
+    // SMSG_SET_VEHICLE_REC_ID, 3.4.3 (FUN_1406b5650): PackedGuid128 VehicleGUID, i32 VehicleRecID
+    WorldPacket data(SMSG_SET_VEHICLE_REC_ID, 18 + 4);
+    Guid128::Write(data, target->GetGUID());
+    data << int32(apply ? vehicleId : 0);
     target->SendMessageToSet(&data, true);
 
     if (apply)

@@ -3413,8 +3413,9 @@ bool Creature::SetSwim(bool enable)
     if (!Unit::SetSwim(enable))
         return false;
 
-    WorldPacket data(enable ? SMSG_MOVE_SPLINE_START_SWIM : SMSG_MOVE_SPLINE_STOP_SWIM);
-    data << GetPackGUID();
+    // 3.4.3 (FUN_14178bdc0 / FUN_14178be50): PackedGuid128 MoverGUID
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_START_SWIM : SMSG_MOVE_SPLINE_STOP_SWIM, 18);
+    Guid128::Write(data, GetGUID());
     SendMessageToSet(&data, true);
     return true;
 }

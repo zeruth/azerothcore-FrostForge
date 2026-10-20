@@ -173,29 +173,39 @@ WorldPacket const* WorldPackets::Misc::CrossedInebriationThreshold::Write()
     return &_worldPacket;
 }
 
+/// CMSG_COMPLAINT, 3.4.3 (FUN_1407662c0): u8 ComplaintType (0 mail, 1 chat, 2 calendar), PackedGuid128 Offender, u32
+/// RealmAddress, u32 TimeSinceOffence, then mail: u64 MailID; chat: u32 Command, u32 ChannelID, bits(12) Len, flush,
+/// MessageLog; calendar: u64 EventID, u64 InviteID
 void WorldPackets::Misc::Complain::Read()
 {
-    _worldPacket >> SpamType; // 0 - mail, 1 - chat
-    _worldPacket >> SpammerGuid;
+    _worldPacket >> SpamType;
+    SpammerGuid = Guid128::Read(_worldPacket);
+    _worldPacket.read_skip<uint32>();                       // RealmAddress
+    _worldPacket >> SecondsSinceMessage;
     switch (SpamType)
     {
     case 0:
-        _worldPacket >> Unk1; // const 0
-        _worldPacket >> MailIdOrMessageType; // probably mail id
-        _worldPacket >> ChannelId; // const 0
+        _worldPacket >> MailIdOrMessageType;
         break;
     case 1:
-        _worldPacket >> Unk1; // probably language
-        _worldPacket >> MailIdOrMessageType;
+    {
+        _worldPacket >> Unk1;
         _worldPacket >> ChannelId;
-        _worldPacket >> SecondsSinceMessage;
-        _worldPacket >> Description; // spam description string (messagetype, channel name, player name, message)
+        uint32 length = _worldPacket.ReadBits(12);
+        Description = _worldPacket.ReadString(length);
+        break;
+    }
+    case 2:
+        _worldPacket >> MailIdOrMessageType;
+        _worldPacket.read_skip<uint64>();                   // InviteID
         break;
     }
 }
 
+/// SMSG_COMPLAINT_RESULT, 3.4.3 (raw, handler FUN_14173f5e0): u32 ComplaintType, u8 Result
 WorldPacket const* WorldPackets::Misc::ComplainResult::Write()
 {
+    _worldPacket << ComplaintType;
     _worldPacket << Unk;
 
     return &_worldPacket;

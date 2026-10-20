@@ -214,23 +214,24 @@ namespace WorldPackets
 
             void Read() override;
 
-            uint8 SpamType              = 0; // 0 - mail, 1 - chat
-            ObjectGuid SpammerGuid;
-            uint32 Unk1                 = 0;
-            uint32 MailIdOrMessageType  = 0;
+            uint8 SpamType              = 0; // ComplaintType: 0 - mail, 1 - chat, 2 - calendar
+            ObjectGuid SpammerGuid;          // Offender
+            uint32 Unk1                 = 0; // chat: Command
+            uint64 MailIdOrMessageType  = 0; // mail: MailID; calendar: EventID
             uint32 ChannelId            = 0;
-            uint32 SecondsSinceMessage  = 0;
-            std::string Description     = "";
+            uint32 SecondsSinceMessage  = 0; // TimeSinceOffence
+            std::string Description     = ""; // chat: MessageLog
         };
 
         class ComplainResult final : public ServerPacket
         {
         public:
-            ComplainResult() : ServerPacket(SMSG_COMPLAINT_RESULT, 1) {}
+            ComplainResult() : ServerPacket(SMSG_COMPLAINT_RESULT, 5) {}
 
             WorldPacket const* Write() override;
 
-            uint8 Unk = 0;
+            uint32 ComplaintType = 0;
+            uint8 Unk = 0;                   // Result
         };
 
     }
