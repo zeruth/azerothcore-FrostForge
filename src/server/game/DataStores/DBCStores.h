@@ -73,6 +73,8 @@ typedef std::pair<SkillRaceClassInfoMap::iterator, SkillRaceClassInfoMap::iterat
 SkillRaceClassInfoEntry const* GetSkillRaceClassInfo(uint32 skill, uint8 race, uint8 class_);
 
 EmotesTextSoundEntry const* FindTextSoundEmoteFor(uint32 emote, uint32 race, uint32 gender);
+/// A random name from NameGen.db2 for the race and sex, or nullptr when it has none.
+std::string const* GetRandomCharacterName(uint8 race, uint8 gender);
 typedef std::unordered_map<uint32 /* SkillLine */, std::vector<SkillLineAbilityEntry const*> > SkillLineAbilityIndexBySkillLine;
 std::vector<SkillLineAbilityEntry const*> const& GetSkillLineAbilitiesBySkillLine(uint32 skillLine);
 

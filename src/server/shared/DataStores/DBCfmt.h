@@ -50,6 +50,7 @@ char constexpr DurabilityQualityfmt[] = "nf";
 char constexpr EmotesEntryfmt[] = "nxxiiix";
 char constexpr EmotesTextEntryfmt[] = "nxixxxxxxxxxxxxxxxx";
 char constexpr EmotesTextSoundEntryfmt[] = "niiii";
+char constexpr NameGenEntryfmt[] = "nsii";
 char constexpr FactionEntryfmt[] = "niiiiiiiiiiiiiiiiiiffixssssssssssssssssxxxxxxxxxxxxxxxxxx";
 char constexpr FactionTemplateEntryfmt[] = "niiiiiiiiiiiii";
 char constexpr GameObjectArtKitfmt[] = "nxxxxxxx";

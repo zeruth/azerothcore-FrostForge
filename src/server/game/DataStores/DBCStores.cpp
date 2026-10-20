@@ -17,6 +17,7 @@
 
 #include "DBCStores.h"
 #include "BattlegroundMgr.h"
+#include "Containers.h"
 #include "DB2FileLoader.h"
 #include "DBCFileLoader.h"
 #include "DBCSources.h"
@@ -83,6 +84,23 @@ DBCStorage <EmotesTextEntry> sEmotesTextStore(EmotesTextEntryfmt);
 typedef std::tuple<uint32, uint32, uint32> EmotesTextSoundKey;
 static std::map<EmotesTextSoundKey, EmotesTextSoundEntry const*> sEmotesTextSoundMap;
 DBCStorage <EmotesTextSoundEntry> sEmotesTextSoundStore(EmotesTextSoundEntryfmt);
+
+// NameGen has no 3.3.5 counterpart, so its sources are written here rather than generated into
+// DBCSources.h from a 3.3.5 store: the record id, then the table's three columns in order.
+static DBCStorage <NameGenEntry> sNameGenStore(NameGenEntryfmt);
+static std::map<std::pair<uint8, uint8>, std::vector<std::string>> sNameGenNames;
+namespace
+{
+    constexpr DBCSource NameGenSources[] =
+    {
+        { DBCSourceKind::Id },
+        { DBCSourceKind::Column, 0, 0 },    // Name
+        { DBCSourceKind::Column, 1, 0 },    // RaceID
+        { DBCSourceKind::Column, 2, 0 },    // Sex
+    };
+
+    constexpr DBCSourceInfo NameGenInfo = { &DB2Metadata::NameGen, NameGenSources, std::size(NameGenSources) };
+}
 
 typedef std::map<uint32, SimpleFactionsList> FactionTeamMap;
 static FactionTeamMap sFactionTeamMap;
@@ -825,6 +843,7 @@ void LoadDBCStores(std::string const& dataPath)
     LOAD_DB2(sEmotesStore,                           DBCSources::EmotesInfo,                                 "emotes_dbc");
     LOAD_DB2(sEmotesTextStore,                       DBCSources::EmotesTextInfo,                             "emotestext_dbc");
     LOAD_DB2(sEmotesTextSoundStore,                  DBCSources::EmotesTextSoundInfo,                        "emotestextsound_dbc");
+    LOAD_DB2(sNameGenStore,                          NameGenInfo,                                            nullptr);
     LOAD_DB2(sFactionStore,                          DBCSources::FactionInfo,                                "faction_dbc");
     LOAD_DB2(sFactionTemplateStore,                  DBCSources::FactionTemplateInfo,                        "factiontemplate_dbc");
     LOAD_DB2(sGameObjectArtKitStore,                 DBCSources::GameObjectArtKitInfo,                       "gameobjectartkit_dbc");
@@ -940,6 +959,10 @@ void LoadDBCStores(std::string const& dataPath)
         if (info->maxZ < info->minZ)
             std::swap(*(float*)(&info->maxZ), *(float*)(&info->minZ));
     }
+
+    for (NameGenEntry const* nameGen : sNameGenStore)
+        if (nameGen->Name && *nameGen->Name)
+            sNameGenNames[{ uint8(nameGen->RaceID), uint8(nameGen->Sex) }].emplace_back(nameGen->Name);
 
     for (EmotesTextSoundEntry const* emoteTextSound : sEmotesTextSoundStore)
     {
@@ -1450,6 +1473,14 @@ SkillRaceClassInfoEntry const* GetSkillRaceClassInfo(uint32 skill, uint8 race, u
     }
 
     return nullptr;
+}
+
+std::string const* GetRandomCharacterName(uint8 race, uint8 gender)
+{
+    auto itr = sNameGenNames.find({ race, gender });
+    if (itr == sNameGenNames.end() || itr->second.empty())
+        return nullptr;
+    return &Acore::Containers::SelectRandomContainerElement(itr->second);
 }
 
 EmotesTextSoundEntry const* FindTextSoundEmoteFor(uint32 emote, uint32 race, uint32 gender)

@@ -939,6 +939,16 @@ struct EmotesTextSoundEntry
     uint32 SoundId;                                         // 4
 };
 
+// NameGen.db2 (3.4.3 only): the syllable-free names the client's "random name" button asks for
+// (CMSG_GENERATE_RANDOM_CHARACTER_NAME), per race and sex.
+struct NameGenEntry
+{
+    uint32 ID;                                              // 0
+    char const* Name;                                       // 1
+    uint32 RaceID;                                          // 2
+    uint32 Sex;                                             // 3, 0 male / 1 female
+};
+
 struct FactionEntry
 {
     uint32      ID;                                         // 0        m_ID
