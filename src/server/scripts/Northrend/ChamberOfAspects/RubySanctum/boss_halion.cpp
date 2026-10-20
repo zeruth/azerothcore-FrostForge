@@ -196,9 +196,8 @@ public:
             return true;
         }
 
-        WorldPacket data(SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT, 4);
-        data << uint32(ENCOUNTER_FRAME_REFRESH_FRAMES);
-        _owner->SendDirectMessage(&data);
+        // ENCOUNTER_FRAME_REFRESH_FRAMES went out as SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT, which the 3.4.3
+        // client does not have; not sent until the encounter frames are ported
         return true;
     }
 

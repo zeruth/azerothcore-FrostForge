@@ -663,7 +663,7 @@ void Unit::MonsterMoveWithSpeed(float x, float y, float z, float speed)
 
 void Unit::SendMonsterMove(float NewPosX, float NewPosY, float NewPosZ, uint32 TransitTime, SplineFlags sf)
 {
-    WorldPacket data(SMSG_MONSTER_MOVE, 1 + 12 + 4 + 1 + 4 + 4 + 4 + 12 + GetPackGUID().size());
+    WorldPacket data(SMSG_ON_MONSTER_MOVE, 1 + 12 + 4 + 1 + 4 + 4 + 4 + 12 + GetPackGUID().size());
     data << GetPackGUID();
 
     data << uint8(0);                                       // new in 3.1
@@ -2181,7 +2181,7 @@ void Unit::DealDamageShieldDamage(Unit* victim)
         Unit::DealDamageMods(this, damage, &absorb);
 
         /// @todo: Move this to a packet handler
-        WorldPacket data(SMSG_SPELLDAMAGESHIELD, (8 + 8 + 4 + 4 + 4 + 4));
+        WorldPacket data(SMSG_SPELL_DAMAGE_SHIELD, (8 + 8 + 4 + 4 + 4 + 4));
         data << victim->GetGUID();
         data << GetGUID();
         data << uint32(i_spellProto->Id);
@@ -3250,18 +3250,18 @@ float Unit::CalculateLevelPenalty(SpellInfo const* spellProto) const
 
 void Unit::SendMeleeAttackStart(Unit* victim, Player* sendTo)
 {
-    WorldPacket data(SMSG_ATTACKSTART, 8 + 8);
+    WorldPacket data(SMSG_ATTACK_START, 8 + 8);
     data << GetGUID();
     data << victim->GetGUID();
     if (sendTo)
         sendTo->SendDirectMessage(&data);
     else
         SendMessageToSet(&data, true);
-    LOG_DEBUG("entities.unit", "WORLD: Sent SMSG_ATTACKSTART");
+    LOG_DEBUG("entities.unit", "WORLD: Sent SMSG_ATTACK_START");
 }
 
 /**
- * @brief Send to the client SMSG_ATTACKSTOP but doesn't clear UNIT_STATE_MELEE_ATTACKING on server side
+ * @brief Send to the client SMSG_ATTACK_STOP but doesn't clear UNIT_STATE_MELEE_ATTACKING on server side
  * or interrupt spells. Unless you know exactly what you're doing, use AttackStop() or RemoveAllAttackers() instead
  */
 void Unit::SendMeleeAttackStop(Unit const* victim) const
@@ -3276,7 +3276,7 @@ void Unit::SendMeleeAttackStop(Unit const* victim) const
     attackStop.NowDead = !IsAlive();
 
     SendMessageToSet(attackStop.Write(), true);
-    LOG_DEBUG("entities.unit", "WORLD: Sent SMSG_ATTACKSTOP");
+    LOG_DEBUG("entities.unit", "WORLD: Sent SMSG_ATTACK_STOP");
 
     if (victim)
         LOG_DEBUG("entities.unit", "{} {} stopped attacking {} {}", (IsPlayer() ? "Player" : "Creature"), GetGUID().ToString(), (victim->IsPlayer() ? "player" : "creature"), victim->GetGUID().ToString());
@@ -6458,7 +6458,7 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
     if (!IsPlayer())
         return;
 
-    WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
+    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     // If we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our HP bar will not drop
     uint32 damage = log->damage;
     uint32 absorb = log->absorb;
@@ -6486,7 +6486,7 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
 
 void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
 {
-    WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
+    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
     uint32 damage = log->damage;
     uint32 absorb = log->absorb;
@@ -6588,7 +6588,7 @@ void Unit::ProcSkillsAndAuras(Unit* actor, Unit* victim, uint32 procAttacker, ui
 void Unit::SendPeriodicAuraLog(SpellPeriodicAuraLogInfo* pInfo)
 {
     AuraEffect const* aura = pInfo->auraEff;
-    WorldPacket data(SMSG_PERIODICAURALOG, 30);
+    WorldPacket data(SMSG_SPELL_PERIODIC_AURA_LOG, 30);
     data << GetPackGUID();
     data << aura->GetCasterGUID().WriteAsPacked();
     data << uint32(aura->GetId());                          // spellId
@@ -6643,7 +6643,7 @@ void Unit::SendPeriodicAuraLog(SpellPeriodicAuraLogInfo* pInfo)
 
 void Unit::SendSpellDamageResist(Unit* target, uint32 spellId)
 {
-    WorldPacket data(SMSG_PROCRESIST, 8 + 8 + 4 + 1);
+    WorldPacket data(SMSG_PROC_RESIST, 8 + 8 + 4 + 1);
     data << GetGUID();
     data << target->GetGUID();
     data << uint32(spellId);
@@ -6653,7 +6653,7 @@ void Unit::SendSpellDamageResist(Unit* target, uint32 spellId)
 
 void Unit::SendSpellDamageImmune(Unit* target, uint32 spellId)
 {
-    WorldPacket data(SMSG_SPELLORDAMAGE_IMMUNE, 8 + 8 + 4 + 1);
+    WorldPacket data(SMSG_SPELL_OR_DAMAGE_IMMUNE, 8 + 8 + 4 + 1);
     data << GetGUID();
     data << target->GetGUID();
     data << uint32(spellId);
@@ -6663,7 +6663,7 @@ void Unit::SendSpellDamageImmune(Unit* target, uint32 spellId)
 
 void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
 {
-    LOG_DEBUG("entities.unit", "WORLD: Sending SMSG_ATTACKERSTATEUPDATE");
+    LOG_DEBUG("entities.unit", "WORLD: Sending SMSG_ATTACKER_STATE_UPDATE");
 
     uint32 tmpDamage[MAX_ITEM_PROTO_DAMAGES] = { };
     uint32 tmpAbsorb[MAX_ITEM_PROTO_DAMAGES] = { };
@@ -6686,7 +6686,7 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     }
 
     std::size_t const maxsize = 4 + 5 + 5 + 4 + 4 + 1 + count * (4 + 4 + 4 + 4 + 4) + 1 + 4 + 4 + 4 + 4 + 4 * 12;
-    WorldPacket data(SMSG_ATTACKERSTATEUPDATE, maxsize);            // we guess size
+    WorldPacket data(SMSG_ATTACKER_STATE_UPDATE, maxsize);            // we guess size
     data << uint32(damageInfo->HitInfo);
     data << damageInfo->attacker->GetPackGUID();
     data << damageInfo->target->GetPackGUID();
@@ -8125,7 +8125,7 @@ void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
     uint32 overheal = healInfo.GetHeal() - healInfo.GetEffectiveHeal();
 
     // we guess size
-    WorldPacket data(SMSG_SPELLHEALLOG, (8 + 8 + 4 + 4 + 4 + 4 + 1 + 1));
+    WorldPacket data(SMSG_SPELL_HEAL_LOG, (8 + 8 + 4 + 4 + 4 + 4 + 1 + 1));
     data << healInfo.GetTarget()->GetPackGUID();
     data << GetPackGUID();
     data << uint32(healInfo.GetSpellInfo()->Id);
@@ -8155,7 +8155,7 @@ int32 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 
 void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint32 damage, Powers powerType)
 {
-    WorldPacket data(SMSG_SPELLENERGIZELOG, (8 + 8 + 4 + 4 + 4 + 1));
+    WorldPacket data(SMSG_SPELL_ENERGIZE_LOG, (8 + 8 + 4 + 4 + 4 + 1));
     data << victim->GetPackGUID();
     data << GetPackGUID();
     data << uint32(spellID);
@@ -10279,7 +10279,7 @@ void Unit::Mount(uint32 mount, uint32 VehicleId, uint32 creatureEntry)
                 GetVehicleKit()->Reset();
 
                 // Send others that we now have a vehicle
-                WorldPacket data(SMSG_PLAYER_VEHICLE_DATA, GetPackGUID().size() + 4);
+                WorldPacket data(SMSG_SET_VEHICLE_REC_ID, GetPackGUID().size() + 4);
                 data << GetPackGUID();
                 data << uint32(VehicleId);
                 SendMessageToSet(&data, true);
@@ -10309,7 +10309,7 @@ void Unit::Mount(uint32 mount, uint32 VehicleId, uint32 creatureEntry)
             if (charm->IsCreature())
                 charm->SetUnitFlag(UNIT_FLAG_STUNNED);
 
-        WorldPacket data(SMSG_MOVE_SET_COLLISION_HGT, GetPackGUID().size() + 4 + 4);
+        WorldPacket data(SMSG_MOVE_SET_COLLISION_HEIGHT, GetPackGUID().size() + 4 + 4);
         data << GetPackGUID();
         data << player->GetSession()->GetOrderCounter(); // movement counter
         data << player->GetCollisionHeight();
@@ -10330,7 +10330,7 @@ void Unit::Dismount()
 
     if (Player* player = ToPlayer())
     {
-        WorldPacket data(SMSG_MOVE_SET_COLLISION_HGT, GetPackGUID().size() + 4 + 4);
+        WorldPacket data(SMSG_MOVE_SET_COLLISION_HEIGHT, GetPackGUID().size() + 4 + 4);
         data << GetPackGUID();
         data << player->GetSession()->GetOrderCounter(); // movement counter
         data << player->GetCollisionHeight();
@@ -10346,7 +10346,7 @@ void Unit::Dismount()
     if (IsPlayer() && GetVehicleKit())
     {
         // Send other players that we are no longer a vehicle
-        data.Initialize(SMSG_PLAYER_VEHICLE_DATA, 8 + 4);
+        data.Initialize(SMSG_SET_VEHICLE_REC_ID, 8 + 4);
         data << GetPackGUID();
         data << uint32(0);
         ToPlayer()->SendMessageToSet(&data, true);
@@ -12741,7 +12741,7 @@ void Unit::SetStandState(uint8 state)
 
     if (IsPlayer())
     {
-        WorldPacket data(SMSG_STANDSTATE_UPDATE, 1);
+        WorldPacket data(SMSG_STAND_STATE_UPDATE, 1);
         data << (uint8)state;
         ToPlayer()->SendDirectMessage(&data);
     }
@@ -12894,35 +12894,8 @@ void Unit::SendComboPoints()
         return;
     }
 
-    PackedGuid const packGUID = m_comboTarget ? m_comboTarget->GetPackGUID() : PackedGuid();
-    if (Player* playerMe = ToPlayer())
-    {
-        WorldPacket data(SMSG_UPDATE_COMBO_POINTS, packGUID.size() + 1);
-        data << packGUID;
-        data << uint8(m_comboPoints);
-        playerMe->SendDirectMessage(&data);
-    }
-
-    ObjectGuid ownerGuid = GetCharmerOrOwnerGUID();
-    Player* owner = nullptr;
-    if (ownerGuid.IsPlayer())
-    {
-        owner = ObjectAccessor::GetPlayer(*this, ownerGuid);
-    }
-
-    if (m_movedByPlayer || owner)
-    {
-        WorldPacket data(SMSG_PET_UPDATE_COMBO_POINTS, GetPackGUID().size() + packGUID.size() + 1);
-        data << GetPackGUID();
-        data << packGUID;
-        data << uint8(m_comboPoints);
-
-        if (m_movedByPlayer)
-            m_movedByPlayer->ToPlayer()->SendDirectMessage(&data);
-
-        if (owner && owner != m_movedByPlayer)
-            owner->SendDirectMessage(&data);
-    }
+    // the 3.4.3 client has no SMSG_UPDATE_COMBO_POINTS / SMSG_PET_UPDATE_COMBO_POINTS: combo points are a
+    // power there (POWER_COMBO_POINTS in the unit's update fields); not sent until object updates are ported
 }
 
 void Unit::ClearComboPointHolders()
@@ -13626,7 +13599,7 @@ void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackTyp
     // call kill spell proc event (before real die and combat stop to triggering auras removed at death/combat stop)
     if (isRewardAllowed && player && player != victim)
     {
-        WorldPacket data(SMSG_PARTYKILLLOG, (8 + 8)); // send event PARTY_KILL
+        WorldPacket data(SMSG_PARTY_KILL_LOG, (8 + 8)); // send event PARTY_KILL
         data << player->GetGUID(); // player with killing blow
         data << victim->GetGUID(); // victim
 
@@ -14129,7 +14102,7 @@ void Unit::SendMoveRoot(bool apply)
     // Wrath+ spline root: when unit is currently not controlled by a player
     if (!client)
     {
-        WorldPacket data(apply ? SMSG_SPLINE_MOVE_ROOT : SMSG_SPLINE_MOVE_UNROOT, guid.size());
+        WorldPacket data(apply ? SMSG_MOVE_SPLINE_ROOT : SMSG_MOVE_SPLINE_UNROOT, guid.size());
         data << guid;
         SendMessageToSet(&data, true);
     }
@@ -14138,7 +14111,7 @@ void Unit::SendMoveRoot(bool apply)
     {
         uint32 const counter = client->GetSession()->GetOrderCounter();
 
-        WorldPacket data(apply ? SMSG_FORCE_MOVE_ROOT : SMSG_FORCE_MOVE_UNROOT, guid.size() + 4);
+        WorldPacket data(apply ? SMSG_MOVE_ROOT : SMSG_MOVE_UNROOT, guid.size() + 4);
         data << guid;
         data << counter;
         client->GetSession()->SendPacket(&data);
@@ -14806,10 +14779,7 @@ void Unit::SendPlaySpellVisual(uint32 id)
 
 void Unit::SendPlaySpellImpact(ObjectGuid guid, uint32 id)
 {
-    WorldPacket data(SMSG_PLAY_SPELL_IMPACT, 8 + 4);
-    data << guid;       // target
-    data << uint32(id); // SpellVisualKit.dbc index
-    SendMessageToSet(&data, true);
+    // the 3.4.3 client has no SMSG_PLAY_SPELL_IMPACT
 }
 
 void Unit::ApplyResilience(Unit const* victim, float* crit, int32* damage, bool isCrit, CombatRating type)
@@ -15609,7 +15579,7 @@ void Unit::SendTeleportPacket(Position& pos)
     {
         ToPlayer()->SetCanTeleport(true);
     }
-    WorldPacket data2(MSG_MOVE_TELEPORT, 38);
+    WorldPacket data2(SMSG_MOVE_UPDATE_TELEPORT, 38);
     data2 << GetPackGUID();
     BuildMovementPacket(&data2);
     if (IsCreature())
@@ -16141,7 +16111,7 @@ void Unit::SetDisableGravity(bool enable)
         {
             uint32 const counter = player->GetSession()->GetOrderCounter();
 
-            WorldPacket data(enable ? SMSG_MOVE_GRAVITY_DISABLE : SMSG_MOVE_GRAVITY_ENABLE, GetPackGUID().size() + 4);
+            WorldPacket data(enable ? SMSG_MOVE_DISABLE_GRAVITY : SMSG_MOVE_ENABLE_GRAVITY, GetPackGUID().size() + 4);
             data << GetPackGUID();
             data << counter;
             player->GetSession()->SendPacket(&data);
@@ -16150,7 +16120,7 @@ void Unit::SetDisableGravity(bool enable)
         }
     }
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_GRAVITY_DISABLE : SMSG_SPLINE_MOVE_GRAVITY_ENABLE, 9);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_DISABLE_GRAVITY : SMSG_MOVE_SPLINE_ENABLE_GRAVITY, 9);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
 }
@@ -16211,7 +16181,7 @@ void Unit::SetCanFly(bool enable)
         }
     }
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_SET_FLYING : SMSG_SPLINE_MOVE_UNSET_FLYING, 9);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_FLYING : SMSG_MOVE_SPLINE_UNSET_FLYING, 9);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
 }
@@ -16237,7 +16207,7 @@ void Unit::SetFeatherFall(bool enable)
         {
             uint32 const counter = player->GetSession()->GetOrderCounter();
 
-            WorldPacket data(enable ? SMSG_MOVE_FEATHER_FALL : SMSG_MOVE_NORMAL_FALL, GetPackGUID().size() + 4);
+            WorldPacket data(enable ? SMSG_MOVE_SET_FEATHER_FALL : SMSG_MOVE_SET_NORMAL_FALL, GetPackGUID().size() + 4);
 
             data << GetPackGUID();
             data << counter;
@@ -16252,7 +16222,7 @@ void Unit::SetFeatherFall(bool enable)
         }
     }
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_FEATHER_FALL : SMSG_SPLINE_MOVE_NORMAL_FALL);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_FEATHER_FALL : SMSG_MOVE_SPLINE_SET_NORMAL_FALL);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
 }
@@ -16293,7 +16263,7 @@ void Unit::SetHover(bool enable)
     {
         if (Player const* player = GetClientControlling())
         {
-            WorldPacket data(enable ? SMSG_MOVE_SET_HOVER : SMSG_MOVE_UNSET_HOVER, GetPackGUID().size() + 4);
+            WorldPacket data(enable ? SMSG_MOVE_SET_HOVERING : SMSG_MOVE_UNSET_HOVERING, GetPackGUID().size() + 4);
 
             uint32 const counter = player->GetSession()->GetOrderCounter();
 
@@ -16305,7 +16275,7 @@ void Unit::SetHover(bool enable)
         }
     }
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_SET_HOVER : SMSG_SPLINE_MOVE_UNSET_HOVER, 9);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_HOVER : SMSG_MOVE_SPLINE_UNSET_HOVER, 9);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
 }
@@ -16331,7 +16301,7 @@ void Unit::SetWaterWalking(bool enable)
         {
             uint32 const counter = player->GetSession()->GetOrderCounter();
 
-            WorldPacket data(enable ? SMSG_MOVE_WATER_WALK : SMSG_MOVE_LAND_WALK, GetPackGUID().size() + 4);
+            WorldPacket data(enable ? SMSG_MOVE_SET_WATER_WALK : SMSG_MOVE_SET_LAND_WALK, GetPackGUID().size() + 4);
             data << GetPackGUID();
             data << counter;
             player->SendDirectMessage(&data);
@@ -16340,7 +16310,7 @@ void Unit::SetWaterWalking(bool enable)
         }
     }
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_WATER_WALK : SMSG_SPLINE_MOVE_LAND_WALK, 9);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_WATER_WALK : SMSG_MOVE_SPLINE_SET_LAND_WALK, 9);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
 }
@@ -16349,7 +16319,7 @@ void Unit::SendMovementWaterWalking(Player* sendTo)
 {
     if (!movespline->Initialized())
         return;
-    WorldPacket data(SMSG_SPLINE_MOVE_WATER_WALK, 9);
+    WorldPacket data(SMSG_MOVE_SPLINE_SET_WATER_WALK, 9);
     data << GetPackGUID();
     sendTo->SendDirectMessage(&data);
 }
@@ -16358,7 +16328,7 @@ void Unit::SendMovementFeatherFall(Player* sendTo)
 {
     if (!movespline->Initialized())
         return;
-    WorldPacket data(SMSG_SPLINE_MOVE_FEATHER_FALL, 9);
+    WorldPacket data(SMSG_MOVE_SPLINE_SET_FEATHER_FALL, 9);
     data << GetPackGUID();
     sendTo->SendDirectMessage(&data);
 }
@@ -16367,7 +16337,7 @@ void Unit::SendMovementHover(Player* sendTo)
 {
     if (!movespline->Initialized())
         return;
-    WorldPacket data(SMSG_SPLINE_MOVE_SET_HOVER, 9);
+    WorldPacket data(SMSG_MOVE_SPLINE_SET_HOVER, 9);
     data << GetPackGUID();
     sendTo->SendDirectMessage(&data);
 }

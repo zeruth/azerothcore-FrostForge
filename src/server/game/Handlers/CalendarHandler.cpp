@@ -18,10 +18,10 @@
 /*
 ----- Opcodes Not Used yet -----
 
-SMSG_CALENDAR_EVENT_INVITE_NOTES        [ packguid(Invitee), uint64(inviteId), string(Text), Boolean(Unk) ]
+SMSG_CALENDAR_INVITE_NOTES        [ packguid(Invitee), uint64(inviteId), string(Text), Boolean(Unk) ]
 ?CMSG_CALENDAR_EVENT_INVITE_NOTES       [ uint32(unk1), uint32(unk2), uint32(unk3), uint32(unk4), uint32(unk5) ]
-SMSG_CALENDAR_EVENT_INVITE_NOTES_ALERT  [ uint64(inviteId), string(Text) ]
-SMSG_CALENDAR_EVENT_INVITE_STATUS_ALERT [ uint64(eventId), uint32(eventTime), uint32(unkFlag), uint8(deletePending) ]
+SMSG_CALENDAR_INVITE_NOTES_ALERT  [ uint64(inviteId), string(Text) ]
+SMSG_CALENDAR_INVITE_STATUS_ALERT [ uint64(eventId), uint32(eventTime), uint32(unkFlag), uint8(deletePending) ]
 
 ----- TODO -----
 
@@ -53,7 +53,7 @@ Copied events should probably have a new owner
 void WorldSession::HandleCalendarGetCalendar(WorldPacket& /*recvData*/)
 {
     ObjectGuid guid = _player->GetGUID();
-    LOG_DEBUG("network", "CMSG_CALENDAR_GET_CALENDAR [{}]", guid.ToString());
+    LOG_DEBUG("network", "CMSG_CALENDAR_GET [{}]", guid.ToString());
 
     time_t currTime = GameTime::GetGameTime().count();
 
@@ -200,24 +200,6 @@ void WorldSession::HandleCalendarGetEvent(WorldPackets::Calendar::GetEvent& pack
         sCalendarMgr->SendCalendarEvent(_player->GetGUID(), *calendarEvent, CALENDAR_SENDTYPE_GET);
     else
         sCalendarMgr->SendCalendarCommandResult(_player->GetGUID(), CALENDAR_ERROR_EVENT_INVALID);
-}
-
-void WorldSession::HandleCalendarGuildFilter(WorldPackets::Calendar::GuildFilter& packet)
-{
-    LOG_DEBUG("network", "CMSG_CALENDAR_GUILD_FILTER [{}]", _player->GetGUID().ToString());
-
-    if (Guild* guild = sGuildMgr->GetGuildById(_player->GetGuildId()))
-        guild->MassInviteToEvent(this, packet.MinimumLevel, packet.MaximumLevel, packet.MinimumRank);
-
-    LOG_DEBUG("network", "CMSG_CALENDAR_GUILD_FILTER: Min level [{}], Max level [{}], Min rank [{}]", packet.MinimumLevel, packet.MaximumLevel, packet.MinimumRank);
-}
-
-void WorldSession::HandleCalendarArenaTeam(WorldPackets::Calendar::ArenaTeam& packet)
-{
-    LOG_DEBUG("network", "CMSG_CALENDAR_ARENA_TEAM [{}]", _player->GetGUID().ToString());
-
-    if (ArenaTeam* team = sArenaTeamMgr->GetArenaTeamById(packet.ArenaTeamId))
-        team->MassInviteToEvent(this);
 }
 
 bool validUtf8String(WorldPacket& recvData, std::string& s, std::string action, ObjectGuid playerGUID)
@@ -516,7 +498,7 @@ void WorldSession::HandleCalendarCopyEvent(WorldPacket& recvData)
 
 void WorldSession::HandleCalendarEventInvite(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_INVITE");
+    LOG_DEBUG("network", "CMSG_CALENDAR_INVITE");
 
     ObjectGuid playerGuid = _player->GetGUID();
 
@@ -615,7 +597,7 @@ void WorldSession::HandleCalendarEventSignup(WorldPacket& recvData)
     bool tentative;
 
     recvData >> eventId >> tentative;
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_SIGNUP [{}] EventId [{}] Tentative {}", guid.ToString(), eventId, tentative);
+    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_SIGN_UP [{}] EventId [{}] Tentative {}", guid.ToString(), eventId, tentative);
 
     if (CalendarEvent* calendarEvent = sCalendarMgr->GetEvent(eventId))
     {
@@ -642,7 +624,7 @@ void WorldSession::HandleCalendarEventRsvp(WorldPacket& recvData)
     uint32 status;
 
     recvData >> eventId >> inviteId >> status;
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_RSVP [{}] EventId [{}], InviteId [{}], status {}",
+    LOG_DEBUG("network", "CMSG_CALENDAR_RSVP [{}] EventId [{}], InviteId [{}], status {}",
         guid.ToString(), eventId, inviteId, status);
 
     if (CalendarEvent* calendarEvent = sCalendarMgr->GetEvent(eventId))
@@ -681,7 +663,7 @@ void WorldSession::HandleCalendarEventRemoveInvite(WorldPacket& recvData)
     recvData>> invitee.ReadAsPacked();
     recvData >> inviteId >> ownerInviteId >> eventId;
 
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_REMOVE_INVITE [{}] EventId [{}], ownerInviteId [{}], Invitee ([{}] id: [{}])",
+    LOG_DEBUG("network", "CMSG_CALENDAR_REMOVE_INVITE [{}] EventId [{}], ownerInviteId [{}], Invitee ([{}] id: [{}])",
                    guid.ToString(), eventId, ownerInviteId, invitee.ToString(), inviteId);
 
     if (CalendarEvent* calendarEvent = sCalendarMgr->GetEvent(eventId))
@@ -709,7 +691,7 @@ void WorldSession::HandleCalendarEventStatus(WorldPacket& recvData)
 
     recvData >> invitee.ReadAsPacked();
     recvData >> eventId >> inviteId >> ownerInviteId >> status;
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_STATUS [{}] EventId [{}] ownerInviteId [{}], Invitee ({}) id: [{}], status {}",
+    LOG_DEBUG("network", "CMSG_CALENDAR_STATUS [{}] EventId [{}] ownerInviteId [{}], Invitee ({}) id: [{}], status {}",
         guid.ToString(), eventId, ownerInviteId, invitee.ToString(), inviteId, status);
 
     if (CalendarEvent* calendarEvent = sCalendarMgr->GetEvent(eventId))
@@ -741,7 +723,7 @@ void WorldSession::HandleCalendarEventModeratorStatus(WorldPacket& recvData)
 
     recvData>> invitee.ReadAsPacked();
     recvData >> eventId >>  inviteId >> ownerInviteId >> rank;
-    LOG_DEBUG("network", "CMSG_CALENDAR_EVENT_MODERATOR_STATUS [{}] EventId [{}] ownerInviteId [{}], Invitee ([{}] id: [{}], rank {}",
+    LOG_DEBUG("network", "CMSG_CALENDAR_MODERATOR_STATUS [{}] EventId [{}] ownerInviteId [{}], Invitee ([{}] id: [{}], rank {}",
         guid.ToString(), eventId, ownerInviteId, invitee.ToString(), inviteId, rank);
 
     if (CalendarEvent* calendarEvent = sCalendarMgr->GetEvent(eventId))

@@ -199,7 +199,7 @@ void AutobroadcastMgr::SendNotificationAnnouncement(uint8 textId)
             localizedMessage = ObjectMgr::GetLocaleString(_autobroadcasts[textId], DEFAULT_LOCALE);
 
         // Prepare the WorldPacket
-        WorldPacket data(SMSG_NOTIFICATION, (localizedMessage.size() + 1));
+        WorldPacket data(SMSG_PRINT_NOTIFICATION, (localizedMessage.size() + 1));
         data << localizedMessage;
 
         // Send packet to the player

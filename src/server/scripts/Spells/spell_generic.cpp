@@ -2083,7 +2083,7 @@ class spell_pvp_trinket_wotf_shared_cd : public SpellScript
             }
             else
             {
-                WorldPacket data(SMSG_INITIAL_SPELLS, (1 + 2 + 2 + 4 + 2 + 2 + 4 + 4));
+                WorldPacket data(SMSG_SEND_KNOWN_SPELLS, (1 + 2 + 2 + 4 + 2 + 2 + 4 + 4));
                 data << uint8(0);
                 data << uint16(0);
                 data << uint16(1);
@@ -2766,13 +2766,7 @@ class spell_gen_spirit_healer_res : public SpellScript
 
     void HandleDummy(SpellEffIndex /* effIndex */)
     {
-        Player* originalCaster = GetOriginalCaster()->ToPlayer();
-        if (Unit* target = GetHitUnit())
-        {
-            WorldPacket data(SMSG_SPIRIT_HEALER_CONFIRM, 8);
-            data << target->GetGUID();
-            originalCaster->SendDirectMessage(&data);
-        }
+        // the 3.4.3 client has no SMSG_SPIRIT_HEALER_CONFIRM; not sent until the resurrection flow is ported
     }
 
     void Register() override

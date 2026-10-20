@@ -66,7 +66,6 @@ namespace lfg
             //  sLFGMgr->LeaveLfg(player->GetGUID());
         }
 
-        sLFGMgr->LfrSearchRemove(player);
     }
 
     void LFGPlayerScript::OnPlayerLogin(Player* player)

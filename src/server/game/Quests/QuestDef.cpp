@@ -327,7 +327,7 @@ uint32 Quest::CalculateHonorGain(uint8 level) const
 
 void Quest::InitializeQueryData()
 {
-    queryData.Initialize(SMSG_QUEST_QUERY_RESPONSE, 1);
+    queryData.Initialize(SMSG_QUERY_QUEST_INFO_RESPONSE, 1);
 
     queryData << uint32(GetQuestId());                    // quest id
     queryData << uint32(GetQuestMethod());                // Accepted values: 0, 1 or 2. 0 == IsAutoComplete() (skip objectives/details)

@@ -129,7 +129,7 @@ void Guild::SendSaveEmblemResult(WorldSession* session, GuildEmblemError errCode
     saveResponse.Error = int32(errCode);
     session->SendPacket(saveResponse.Write());
 
-    LOG_DEBUG("guild", "MSG_SAVE_GUILD_EMBLEM [{}] Code: {}", session->GetPlayerInfo(), errCode);
+    LOG_DEBUG("guild", "CMSG_SAVE_GUILD_EMBLEM [{}] Code: {}", session->GetPlayerInfo(), errCode);
 }
 
 // LogHolder
@@ -508,13 +508,13 @@ void Guild::BankTab::SendText(Guild const* guild, WorldSession* session) const
 
     if (session)
     {
-        LOG_DEBUG("guild", "MSG_QUERY_GUILD_BANK_TEXT [{}]: Tabid: {}, Text: {}"
+        LOG_DEBUG("guild", "CMSG_GUILD_BANK_TEXT_QUERY [{}]: Tabid: {}, Text: {}"
                        , session->GetPlayerInfo(), m_tabId, m_text);
         session->SendPacket(textQuery.Write());
     }
     else
     {
-        LOG_DEBUG("guild", "MSG_QUERY_GUILD_BANK_TEXT [Broadcast]: Tabid: {}, Text: {}", m_tabId, m_text);
+        LOG_DEBUG("guild", "CMSG_GUILD_BANK_TEXT_QUERY [Broadcast]: Tabid: {}, Text: {}", m_tabId, m_text);
         guild->BroadcastPacket(textQuery.Write());
     }
 }
@@ -1274,7 +1274,7 @@ void Guild::HandleQuery(WorldSession* session)
     response.Info.GuildName = m_name;
 
     session->SendPacket(response.Write());
-    LOG_DEBUG("guild", "SMSG_GUILD_QUERY_RESPONSE [{}]", session->GetPlayerInfo());
+    LOG_DEBUG("guild", "SMSG_QUERY_GUILD_INFO_RESPONSE [{}]", session->GetPlayerInfo());
 }
 
 void Guild::HandleSetMOTD(WorldSession* session, std::string_view motd)
@@ -1823,19 +1823,6 @@ void Guild::HandleDisband(WorldSession* session)
     }
 }
 
-// Send data to client
-void Guild::SendInfo(WorldSession* session) const
-{
-    WorldPackets::Guild::GuildInfoResponse guildInfo;
-    guildInfo.GuildName = m_name;
-    guildInfo.CreateDate = m_createdDate;
-    guildInfo.NumMembers = int32(m_members.size());
-    guildInfo.NumAccounts = m_accountsNumber;
-
-    session->SendPacket(guildInfo.Write());
-    LOG_DEBUG("guild", "SMSG_GUILD_INFO [{}]", session->GetPlayerInfo());
-}
-
 void Guild::SendEventLog(WorldSession* session) const
 {
     std::list<EventLogEntry> const& eventLog = m_eventLog.GetGuildLog();
@@ -1847,7 +1834,7 @@ void Guild::SendEventLog(WorldSession* session) const
         entry.WritePacket(packet);
 
     session->SendPacket(packet.Write());
-    LOG_DEBUG("guild", "MSG_GUILD_EVENT_LOG_QUERY [{}]", session->GetPlayerInfo());
+    LOG_DEBUG("guild", "CMSG_GUILD_EVENT_LOG_QUERY [{}]", session->GetPlayerInfo());
 }
 
 void Guild::SendBankLog(WorldSession* session, uint8 tabId) const
@@ -1865,7 +1852,7 @@ void Guild::SendBankLog(WorldSession* session, uint8 tabId) const
             entry.WritePacket(packet);
 
         session->SendPacket(packet.Write());
-        LOG_DEBUG("guild", "MSG_GUILD_BANK_LOG_QUERY [{}]", session->GetPlayerInfo());
+        LOG_DEBUG("guild", "CMSG_GUILD_BANK_LOG_QUERY [{}]", session->GetPlayerInfo());
     }
 }
 
@@ -1918,7 +1905,7 @@ void Guild::SendPermissions(WorldSession* session)
     }
 
     session->SendPacket(queryResult.Write());
-    LOG_DEBUG("guild", "MSG_GUILD_PERMISSIONS [{}] Rank: {}", session->GetPlayerInfo(), rankId);
+    LOG_DEBUG("guild", "CMSG_GUILD_PERMISSIONS_QUERY [{}] Rank: {}", session->GetPlayerInfo(), rankId);
 }
 
 void Guild::SendMoneyInfo(WorldSession* session) const
@@ -1933,17 +1920,13 @@ void Guild::SendMoneyInfo(WorldSession* session) const
     packet.RemainingWithdrawMoney = amount;
     session->SendPacket(packet.Write());
 
-    LOG_DEBUG("guild", "MSG_GUILD_BANK_MONEY_WITHDRAWN [{}] Money: {}", session->GetPlayerInfo(), amount);
+    LOG_DEBUG("guild", "CMSG_GUILD_BANK_REMAINING_WITHDRAW_MONEY_QUERY [{}] Money: {}", session->GetPlayerInfo(), amount);
 }
 
 void Guild::SendLoginInfo(WorldSession* session)
 {
-    WorldPackets::Guild::GuildEvent motd;
-    motd.Type = GE_MOTD;
-    motd.Params.emplace_back(m_motd);
-    session->SendPacket(motd.Write());
-
-    LOG_DEBUG("guild", "SMSG_GUILD_EVENT [{}] MOTD", session->GetPlayerInfo());
+    // the guild MOTD went out as SMSG_GUILD_EVENT, which the 3.4.3 client splits into SMSG_GUILD_EVENT_MOTD
+    // and the others; not sent until ported
 
     Player* player = session->GetPlayer();
 
@@ -2198,38 +2181,6 @@ void Guild::BroadcastPacket(WorldPacket const* packet) const
     for (auto const& [guid, member] : m_members)
         if (Player* player = member.FindPlayer())
             player->SendDirectMessage(packet);
-}
-
-void Guild::MassInviteToEvent(WorldSession* session, uint32 minLevel, uint32 maxLevel, uint32 minRank)
-{
-    uint32 count = 0;
-
-    WorldPacket data(SMSG_CALENDAR_FILTER_GUILD);
-    data << uint32(count); // count placeholder
-
-    for (auto const& [guid, member] : m_members)
-    {
-        // not sure if needed, maybe client checks it as well
-        if (count >= CALENDAR_MAX_INVITES)
-        {
-            if (Player* player = session->GetPlayer())
-                sCalendarMgr->SendCalendarCommandResult(player->GetGUID(), CALENDAR_ERROR_INVITES_EXCEEDED);
-            return;
-        }
-
-        uint32 level = sCharacterCache->GetCharacterLevelByGuid(member.GetGUID());
-
-        if (member.GetGUID() != session->GetPlayer()->GetGUID() && level >= minLevel && level <= maxLevel && member.IsRankNotLower(minRank))
-        {
-            data.appendPackGUID(member.GetGUID().GetRawValue());
-            data << uint8(0); // unk
-            ++count;
-        }
-    }
-
-    data.put<uint32>(0, count);
-
-    session->SendPacket(&data);
 }
 
 // Members handling
@@ -2873,27 +2824,10 @@ void Guild::_SendBankContentUpdate(uint8 tabId, SlotIds slots) const
 }
 
 void Guild::_BroadcastEvent(GuildEvents guildEvent, ObjectGuid guid,
-                            Optional<std::string_view> param1 /*= {}*/, Optional<std::string_view> param2 /*= {}*/, Optional<std::string_view> param3 /*= {}*/) const
+                            Optional<std::string_view> /*param1 = {}*/, Optional<std::string_view> /*param2 = {}*/, Optional<std::string_view> /*param3 = {}*/) const
 {
-    WorldPackets::Guild::GuildEvent event;
-    event.Type = guildEvent;
-    if (param1)
-        event.Params.push_back(*param1);
-
-    if (param2)
-    {
-        event.Params.resize(2);
-        event.Params[1] = *param2;
-    }
-
-    if (param3)
-    {
-        event.Params.resize(3);
-        event.Params[2] = *param3;
-    }
-    event.Guid = guid;
-    BroadcastPacket(event.Write());
-    LOG_DEBUG("guild", "SMSG_GUILD_EVENT [Broadcast] Event: {}", guildEvent);
+    // the 3.4.3 client splits SMSG_GUILD_EVENT into SMSG_GUILD_EVENT_*; not sent until ported
+    LOG_DEBUG("guild", "Guild event {} for {} not sent (no 3.4.3 equivalent yet)", guildEvent, guid.ToString());
 }
 
 void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 0*/, bool sendAllSlots /*= false*/, SlotIds *slots /*= nullptr*/) const
@@ -2976,7 +2910,7 @@ void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 
             packet.WithdrawalsRemaining = _GetMemberRemainingSlots(*member, tabId);
 
         session->SendPacket(packet.Write());
-        LOG_DEBUG("guild", "SMSG_GUILD_BANK_LIST [{}]: TabId: {}, FullSlots: {}, slots: {}",
+        LOG_DEBUG("guild", "SMSG_GUILD_BANK_QUERY_RESULTS [{}]: TabId: {}, FullSlots: {}, slots: {}",
                      session->GetPlayerInfo(), tabId, sendAllSlots, packet.WithdrawalsRemaining);
     }
     else
@@ -2996,7 +2930,7 @@ void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 
 
             packet.SetWithdrawalsRemaining(_GetMemberRemainingSlots(member, tabId));
             player->SendDirectMessage(packet.GetRawPacket());
-            LOG_DEBUG("guild", "SMSG_GUILD_BANK_LIST [{}]: TabId: {}, FullSlots: {}, slots: {}"
+            LOG_DEBUG("guild", "SMSG_GUILD_BANK_QUERY_RESULTS [{}]: TabId: {}, FullSlots: {}, slots: {}"
                     , player->GetName(), tabId, sendAllSlots, packet.WithdrawalsRemaining);
         }
     }

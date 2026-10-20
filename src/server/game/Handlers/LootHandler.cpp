@@ -32,7 +32,7 @@
 
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: CMSG_AUTOSTORE_LOOT_ITEM");
+    LOG_DEBUG("network", "WORLD: CMSG_LOOT_ITEM");
     Player* player = GetPlayer();
     ObjectGuid lguid = player->GetLootGUID();
     Loot* loot = nullptr;
@@ -286,7 +286,7 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
 
 void WorldSession::HandleLootOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: CMSG_LOOT");
+    LOG_DEBUG("network", "WORLD: CMSG_LOOT_UNIT");
 
     ObjectGuid guid;
     recvData >> guid;
@@ -495,7 +495,7 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPacket& recvData)
         return;
     }
 
-    LOG_DEBUG("network", "WorldSession::HandleLootMasterGiveOpcode (CMSG_LOOT_MASTER_GIVE, 0x02A3) Target = [{}].", target->GetName());
+    LOG_DEBUG("network", "WorldSession::HandleLootMasterGiveOpcode (CMSG_MASTER_LOOT_ITEM, 0x02A3) Target = [{}].", target->GetName());
 
     if (_player->GetLootGUID() != lootguid)
     {

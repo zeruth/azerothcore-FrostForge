@@ -253,12 +253,9 @@ namespace Trainer
         player->SendDirectMessage(trainerBuyFailed.Write());
     }
 
-    void Trainer::SendTeachSucceeded(Creature const* npc, Player const* player, uint32 spellId) const
+    void Trainer::SendTeachSucceeded(Creature const* /*npc*/, Player const* /*player*/, uint32 /*spellId*/) const
     {
-        WorldPackets::NPC::TrainerBuySucceeded trainerBuySucceeded;
-        trainerBuySucceeded.TrainerGUID = npc->GetGUID();
-        trainerBuySucceeded.SpellID = spellId;
-        player->SendDirectMessage(trainerBuySucceeded.Write());
+        // the 3.4.3 client has no SMSG_TRAINER_BUY_SUCCEEDED; it learns of the spell from SMSG_LEARNED_SPELLS
     }
 
     std::string const& Trainer::GetGreeting(LocaleConstant locale) const

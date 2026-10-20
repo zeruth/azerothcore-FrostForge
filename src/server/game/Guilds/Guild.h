@@ -727,7 +727,6 @@ public:
     void OnPlayerStatusChange(Player* player, uint32 flag, bool state);
 
     // Send info to client
-    void SendInfo(WorldSession* session) const;
     void SendEventLog(WorldSession* session) const;
     void SendBankLog(WorldSession* session, uint8 tabId) const;
     void SendBankTabsInfo(WorldSession* session, bool showTabs = false);
@@ -752,8 +751,6 @@ public:
     void BroadcastToGuild(WorldSession* session, bool officerOnly, std::string_view msg, uint32 language = LANG_UNIVERSAL) const;
     void BroadcastPacketToRank(WorldPacket const* packet, uint8 rankId) const;
     void BroadcastPacket(WorldPacket const* packet) const;
-
-    void MassInviteToEvent(WorldSession* session, uint32 minLevel, uint32 maxLevel, uint32 minRank);
 
     template<class Do>
     void BroadcastWorker(Do& _do, Player* except = nullptr)

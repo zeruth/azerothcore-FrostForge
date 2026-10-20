@@ -23,18 +23,6 @@ void WorldPackets::Calendar::GetEvent::Read()
     _worldPacket >> EventId;
 }
 
-void WorldPackets::Calendar::GuildFilter::Read()
-{
-    _worldPacket >> MinimumLevel;
-    _worldPacket >> MaximumLevel;
-    _worldPacket >> MinimumRank;
-}
-
-void WorldPackets::Calendar::ArenaTeam::Read()
-{
-    _worldPacket >> ArenaTeamId;
-}
-
 void WorldPackets::Calendar::CalendarComplain::Read()
 {
     _worldPacket >> EventId;

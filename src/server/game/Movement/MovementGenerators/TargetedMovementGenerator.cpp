@@ -519,7 +519,7 @@ static Optional<float> GetVelocity(Unit* owner, Unit* target, G3D::Vector3 const
 static Position const PredictPosition(Unit* target)
 {
     Position pos = target->GetPosition();
-    // 0.5 - it's time (0.5 sec) between starting movement opcode (e.g. MSG_MOVE_START_FORWARD) and MSG_MOVE_HEARTBEAT sent by client
+    // 0.5 - it's time (0.5 sec) between starting movement opcode (e.g. CMSG_MOVE_START_FORWARD) and CMSG_MOVE_HEARTBEAT sent by client
     float speed = target->GetSpeed(target->m_movementInfo.GetSpeedType()) * 0.5f;
     float orientation = target->GetOrientation();
 

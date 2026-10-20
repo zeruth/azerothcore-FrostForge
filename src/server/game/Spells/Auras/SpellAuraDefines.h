@@ -19,7 +19,7 @@
 #define ACORE_SPELLAURADEFINES_H
 
 #define MAX_AURAS 255                                        // Client Limit
-#define MAX_AURAS_GROUP_UPDATE 64                            // Limit of SMSG_PARY_MEMBER_STATS_FULL and SMSG_PARTY_MEMBER_STATS
+#define MAX_AURAS_GROUP_UPDATE 64                            // Limit of SMSG_PARY_MEMBER_STATS_FULL and SMSG_PARTY_MEMBER_PARTIAL_STATE
 
 enum AURA_FLAGS
 {

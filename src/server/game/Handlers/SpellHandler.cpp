@@ -331,7 +331,7 @@ void WorldSession::HandleGameObjectUseOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
-    LOG_DEBUG("network", "WORLD: Recvd CMSG_GAMEOBJ_USE Message [{}]", guid.ToString());
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_GAME_OBJ_USE Message [{}]", guid.ToString());
 
     if (GameObject* obj = GetPlayer()->GetMap()->GetGameObject(guid))
     {
@@ -352,7 +352,7 @@ void WorldSession::HandleGameobjectReportUse(WorldPacket& recvPacket)
     ObjectGuid guid;
     recvPacket >> guid;
 
-    LOG_DEBUG("network", "WORLD: Recvd CMSG_GAMEOBJ_REPORT_USE Message [{}]", guid.ToString());
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_GAME_OBJ_REPORT_USE Message [{}]", guid.ToString());
 
     // ignore for remote control state
     if (_player->m_mover != _player)
@@ -740,7 +740,7 @@ void WorldSession::HandleSpellClick(WorldPacket& recvData)
 
 void WorldSession::HandleMirrorImageDataRequest(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: CMSG_GET_MIRRORIMAGE_DATA");
+    LOG_DEBUG("network", "WORLD: CMSG_GET_MIRROR_IMAGE_DATA");
     ObjectGuid guid;
     recvData >> guid;
 
@@ -757,7 +757,7 @@ void WorldSession::HandleMirrorImageDataRequest(WorldPacket& recvData)
     if (!creator)
         return;
 
-    WorldPacket data(SMSG_MIRRORIMAGE_DATA, 68);
+    WorldPacket data(SMSG_MIRROR_IMAGE_COMPONENTED_DATA, 68);
     data << guid;
     data << uint32(creator->GetDisplayId());
     data << uint8(creator->getRace());
@@ -829,44 +829,4 @@ void WorldSession::HandleMirrorImageDataRequest(WorldPacket& recvData)
     }
 
     SendPacket(&data);
-}
-
-void WorldSession::HandleUpdateProjectilePosition(WorldPacket& recvPacket)
-{
-    LOG_DEBUG("network", "WORLD: CMSG_UPDATE_PROJECTILE_POSITION");
-
-    ObjectGuid casterGuid;
-    uint32 spellId;
-    uint8 castCount;
-    float x, y, z;    // Position of missile hit
-
-    recvPacket >> casterGuid;
-    recvPacket >> spellId;
-    recvPacket >> castCount;
-    recvPacket >> x;
-    recvPacket >> y;
-    recvPacket >> z;
-
-    Unit* caster = ObjectAccessor::GetUnit(*_player, casterGuid);
-    if (!caster)
-        return;
-
-    Spell* spell = caster->FindCurrentSpellBySpellId(spellId);
-    if (!spell || !spell->m_targets.HasDst())
-        return;
-
-    Position pos = *spell->m_targets.GetDstPos();
-    pos.Relocate(x, y, z);
-    spell->m_targets.ModDst(pos);
-
-    // we changed dest, recalculate flight time
-    spell->RecalculateDelayMomentForDst();
-
-    WorldPacket data(SMSG_SET_PROJECTILE_POSITION, 21);
-    data << casterGuid;
-    data << uint8(castCount);
-    data << float(x);
-    data << float(y);
-    data << float(z);
-    caster->SendMessageToSet(&data, true);
 }

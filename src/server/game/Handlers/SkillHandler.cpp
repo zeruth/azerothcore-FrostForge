@@ -57,7 +57,7 @@ void WorldSession::HandleLearnPreviewTalents(WorldPacket& recvPacket)
 
 void WorldSession::HandleTalentWipeConfirmOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "MSG_TALENT_WIPE_CONFIRM");
+    LOG_DEBUG("network", "CMSG_CONFIRM_RESPEC_WIPE");
     ObjectGuid guid;
     recvData >> guid;
 
@@ -77,7 +77,7 @@ void WorldSession::HandleTalentWipeConfirmOpcode(WorldPacket& recvData)
 
     if (!(_player->resetTalents()))
     {
-        WorldPacket data(MSG_TALENT_WIPE_CONFIRM, 8 + 4);  //you have not any talent
+        WorldPacket data(SMSG_RESPEC_WIPE_CONFIRM, 8 + 4);  //you have not any talent
         data << uint64(0);
         data << uint32(0);
         SendPacket(&data);

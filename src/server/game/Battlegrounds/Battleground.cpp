@@ -1374,7 +1374,7 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 {
     uint8 type = (isArena() ? 1 : 0);
 
-    data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * GetPlayerScores()->size());
+    data.Initialize(SMSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * GetPlayerScores()->size());
     data << uint8(type); // type (battleground = 0 / arena = 1)
 
     if (type) // arena

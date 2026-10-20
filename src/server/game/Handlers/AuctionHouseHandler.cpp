@@ -66,7 +66,7 @@ void WorldSession::SendAuctionHello(ObjectGuid guid, Creature* unit)
     if (!ahEntry)
         return;
 
-    WorldPacket data(MSG_AUCTION_HELLO, 12);
+    WorldPacket data(SMSG_AUCTION_HELLO_RESPONSE, 12);
     data << guid;
     data << uint32(ahEntry->houseId);
     data << uint8(1);                                       // 3.3.3: 1 - AH enabled, 0 - AH disabled
@@ -88,29 +88,15 @@ void WorldSession::SendAuctionCommandResult(uint32 auctionId, uint32 Action, uin
 //this function sends notification, if bidder is online
 void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template)
 {
-    WorldPacket data(SMSG_AUCTION_BIDDER_NOTIFICATION, (8 * 4));
-    data << uint32(location);
-    data << uint32(auctionId);
-    data << bidder;
-    data << uint32(bidSum);
-    data << uint32(diff);
-    data << uint32(item_template);
-    data << uint32(0);
-    SendPacket(&data);
+    // the 3.4.3 client splits SMSG_AUCTION_BIDDER_NOTIFICATION into SMSG_AUCTION_OUTBID_NOTIFICATION and
+    // SMSG_AUCTION_WON_NOTIFICATION; not sent until ported
 }
 
 //this void causes on client to display: "Your auction sold"
 void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
 {
-    WorldPacket data(SMSG_AUCTION_OWNER_NOTIFICATION, (8 * 4));
-    data << uint32(auction->Id);
-    data << uint32(auction->bid);
-    data << uint32(0);                                      //unk
-    data << uint64(0);                                      //unk (bidder guid?)
-    data << uint32(auction->item_template);
-    data << uint32(0);                                      //unk
-    data << float(0);                                       //unk (time?)
-    SendPacket(&data);
+    // the 3.4.3 client splits SMSG_AUCTION_OWNER_NOTIFICATION into SMSG_AUCTION_OWNER_BID_NOTIFICATION and
+    // SMSG_AUCTION_CLOSED_NOTIFICATION; not sent until ported
 }
 
 //this void creates new auction and adds auction to some auctionhouse
@@ -852,7 +838,7 @@ void WorldSession::HandleAuctionListPendingSales(WorldPacket& recvData)
 
     uint32 count = 0;
 
-    WorldPacket data(SMSG_AUCTION_LIST_PENDING_SALES, 4);
+    WorldPacket data(SMSG_AUCTION_LIST_PENDING_SALES_RESULT, 4);
     data << uint32(count);                                  // count
     /*for (uint32 i = 0; i < count; ++i)
     {

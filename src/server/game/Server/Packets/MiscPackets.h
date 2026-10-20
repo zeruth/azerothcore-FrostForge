@@ -44,7 +44,7 @@ namespace WorldPackets
         class LevelUpInfo final : public ServerPacket
         {
         public:
-            LevelUpInfo() : ServerPacket(SMSG_LEVELUP_INFO, 56) { }
+            LevelUpInfo() : ServerPacket(SMSG_LEVEL_UP_INFO, 56) { }
 
             WorldPacket const* Write() override;
 
@@ -96,7 +96,7 @@ namespace WorldPackets
         class MinimapPingClient final : public ClientPacket
         {
         public:
-            MinimapPingClient(WorldPacket&& packet) : ClientPacket(MSG_MINIMAP_PING, std::move(packet)) {}
+            MinimapPingClient(WorldPacket&& packet) : ClientPacket(SMSG_MINIMAP_PING, std::move(packet)) {}
 
             void Read() override;
 
@@ -107,7 +107,7 @@ namespace WorldPackets
         class MinimapPing final : public ServerPacket
         {
         public:
-            MinimapPing() : ServerPacket(MSG_MINIMAP_PING, 8 + 4 + 4) { }
+            MinimapPing() : ServerPacket(SMSG_MINIMAP_PING, 8 + 4 + 4) { }
 
             WorldPacket const* Write() override;
 
@@ -119,7 +119,7 @@ namespace WorldPackets
         class RandomRollClient final : public ClientPacket
         {
         public:
-            RandomRollClient(WorldPacket&& packet) : ClientPacket(MSG_RANDOM_ROLL, std::move(packet)) { }
+            RandomRollClient(WorldPacket&& packet) : ClientPacket(SMSG_RANDOM_ROLL, std::move(packet)) { }
 
             void Read() override;
 
@@ -130,7 +130,7 @@ namespace WorldPackets
         class RandomRoll final : public ServerPacket
         {
         public:
-            RandomRoll() : ServerPacket(MSG_RANDOM_ROLL, 4 + 4 + 4 + 8) { }
+            RandomRoll() : ServerPacket(SMSG_RANDOM_ROLL, 4 + 4 + 4 + 8) { }
 
             WorldPacket const* Write() override;
 
@@ -201,20 +201,10 @@ namespace WorldPackets
 
         };
 
-        class UITime final : public ServerPacket
-        {
-        public:
-            UITime() : ServerPacket(SMSG_WORLD_STATE_UI_TIMER_UPDATE, 4) { }
-
-            WorldPacket const* Write() override;
-
-            uint32 Time = 0;
-        };
-
         class Complain final : public ClientPacket
         {
         public:
-            Complain(WorldPacket&& packet) : ClientPacket(CMSG_COMPLAIN, std::move(packet)) {}
+            Complain(WorldPacket&& packet) : ClientPacket(CMSG_COMPLAINT, std::move(packet)) {}
 
             void Read() override;
 
@@ -230,23 +220,13 @@ namespace WorldPackets
         class ComplainResult final : public ServerPacket
         {
         public:
-            ComplainResult() : ServerPacket(SMSG_COMPLAIN_RESULT, 1) {}
+            ComplainResult() : ServerPacket(SMSG_COMPLAINT_RESULT, 1) {}
 
             WorldPacket const* Write() override;
 
             uint8 Unk = 0;
         };
 
-        class PlayTimeWarning final : public ServerPacket
-        {
-        public:
-            PlayTimeWarning() : ServerPacket(SMSG_PLAY_TIME_WARNING, 4 + 4) {}
-
-            WorldPacket const* Write() override;
-
-            uint32 Flag = 0; // PlayTimeFlag mask, set by WorldSession::SendPlayTimeWarning
-            int32 PlayTimeRemaining = 0;
-        };
     }
 }
 

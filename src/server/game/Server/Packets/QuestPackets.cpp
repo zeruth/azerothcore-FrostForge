@@ -104,12 +104,6 @@ void WorldPackets::Quest::QuestPushResultClient::Read()
     QuestShareMessage = static_cast<QuestShareMessages>(Message);
 }
 
-void WorldPackets::Quest::QuestLogSwapQuest::Read()
-{
-    _worldPacket >> Slot1;
-    _worldPacket >> Slot2;
-}
-
 void WorldPackets::Quest::QuestLogRemoveQuest::Read()
 {
     _worldPacket >> Slot;

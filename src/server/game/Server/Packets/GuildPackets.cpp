@@ -23,7 +23,7 @@ void WorldPackets::Guild::QueryGuildInfo::Read()
 }
 
 WorldPackets::Guild::QueryGuildInfoResponse::QueryGuildInfoResponse()
-        : ServerPacket(SMSG_GUILD_QUERY_RESPONSE) { }
+        : ServerPacket(SMSG_QUERY_GUILD_INFO_RESPONSE) { }
 
 WorldPacket const* WorldPackets::Guild::QueryGuildInfoResponse::Write()
 {
@@ -38,21 +38,6 @@ WorldPacket const* WorldPackets::Guild::QueryGuildInfoResponse::Write()
     _worldPacket << uint32(Info.BorderColor);
     _worldPacket << uint32(Info.BackgroundColor);
     _worldPacket << uint32(Info.RankCount);
-
-    return &_worldPacket;
-}
-
-void WorldPackets::Guild::GuildCreate::Read()
-{
-    _worldPacket >> GuildName;
-}
-
-WorldPacket const* WorldPackets::Guild::GuildInfoResponse::Write()
-{
-    _worldPacket << GuildName;
-    _worldPacket.AppendPackedTime(CreateDate);
-    _worldPacket << int32(NumMembers);
-    _worldPacket << int32(NumAccounts);
 
     return &_worldPacket;
 }
@@ -117,28 +102,6 @@ ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::Guild::GuildRosterMemberD
     data << rosterMemberData.OfficerNote;
 
     return data;
-}
-
-WorldPacket const* WorldPackets::Guild::GuildEvent::Write()
-{
-    _worldPacket << uint8(Type);
-    _worldPacket << uint8(Params.size());
-    for (std::string_view param : Params)
-        _worldPacket << param;
-
-    switch (Type)
-    {
-        case GE_JOINED:
-        case GE_LEFT:
-        case GE_SIGNED_ON:
-        case GE_SIGNED_OFF:
-            _worldPacket << Guid;
-            break;
-        default:
-            break;
-    }
-
-    return &_worldPacket;
 }
 
 WorldPacket const* WorldPackets::Guild::GuildEventLogQueryResults::Write()
@@ -332,49 +295,6 @@ void WorldPackets::Guild::GuildBankQueryResults::SetWithdrawalsRemaining(int32 w
 {
     WithdrawalsRemaining = withdrawalsRemaining;
     _worldPacket.put<int32>(_withdrawalsRemainingPos, withdrawalsRemaining);
-}
-
-void WorldPackets::Guild::GuildBankSwapItems::Read()
-{
-    _worldPacket >> Banker;
-    _worldPacket >> BankOnly;
-
-    if (BankOnly)
-    {
-        // dest
-        _worldPacket >> BankTab;
-        _worldPacket >> BankSlot;
-        _worldPacket >> ItemID;
-
-        // src
-        _worldPacket >> BankTab1;
-        _worldPacket >> BankSlot1;
-        _worldPacket >> ItemID1;
-
-        _worldPacket >> AutoStore;
-        _worldPacket >> BankItemCount;
-    }
-    else
-    {
-        _worldPacket >> BankTab;
-        _worldPacket >> BankSlot;
-        _worldPacket >> ItemID;
-
-        _worldPacket >> AutoStore;
-        if (AutoStore)
-        {
-            _worldPacket >> BankItemCount;
-            _worldPacket >> ToSlot;
-            _worldPacket >> StackCount;
-        }
-        else
-        {
-            _worldPacket >> ContainerSlot;
-            _worldPacket >> ContainerItemSlot;
-            _worldPacket >> ToSlot;
-            _worldPacket >> StackCount;
-        }
-    }
 }
 
 void WorldPackets::Guild::GuildBankLogQuery::Read()

@@ -297,7 +297,7 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvData*/)
 {
-    LOG_DEBUG("network", "WORLD: Recvd MSG_BATTLEGROUND_PLAYER_POSITIONS Message");
+    LOG_DEBUG("network", "WORLD: Recvd SMSG_BATTLEGROUND_PLAYER_POSITIONS Message");
 
     Battleground* bg = _player->GetBattleground();
     if (!bg)                                                 // can't be received if player not in battleground
@@ -321,7 +321,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
             ++flagCarrierCount;
     }
 
-    WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 16 * flagCarrierCount);
+    WorldPacket data(SMSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 16 * flagCarrierCount);
     // Used to send several player positions (found used in AV)
     data << 0;  // CGBattlefieldInfo__m_numPlayerPositions
     /*
@@ -348,7 +348,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
 
 void WorldSession::HandlePVPLogDataOpcode(WorldPacket& /*recvData*/)
 {
-    LOG_DEBUG("network", "WORLD: Recvd MSG_PVP_LOG_DATA Message");
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_PVP_LOG_DATA Message");
 
     Battleground* bg = _player->GetBattleground();
     if (!bg)
@@ -362,7 +362,7 @@ void WorldSession::HandlePVPLogDataOpcode(WorldPacket& /*recvData*/)
     bg->BuildPvPLogDataPacket(data);
     SendPacket(&data);
 
-    LOG_DEBUG("network", "WORLD: Sent MSG_PVP_LOG_DATA Message");
+    LOG_DEBUG("network", "WORLD: Sent CMSG_PVP_LOG_DATA Message");
 }
 
 void WorldSession::HandleBattlefieldListOpcode(WorldPacket& recvData)
@@ -618,7 +618,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleBattlefieldLeaveOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: Recvd CMSG_LEAVE_BATTLEFIELD Message");
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_BATTLEFIELD_LEAVE Message");
 
     recvData.read_skip<uint8>();                           // unk1
     recvData.read_skip<uint8>();                           // unk2

@@ -1031,7 +1031,7 @@ bool Player::SatisfyQuestLog(bool msg)
     if (msg)
     {
         SendDirectMessage(WorldPackets::Quest::QuestLogFull().Write());
-        LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTLOG_FULL");
+        LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_LOG_FULL");
     }
     return false;
 }
@@ -2425,13 +2425,13 @@ void Player::SendQuestComplete(uint32 quest_id)
     WorldPackets::Quest::QuestUpdateComplete questUpdateComplete;
     questUpdateComplete.QuestId = quest_id;
     SendDirectMessage(questUpdateComplete.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTUPDATE_COMPLETE quest = {}", quest_id);
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_UPDATE_COMPLETE quest = {}", quest_id);
 }
 
 void Player::SendQuestReward(Quest const* quest, uint32 XP)
 {
     uint32 questid = quest->GetQuestId();
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_QUEST_COMPLETE quest = {}", questid);
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_QUEST_COMPLETE quest = {}", questid);
     sGameEventMgr->HandleQuestComplete(questid);
     WorldPackets::Quest::QuestGiverQuestComplete questGiverQuestComplete;
     questGiverQuestComplete.QuestId = questid;
@@ -2458,7 +2458,7 @@ void Player::SendQuestFailed(uint32 questId, InventoryResult reason)
     questGiverQuestFailed.QuestId = questId;
     questGiverQuestFailed.FailureReason = reason; // failed reason (valid reasons: 4, 16, 50, 17, 74, other values show default message)
     SendDirectMessage(questGiverQuestFailed.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_QUEST_FAILED");
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_QUEST_FAILED");
 }
 
 void Player::SendQuestTimerFailed(uint32 quest_id)
@@ -2469,7 +2469,7 @@ void Player::SendQuestTimerFailed(uint32 quest_id)
     WorldPackets::Quest::QuestUpdateFailedTimer questUpdateFailedTimer;
     questUpdateFailedTimer.QuestId = quest_id;
     SendDirectMessage(questUpdateFailedTimer.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTUPDATE_FAILEDTIMER");
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_UPDATE_FAILED_TIMER");
 }
 
 void Player::SendCanTakeQuestResponse(QuestFailedReason msg) const
@@ -2477,7 +2477,7 @@ void Player::SendCanTakeQuestResponse(QuestFailedReason msg) const
     WorldPackets::Quest::QuestGiverQuestInvalid questGiverQuestInvalid;
     questGiverQuestInvalid.FailureReason = msg;
     SendDirectMessage(questGiverQuestInvalid.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_QUEST_INVALID");
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_INVALID_QUEST");
 }
 
 void Player::SendQuestConfirmAccept(Quest const* quest, Player* pReceiver)
@@ -2511,17 +2511,12 @@ void Player::SendPushToPartyResponse(Player const* player, QuestShareMessages ms
     questPushResult.PlayerGuid = player->GetGUID();
     questPushResult.QuestShareMessage = msg;
     SendDirectMessage(questPushResult.Write());
-    LOG_DEBUG("network", "WORLD: Sent MSG_QUEST_PUSH_RESULT");
+    LOG_DEBUG("network", "WORLD: Sent CMSG_QUEST_PUSH_RESULT");
 }
 
 void Player::SendQuestUpdateAddItem(Quest const* /*quest*/, uint32 /*item_idx*/, uint16 /*count*/)
 {
-    // Packet is intentionally sent empty; the optional payload (item id and
-    // count) is not required by the 3.3.5 client:
-    //questUpdateAddItem.ItemId = quest->RequiredItemId[item_idx];
-    //questUpdateAddItem.Count = count;
-    SendDirectMessage(WorldPackets::Quest::QuestUpdateAddItem().Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTUPDATE_ADD_ITEM");
+    // the 3.4.3 client has no SMSG_QUESTUPDATE_ADD_ITEM: item objectives update from the item count
 }
 
 void Player::SendQuestUpdateAddCreatureOrGo(Quest const* quest, ObjectGuid guid, uint32 creatureOrGO_idx, uint16 old_count, uint16 add_count)
@@ -2540,7 +2535,7 @@ void Player::SendQuestUpdateAddCreatureOrGo(Quest const* quest, ObjectGuid guid,
     questUpdateAddKill.RequiredCount = quest->RequiredNpcOrGoCount[creatureOrGO_idx];
     questUpdateAddKill.ObjectiveGuid = guid;
     SendDirectMessage(questUpdateAddKill.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTUPDATE_ADD_KILL");
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_UPDATE_ADD_CREDIT");
 
     uint16 log_slot = FindQuestSlot(quest->GetQuestId());
     if (log_slot < MAX_QUEST_LOG_SIZE)
@@ -2556,7 +2551,7 @@ void Player::SendQuestUpdateAddPlayer(Quest const* quest, uint16 old_count, uint
     questUpdateAddPvPKill.CurrentCount = old_count + add_count;
     questUpdateAddPvPKill.RequiredCount = quest->GetPlayersSlain();
     SendDirectMessage(questUpdateAddPvPKill.Write());
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTUPDATE_ADD_PVP_KILL");
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_UPDATE_ADD_PVP_CREDIT");
 
     uint16 log_slot = FindQuestSlot(quest->GetQuestId());
     if (log_slot < MAX_QUEST_LOG_SIZE)

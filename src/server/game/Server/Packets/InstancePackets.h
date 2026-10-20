@@ -49,7 +49,7 @@ namespace WorldPackets
         class SetDungeonDifficulty final : public ServerPacket
         {
         public:
-            SetDungeonDifficulty() : ServerPacket(MSG_SET_DUNGEON_DIFFICULTY, 12) {}
+            SetDungeonDifficulty() : ServerPacket(SMSG_SET_DUNGEON_DIFFICULTY, 12) {}
 
             WorldPacket const* Write() override;
 
@@ -61,7 +61,7 @@ namespace WorldPackets
         class SetDungeonDifficultyClient final : public ClientPacket
         {
         public:
-            SetDungeonDifficultyClient(WorldPacket&& packet) : ClientPacket(MSG_SET_DUNGEON_DIFFICULTY, std::move(packet)) {}
+            SetDungeonDifficultyClient(WorldPacket&& packet) : ClientPacket(SMSG_SET_DUNGEON_DIFFICULTY, std::move(packet)) {}
 
             void Read() override;
 
@@ -81,7 +81,7 @@ namespace WorldPackets
         class SetRaidDifficulty final : public ServerPacket
         {
         public:
-            SetRaidDifficulty() : ServerPacket(MSG_SET_RAID_DIFFICULTY, 12) {}
+            SetRaidDifficulty() : ServerPacket(SMSG_RAID_DIFFICULTY_SET, 12) {}
 
             WorldPacket const* Write() override;
 
@@ -93,7 +93,7 @@ namespace WorldPackets
         class SetRaidDifficultyClient final : public ClientPacket
         {
         public:
-            SetRaidDifficultyClient(WorldPacket&& packet) : ClientPacket(MSG_SET_RAID_DIFFICULTY, std::move(packet)) {}
+            SetRaidDifficultyClient(WorldPacket&& packet) : ClientPacket(SMSG_RAID_DIFFICULTY_SET, std::move(packet)) {}
 
             void Read() override;
 

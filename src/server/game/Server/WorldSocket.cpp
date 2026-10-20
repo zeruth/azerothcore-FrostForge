@@ -146,14 +146,6 @@ bool WorldSocket::Update()
         do
         {
             uint16 opcode = queued->GetOpcode();
-            if (opcode < FIRST_343_OPCODE)
-            {
-                // still on its 3.3.5 number: the 3.4.3 client would take it for something else
-                LOG_TRACE("network.opcode", "S->C: {} not sent, not converted to 3.4.3 yet", GetOpcodeNameForLogging(static_cast<OpcodeServer>(opcode)));
-                delete queued;
-                continue;
-            }
-
             std::vector<uint8> payload(sizeof(opcode) + queued->size());
             payload[0] = uint8(opcode);
             payload[1] = uint8(opcode >> 8);
@@ -478,7 +470,12 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
         case CMSG_ENTER_ENCRYPTED_MODE_ACK:
             LogOpcodeText(opcode, sessionGuard);
             return HandleEnterEncryptedModeAck() ? ReadDataHandlerResult::Ok : ReadDataHandlerResult::Error;
+        case CMSG_ENABLE_NAGLE:
+            // empty (FUN_14076a5d0); may come right after CMSG_AUTH_SESSION. The socket keeps no-delay.
+            LogOpcodeText(opcode, sessionGuard);
+            return ReadDataHandlerResult::Ok;
         case CMSG_QUEUED_MESSAGES_END:
+            // u32 Timestamp; nothing is queued across connections here
             LogOpcodeText(opcode, sessionGuard);
             return ReadDataHandlerResult::Ok;
         case CMSG_LOG_DISCONNECT:
@@ -488,7 +485,7 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             LOG_INFO("network", "WorldSocket: client {} reports disconnect reason {}", GetRemoteIpAddress().to_string(), reason);
             return ReadDataHandlerResult::Ok;
         }
-        case CMSG_TIME_SYNC_RESP:
+        case CMSG_TIME_SYNC_RESPONSE:
             packetToQueue = new WorldPacket(std::move(packet), GameTime::Now());
             break;
         default:
@@ -510,14 +507,23 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
     OpcodeHandler const* handler = uint32(opcode) < NUM_OPCODE_HANDLERS ? opcodeTable[opcode] : nullptr;
     if (!handler)
     {
-        // most 3.4.3 opcodes have no handler yet; ignore them rather than drop the client
         LOG_DEBUG("network.opcode", "No defined handler for opcode {} sent by {}", GetOpcodeNameForLogging(static_cast<OpcodeClient>(packetToQueue->GetOpcode())), _worldSession->GetPlayerInfo());
         delete packetToQueue;
         return ReadDataHandlerResult::Ok;
     }
 
+    // a handler still reading the 3.3.5 layout would misread the 3.4.3 one: ignore the packet
+    // rather than drop the client
+    if (!handler->IsConverted())
+    {
+        if (handler->FirstRefusal())
+            LOG_DEBUG("network.opcode", "C->S: {} ignored, its handler is not converted to the 3.4.3 layout yet (logged once)", GetOpcodeNameForLogging(opcode));
+        delete packetToQueue;
+        return ReadDataHandlerResult::Ok;
+    }
+
     // Our Idle timer will reset on any non PING opcodes on login screen, allowing us to catch people idling.
-    if (packetToQueue->GetOpcode() != CMSG_WARDEN_DATA)
+    if (packetToQueue->GetOpcode() != CMSG_WARDEN3_DATA)
     {
         _worldSession->ResetTimeOutTime(false);
     }
@@ -551,6 +557,19 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
 {
     if (!IsOpen())
         return;
+
+    // Only opcodes whose layout has been converted go out: anything else is still built in its 3.3.5
+    // layout, which the 3.4.3 client would misread.
+    OpcodeServer opcode = static_cast<OpcodeServer>(packet.GetOpcode());
+    OpcodeHandler const* handler = uint32(opcode) < NUM_OPCODE_HANDLERS ? opcodeTable[opcode] : nullptr;
+    if (!handler || !handler->IsConverted())
+    {
+        if (!handler)
+            LOG_TRACE("network.opcode", "S->C: {} not sent, the 3.4.3 client has no such opcode", GetOpcodeNameForLogging(opcode));
+        else if (handler->FirstRefusal())
+            LOG_DEBUG("network.opcode", "S->C: {} not sent, not converted to the 3.4.3 layout yet (logged once)", GetOpcodeNameForLogging(opcode));
+        return;
+    }
 
     if (sPacketLog->CanLogPacket() && IsLoggingPackets())
         sPacketLog->LogPacket(packet, SERVER_TO_CLIENT, GetRemoteIpAddress(), GetRemotePort());

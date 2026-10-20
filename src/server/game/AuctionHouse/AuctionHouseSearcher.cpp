@@ -146,7 +146,7 @@ void AuctionHouseWorkerThread::SearchListRequest(AuctionSearchListRequest const&
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchListRequest.playerInfo.playerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_RESULT, (4 + 4 + 4));
+    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_ITEMS_RESULT, (4 + 4 + 4));
     searchResponse->packet << (uint32)0;
 
     if (!searchListRequest.searchInfo.getAll)
@@ -208,7 +208,7 @@ void AuctionHouseWorkerThread::SearchOwnerListRequest(AuctionSearchOwnerListRequ
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchOwnerListRequest.ownerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_OWNER_LIST_RESULT, (4 + 4 + 4));
+    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_OWNER_ITEMS_RESULT, (4 + 4 + 4));
     searchResponse->packet << (uint32)0;                                     // amount place holder
 
     uint32 count = 0;
@@ -238,7 +238,7 @@ void AuctionHouseWorkerThread::SearchBidderListRequest(AuctionSearchBidderListRe
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchBidderListRequest.ownerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_BIDDER_LIST_RESULT, (4 + 4 + 4));
+    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_BIDDER_ITEMS_RESULT, (4 + 4 + 4));
     searchResponse->packet << (uint32)0;                                     //add 0 as count
 
     uint32 count = 0;

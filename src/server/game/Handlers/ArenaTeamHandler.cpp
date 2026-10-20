@@ -26,40 +26,6 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
-void WorldSession::HandleInspectArenaTeamsOpcode(WorldPacket& recvData)
-{
-    LOG_DEBUG("network", "MSG_INSPECT_ARENA_TEAMS");
-
-    ObjectGuid guid;
-    recvData >> guid;
-    LOG_DEBUG("network", "Inspect Arena stats ({})", guid.ToString());
-
-    Player* player = ObjectAccessor::FindPlayer(guid);
-    if (!player)
-    {
-        return;
-    }
-
-    if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
-    {
-        return;
-    }
-
-    if (GetPlayer()->IsValidAttackTarget(player))
-    {
-        return;
-    }
-
-    for (uint8 i = 0; i < MAX_ARENA_SLOT; ++i)
-    {
-        if (uint32 a_id = player->GetArenaTeamId(i))
-        {
-            if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(a_id))
-                arenaTeam->Inspect(this, player->GetGUID());
-        }
-    }
-}
-
 void WorldSession::HandleArenaTeamQueryOpcode(WorldPacket& recvData)
 {
     uint32 arenaTeamId;
@@ -415,12 +381,7 @@ void WorldSession::SendArenaTeamCommandResult(uint32 teamAction, std::string con
 
 void WorldSession::SendNotInArenaTeamPacket(uint8 type)
 {
-    WorldPacket data(SMSG_ARENA_ERROR, 4 + 1);              // 886 - You are not in a %uv%u arena team
-    uint32 unk = 0;
-    data << uint32(unk);                                    // unk(0)
-    if (!unk)
-        data << uint8(type);                                // team type (2=2v2, 3=3v3, 5=5v5), can be used for custom types...
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_ARENA_ERROR
 }
 
 /*

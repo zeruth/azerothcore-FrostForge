@@ -134,13 +134,6 @@ WorldPacket const* WorldPackets::Misc::CrossedInebriationThreshold::Write()
     return &_worldPacket;
 }
 
-WorldPacket const* WorldPackets::Misc::UITime::Write()
-{
-    _worldPacket << uint32(Time);
-
-    return &_worldPacket;
-}
-
 void WorldPackets::Misc::Complain::Read()
 {
     _worldPacket >> SpamType; // 0 - mail, 1 - chat
@@ -165,14 +158,6 @@ void WorldPackets::Misc::Complain::Read()
 WorldPacket const* WorldPackets::Misc::ComplainResult::Write()
 {
     _worldPacket << Unk;
-
-    return &_worldPacket;
-}
-
-WorldPacket const* WorldPackets::Misc::PlayTimeWarning::Write()
-{
-    _worldPacket << Flag;
-    _worldPacket << PlayTimeRemaining;
 
     return &_worldPacket;
 }

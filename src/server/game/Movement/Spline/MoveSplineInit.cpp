@@ -111,11 +111,11 @@ namespace Movement
         unit->m_movementInfo.SetMovementFlags(moveFlags);
         move_spline.Initialize(args);
 
-        WorldPacket data(SMSG_MONSTER_MOVE, 64);
+        WorldPacket data(SMSG_ON_MONSTER_MOVE, 64);
         data << unit->GetPackGUID();
         if (transport)
         {
-            data.SetOpcode(SMSG_MONSTER_MOVE_TRANSPORT);
+            data.SetOpcode(SMSG_ON_MONSTER_MOVE);
             data << unit->GetTransGUID().WriteAsPacked();
             data << int8(unit->GetTransSeat());
         }
@@ -157,11 +157,11 @@ namespace Movement
         move_spline.onTransport = transport;
         move_spline.Initialize(args);
 
-        WorldPacket data(SMSG_MONSTER_MOVE, 64);
+        WorldPacket data(SMSG_ON_MONSTER_MOVE, 64);
         data << unit->GetPackGUID();
         if (transport)
         {
-            data.SetOpcode(SMSG_MONSTER_MOVE_TRANSPORT);
+            data.SetOpcode(SMSG_ON_MONSTER_MOVE);
             data << unit->GetTransGUID().WriteAsPacked();
             data << int8(unit->GetTransSeat());
         }

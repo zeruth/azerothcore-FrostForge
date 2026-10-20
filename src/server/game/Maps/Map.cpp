@@ -2129,7 +2129,7 @@ bool InstanceMap::AddPlayerToMap(Player* player)
 
         if (!playerBind->perm && !mapSave->CanReset() && group && !group->isLFGGroup() && !group->IsLfgRandomInstance())
         {
-            WorldPacket data(SMSG_INSTANCE_LOCK_WARNING_QUERY, 9);
+            WorldPacket data(SMSG_PENDING_RAID_LOCK, 9);
             data << uint32(60000);
             data << uint32(instance_data ? instance_data->GetCompletedEncounterMask() : 0);
             data << uint8(0);

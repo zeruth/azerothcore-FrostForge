@@ -75,7 +75,7 @@ void WorldSession::SendUpdateTrade(bool trader_data /*= true*/)
 {
     TradeData* view_trade = trader_data ? _player->GetTradeData()->GetTraderData() : _player->GetTradeData();
 
-    WorldPacket data(SMSG_TRADE_STATUS_EXTENDED, 1 + 4 + 4 + 4 + 4 + 4 + 7 * (1 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 4 + 4));
+    WorldPacket data(SMSG_TRADE_UPDATED, 1 + 4 + 4 + 4 + 4 + 4 + 7 * (1 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 4 + 4));
     data << uint8(trader_data);                             // 1 means traders data, 0 means own
     data << uint32(0);                                      // CGTradeInfo::m_tradeID
     data << uint32(TRADE_SLOT_COUNT);                       // trade slots count/number?, = next field in most cases

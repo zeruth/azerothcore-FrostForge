@@ -481,7 +481,7 @@ public:
 };
 
 // Struct for use in Unit::CalculateMeleeDamage
-// Need create structure like in SMSG_ATTACKERSTATEUPDATE opcode
+// Need create structure like in SMSG_ATTACKER_STATE_UPDATE opcode
 struct CalcDamageInfo
 {
     Unit*  attacker;             // Attacker
@@ -506,7 +506,7 @@ struct CalcDamageInfo
     MeleeHitOutcome hitOutCome;  /// @todo: remove this field (need use TargetState)
 };
 
-// Spell damage info structure based on structure sending in SMSG_SPELLNONMELEEDAMAGELOG opcode
+// Spell damage info structure based on structure sending in SMSG_SPELL_NON_MELEE_DAMAGE_LOG opcode
 struct SpellNonMeleeDamage
 {
     SpellNonMeleeDamage(Unit* _attacker, Unit* _target, SpellInfo const* _spellInfo, uint32 _schoolMask)
@@ -652,15 +652,15 @@ enum class SpeedOpcodeIndex : uint32
 typedef const Opcodes SpeedOpcodePair[static_cast<size_t>(SpeedOpcodeIndex::MAX)];
 SpeedOpcodePair SetSpeed2Opc_table[MAX_MOVE_TYPE] =
 {
-    {SMSG_FORCE_WALK_SPEED_CHANGE,        SMSG_SPLINE_SET_WALK_SPEED,           MSG_MOVE_SET_WALK_SPEED},
-    {SMSG_FORCE_RUN_SPEED_CHANGE,         SMSG_SPLINE_SET_RUN_SPEED,            MSG_MOVE_SET_RUN_SPEED},
-    {SMSG_FORCE_RUN_BACK_SPEED_CHANGE,    SMSG_SPLINE_SET_RUN_BACK_SPEED,       MSG_MOVE_SET_RUN_BACK_SPEED},
-    {SMSG_FORCE_SWIM_SPEED_CHANGE,        SMSG_SPLINE_SET_SWIM_SPEED,           MSG_MOVE_SET_SWIM_SPEED},
-    {SMSG_FORCE_SWIM_BACK_SPEED_CHANGE,   SMSG_SPLINE_SET_SWIM_BACK_SPEED,      MSG_MOVE_SET_SWIM_BACK_SPEED},
-    {SMSG_FORCE_TURN_RATE_CHANGE,         SMSG_SPLINE_SET_TURN_RATE,            MSG_MOVE_SET_TURN_RATE},
-    {SMSG_FORCE_FLIGHT_SPEED_CHANGE,      SMSG_SPLINE_SET_FLIGHT_SPEED,         MSG_MOVE_SET_FLIGHT_SPEED},
-    {SMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE, SMSG_SPLINE_SET_FLIGHT_BACK_SPEED,    MSG_MOVE_SET_FLIGHT_BACK_SPEED},
-    {SMSG_FORCE_PITCH_RATE_CHANGE,        SMSG_SPLINE_SET_PITCH_RATE,           MSG_MOVE_SET_PITCH_RATE},
+    {SMSG_MOVE_SET_WALK_SPEED,        SMSG_MOVE_SPLINE_SET_WALK_SPEED,           SMSG_MOVE_UPDATE_WALK_SPEED},
+    {SMSG_MOVE_SET_RUN_SPEED,         SMSG_MOVE_SPLINE_SET_RUN_SPEED,            SMSG_MOVE_UPDATE_RUN_SPEED},
+    {SMSG_MOVE_SET_RUN_BACK_SPEED,    SMSG_MOVE_SPLINE_SET_RUN_BACK_SPEED,       SMSG_MOVE_UPDATE_RUN_BACK_SPEED},
+    {SMSG_MOVE_SET_SWIM_SPEED,        SMSG_MOVE_SPLINE_SET_SWIM_SPEED,           SMSG_MOVE_UPDATE_SWIM_SPEED},
+    {SMSG_MOVE_SET_SWIM_BACK_SPEED,   SMSG_MOVE_SPLINE_SET_SWIM_BACK_SPEED,      SMSG_MOVE_UPDATE_SWIM_BACK_SPEED},
+    {SMSG_MOVE_SET_TURN_RATE,         SMSG_MOVE_SPLINE_SET_TURN_RATE,            SMSG_MOVE_UPDATE_TURN_RATE},
+    {SMSG_MOVE_SET_FLIGHT_SPEED,      SMSG_MOVE_SPLINE_SET_FLIGHT_SPEED,         SMSG_MOVE_UPDATE_FLIGHT_SPEED},
+    {SMSG_MOVE_SET_FLIGHT_BACK_SPEED, SMSG_MOVE_SPLINE_SET_FLIGHT_BACK_SPEED,    SMSG_MOVE_UPDATE_FLIGHT_BACK_SPEED},
+    {SMSG_MOVE_SET_PITCH_RATE,        SMSG_MOVE_SPLINE_SET_PITCH_RATE,           SMSG_MOVE_UPDATE_PITCH_RATE},
 };
 
 class Unit : public WorldObject

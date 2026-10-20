@@ -364,7 +364,7 @@ namespace
 // Success is set (FUN_1416943f0).
 void WorldSession::HandleCharEnum(PreparedQueryResult result)
 {
-    WorldPacket data(SMSG_CHAR_ENUM, 1000);
+    WorldPacket data(SMSG_ENUM_CHARACTERS_RESULT, 1000);
 
     data.WriteBit(true);                                        // Success
     data.WriteBit(false);                                       // IsDeletedCharacters
@@ -918,7 +918,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
                     if (!plMover)
                         break;
 
-                    WorldPacket pkt(MSG_MOVE_TELEPORT_ACK, 20);
+                    WorldPacket pkt(SMSG_MOVE_TELEPORT, 20);
                     pkt << plMover->GetPackGUID();
                     pkt << uint32(0); // flags
                     pkt << uint32(0); // time
@@ -1031,11 +1031,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->SetInGuild(0);
         pCurrChar->SetRank(0);
     }
-
-    data.Initialize(SMSG_LEARNED_DANCE_MOVES, 4 + 4);
-    data << uint32(0);
-    data << uint32(0);
-    SendPacket(&data);
 
     pCurrChar->SendInitialPacketsBeforeAddToMap();
 
@@ -1332,11 +1327,6 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
 
         LOG_DEBUG("network.opcode", "WORLD: Sent server info");
     }
-
-    data.Initialize(SMSG_LEARNED_DANCE_MOVES, 4 + 4);
-    data << uint32(0);
-    data << uint32(0);
-    SendPacket(&data);
 
     // Xinef: fix possible problem with flag UNIT_FLAG_STUNNED added during logout
     if (pCurrChar->HasUnitState(UNIT_STATE_LOGOUT_TIMER))
@@ -1814,7 +1804,7 @@ void WorldSession::HandleCharCustomize(WorldPacket& recvData)
     if (ObjectAccessor::FindConnectedPlayer(customizeInfo->Guid) || sWorldSessionMgr->FindOfflineSessionForCharacterGUID(customizeInfo->Guid.GetCounter()))
     {
         recvData.rfinish();
-        WorldPacket data(SMSG_CHAR_CUSTOMIZE, 1);
+        WorldPacket data(SMSG_CHAR_CUSTOMIZE_SUCCESS, 1);
         data << uint8(CHAR_CREATE_ERROR);
         SendPacket(&data);
         return;
@@ -1931,7 +1921,7 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
 
 void WorldSession::HandleEquipmentSetSave(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "CMSG_EQUIPMENT_SET_SAVE");
+    LOG_DEBUG("network", "CMSG_SAVE_EQUIPMENT_SET");
 
     uint64 setGuid;
     recvData.readPackGUID(setGuid);
@@ -2012,7 +2002,7 @@ void WorldSession::HandleEquipmentSetDelete(WorldPacket& recvData)
 
 void WorldSession::HandleEquipmentSetUse(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "CMSG_EQUIPMENT_SET_USE");
+    LOG_DEBUG("network", "CMSG_USE_EQUIPMENT_SET");
 
     std::vector<std::unique_ptr<SavedItem>> savedItems;
     uint8 errorId = 0;
@@ -2098,7 +2088,7 @@ void WorldSession::HandleEquipmentSetUse(WorldPacket& recvData)
         }
     }
 
-    WorldPacket data(SMSG_EQUIPMENT_SET_USE_RESULT, 1);
+    WorldPacket data(SMSG_USE_EQUIPMENT_SET_RESULT, 1);
     data << uint8(errorId);                                       // 4 - equipment swap failed - inventory is full
     SendPacket(&data);
 }
@@ -2134,7 +2124,7 @@ void WorldSession::HandleCharFactionOrRaceChange(WorldPacket& recvData)
         return;
     }
 
-    factionChangeInfo->FactionChange = (recvData.GetOpcode() == CMSG_CHAR_FACTION_CHANGE);
+    factionChangeInfo->FactionChange = (recvData.GetOpcode() == CMSG_CHAR_RACE_OR_FACTION_CHANGE);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_RACE_OR_FACTION_CHANGE_INFOS);
     stmt->SetData(0, factionChangeInfo->Guid.GetCounter());
@@ -2761,14 +2751,14 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
 void WorldSession::SendCharCreate(ResponseCodes result)
 {
-    WorldPacket data(SMSG_CHAR_CREATE, 1);
+    WorldPacket data(SMSG_CREATE_CHAR, 1);
     data << uint8(result);
     SendPacket(&data);
 }
 
 void WorldSession::SendCharDelete(ResponseCodes result)
 {
-    WorldPacket data(SMSG_CHAR_DELETE, 1);
+    WorldPacket data(SMSG_DELETE_CHAR, 1);
     data << uint8(result);
     SendPacket(&data);
 }
@@ -2782,7 +2772,7 @@ void WorldSession::SendCharLoginFailed(LoginFailureReason reason)
 
 void WorldSession::SendCharRename(ResponseCodes result, CharacterRenameInfo const* renameInfo)
 {
-    WorldPacket data(SMSG_CHAR_RENAME, 1 + 8 + renameInfo->Name.size() + 1);
+    WorldPacket data(SMSG_CHARACTER_RENAME_RESULT, 1 + 8 + renameInfo->Name.size() + 1);
     data << uint8(result);
     if (result == RESPONSE_SUCCESS)
     {
@@ -2794,7 +2784,7 @@ void WorldSession::SendCharRename(ResponseCodes result, CharacterRenameInfo cons
 
 void WorldSession::SendCharFactionChange(ResponseCodes result, CharacterFactionChangeInfo const* factionChangeInfo)
 {
-    WorldPacket data(SMSG_CHAR_FACTION_CHANGE, 1 + 8 + factionChangeInfo->Name.size() + 1 + 7);
+    WorldPacket data(SMSG_CHAR_FACTION_CHANGE_RESULT, 1 + 8 + factionChangeInfo->Name.size() + 1 + 7);
     data << uint8(result);
     if (result == RESPONSE_SUCCESS)
     {
@@ -2813,7 +2803,7 @@ void WorldSession::SendCharFactionChange(ResponseCodes result, CharacterFactionC
 
 void WorldSession::SendCharCustomize(ResponseCodes result, CharacterCustomizeInfo const* customizeInfo)
 {
-    WorldPacket data(SMSG_CHAR_CUSTOMIZE, 1 + 8 + customizeInfo->Name.size() + 1 + 6);
+    WorldPacket data(SMSG_CHAR_CUSTOMIZE_SUCCESS, 1 + 8 + customizeInfo->Name.size() + 1 + 6);
     data << uint8(result);
     if (result == RESPONSE_SUCCESS)
     {

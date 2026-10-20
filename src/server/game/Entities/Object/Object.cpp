@@ -279,19 +279,16 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
         {
             if (bg->isArena())
             {
-                WorldPacket data(SMSG_ARENA_UNIT_DESTROYED, 8);
+                WorldPacket data(SMSG_DESTROY_ARENA_UNIT, 8);
                 data << GetGUID();
                 target->SendDirectMessage(&data);
             }
         }
     }
 
-    WorldPacket data(SMSG_DESTROY_OBJECT, 8 + 1);
-    data << GetGUID();
-    //! If the following bool is true, the client will call "void CGUnit_C::OnDeath()" for this object.
-    //! OnDeath() does for eg trigger death animation and interrupts certain spells/missiles/auras/sounds...
-    data << uint8(onDeath ? 1 : 0);
-    target->SendDirectMessage(&data);
+    // the 3.4.3 client has no SMSG_DESTROY_OBJECT: objects leave through SMSG_UPDATE_OBJECT's destroy and
+    // out-of-range lists, which is where this belongs once object updates are ported
+    (void)onDeath;
 }
 
 [[nodiscard]] int32 Object::GetInt32Value(uint16 index) const
@@ -2163,7 +2160,7 @@ void Object::ForceValuesUpdateAtIndex(uint32 i)
 
 void Unit::BuildHeartBeatMsg(WorldPacket* data) const
 {
-    data->Initialize(MSG_MOVE_HEARTBEAT, 32);
+    data->Initialize(SMSG_MOVE_UPDATE, 32);
     *data << GetPackGUID();
     BuildMovementPacket(data);
 }
@@ -2188,7 +2185,7 @@ void WorldObject::SendMessageToSet(WorldPacket const* data, Player const* skippe
 
 void WorldObject::SendObjectDeSpawnAnim(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_GAMEOBJECT_DESPAWN_ANIM, 8);
+    WorldPacket data(SMSG_GAME_OBJECT_DESPAWN, 8);
     data << guid;
     SendMessageToSet(&data, true);
 }
@@ -3829,7 +3826,7 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, Spell const* spell, bool
 
 void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo missInfo)
 {
-    WorldPacket data(SMSG_SPELLLOGMISS, (4 + 8 + 1 + 4 + 8 + 1));
+    WorldPacket data(SMSG_SPELL_MISS_LOG, (4 + 8 + 1 + 4 + 8 + 1));
     data << uint32(spellID);
     data << GetGUID();
     data << uint8(0);                                       // can be 0 or 1
@@ -3850,7 +3847,7 @@ void WorldObject::SendSpellNonMeleeDamageLog(Unit* target, SpellInfo const* spel
         damage = 0;
     }
 
-    WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1));
+    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1));
     data << target->GetPackGUID();
     data << GetPackGUID();
     data << uint32(spellInfo->Id);

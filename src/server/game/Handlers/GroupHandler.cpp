@@ -166,7 +166,7 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
         if (group2)
         {
             // tell the player that they were invited but it failed as they were already in a group
-            WorldPacket data(SMSG_GROUP_INVITE, 25);                // guess size
+            WorldPacket data(SMSG_PARTY_INVITE, 25);                // guess size
             data << uint8(0);                                       // invited/already in group flag
             data << invitingPlayer->GetName();                         // max len 48
             data << uint32(0);                                      // unk
@@ -226,7 +226,7 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     }
 
     // ok, we do it
-    WorldPacket data(SMSG_GROUP_INVITE, 10);                // guess size
+    WorldPacket data(SMSG_PARTY_INVITE, 10);                // guess size
     data << uint8(1);                                       // invited/already in group flag
     data << invitingPlayer->GetName();                         // max len 48
     data << uint32(0);                                      // unk
@@ -782,7 +782,7 @@ void WorldSession::HandleRaidReadyCheckOpcode(WorldPacket& recvData)
         }
 
         // everything's fine, do it
-        WorldPacket data(MSG_RAID_READY_CHECK, 8);
+        WorldPacket data(SMSG_READY_CHECK_STARTED, 8);
         data << GetPlayer()->GetGUID();
         group->BroadcastPacket(&data, false, -1);
 
@@ -794,7 +794,7 @@ void WorldSession::HandleRaidReadyCheckOpcode(WorldPacket& recvData)
         recvData >> state;
 
         // everything's fine, do it
-        WorldPacket data(MSG_RAID_READY_CHECK_CONFIRM, 9);
+        WorldPacket data(SMSG_READY_CHECK_RESPONSE, 9);
         data << GetPlayer()->GetGUID();
         data << uint8(state);
         group->BroadcastReadyCheck(&data);
@@ -810,7 +810,7 @@ void WorldSession::HandleRaidReadyCheckFinishedOpcode(WorldPacket& /*recvData*/)
     if (!group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
         return;
 
-    WorldPacket data(MSG_RAID_READY_CHECK_FINISHED);
+    WorldPacket data(SMSG_READY_CHECK_COMPLETED);
     group->BroadcastPacket(&data, true, -1);
 }
 
@@ -832,7 +832,7 @@ void WorldSession::BuildPartyMemberStatsChangedPacket(Player* player, WorldPacke
         if (mask & (1 << i))
             byteCount += GroupUpdateLength[i];
 
-    data->Initialize(SMSG_PARTY_MEMBER_STATS, 8 + 4 + byteCount);
+    data->Initialize(SMSG_PARTY_MEMBER_PARTIAL_STATE, 8 + 4 + byteCount);
     *data << player->GetPackGUID();
     *data << uint32(mask);
 
@@ -1008,8 +1008,8 @@ void WorldSession::HandleRequestPartyMemberStatsOpcode(WorldPacket& recvData)
     Player* player = HashMapHolder<Player>::Find(Guid);
     if (!player || !player->IsInSameRaidWith(_player))
     {
-        WorldPacket data(SMSG_PARTY_MEMBER_STATS_FULL, 3 + 4 + 2);
-        data << uint8(0);                                   // only for SMSG_PARTY_MEMBER_STATS_FULL, probably arena/bg related
+        WorldPacket data(SMSG_PARTY_MEMBER_FULL_STATE, 3 + 4 + 2);
+        data << uint8(0);                                   // only for SMSG_PARTY_MEMBER_FULL_STATE, probably arena/bg related
         data << Guid.WriteAsPacked();
         data << uint32(GROUP_UPDATE_FLAG_STATUS);
         data << uint16(MEMBER_STATUS_OFFLINE);
@@ -1020,8 +1020,8 @@ void WorldSession::HandleRequestPartyMemberStatsOpcode(WorldPacket& recvData)
     Pet* pet = player->GetPet();
     Powers powerType = player->getPowerType();
 
-    WorldPacket data(SMSG_PARTY_MEMBER_STATS_FULL, 4 + 2 + 2 + 2 + 1 + 2 * 6 + 8 + 1 + 8);
-    data << uint8(0);                                       // only for SMSG_PARTY_MEMBER_STATS_FULL, probably arena/bg related
+    WorldPacket data(SMSG_PARTY_MEMBER_FULL_STATE, 4 + 2 + 2 + 2 + 1 + 2 * 6 + 8 + 1 + 8);
+    data << uint8(0);                                       // only for SMSG_PARTY_MEMBER_FULL_STATE, probably arena/bg related
     data << player->GetPackGUID();
 
     uint32 updateFlags = GROUP_UPDATE_FLAG_STATUS | GROUP_UPDATE_FLAG_CUR_HP | GROUP_UPDATE_FLAG_MAX_HP

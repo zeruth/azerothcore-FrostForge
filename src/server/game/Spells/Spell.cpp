@@ -5223,7 +5223,7 @@ void Spell::WriteSpellGoTargets(WorldPacket* data)
 
 void Spell::SendLogExecute()
 {
-    WorldPacket data(SMSG_SPELLLOGEXECUTE, (8 + 4 + 4 + 4 + 4 + 8));
+    WorldPacket data(SMSG_SPELL_EXECUTE_LOG, (8 + 4 + 4 + 4 + 4 + 8));
 
     data << m_caster->GetPackGUID();
 
@@ -5351,7 +5351,7 @@ void Spell::SendChannelUpdate(uint32 time)
         unitCaster->SetUInt32Value(UNIT_CHANNEL_SPELL, 0);
     }
 
-    WorldPacket data(MSG_CHANNEL_UPDATE, 8 + 4);
+    WorldPacket data(SMSG_SPELL_CHANNEL_UPDATE, 8 + 4);
     data << m_caster->GetPackGUID();
     data << uint32(time);
 
@@ -5369,7 +5369,7 @@ void Spell::SendChannelStart(uint32 duration)
         if (m_UniqueTargetInfo.size() + m_UniqueGOTargetInfo.size() == 1)   // this is for TARGET_SELECT_CATEGORY_NEARBY
             channelTarget = !m_UniqueTargetInfo.empty() ? m_UniqueTargetInfo.front().targetGUID : m_UniqueGOTargetInfo.front().targetGUID;
 
-    WorldPacket data(MSG_CHANNEL_START, (8 + 4 + 4));
+    WorldPacket data(SMSG_SPELL_CHANNEL_START, (8 + 4 + 4));
     data << m_caster->GetPackGUID();
     data << uint32(m_spellInfo->Id);
     data << uint32(duration);

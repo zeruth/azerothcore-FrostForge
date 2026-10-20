@@ -274,13 +274,13 @@ void WorldSession::HandlePetitionShowSignOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePetitionQueryOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "Received opcode CMSG_PETITION_QUERY");   // ok
+    LOG_DEBUG("network", "Received opcode CMSG_QUERY_PETITION");   // ok
 
     ObjectGuid::LowType guildguid;
     ObjectGuid petitionguid;
     recvData >> guildguid;                                 // in Trinity always same as petition low guid
     recvData >> petitionguid;                              // petition guid
-    LOG_DEBUG("network", "CMSG_PETITION_QUERY Petition ({}) Guild GUID {}", petitionguid.ToString(), guildguid);
+    LOG_DEBUG("network", "CMSG_QUERY_PETITION Petition ({}) Guild GUID {}", petitionguid.ToString(), guildguid);
 
     SendPetitionQueryOpcode(petitionguid);
 }
@@ -290,12 +290,12 @@ void WorldSession::SendPetitionQueryOpcode(ObjectGuid petitionguid)
     Petition const* petition = sPetitionMgr->GetPetition(petitionguid);
     if (!petition)
     {
-        LOG_DEBUG("network", "CMSG_PETITION_QUERY failed for petition ({})", petitionguid.ToString());
+        LOG_DEBUG("network", "CMSG_QUERY_PETITION failed for petition ({})", petitionguid.ToString());
         return;
     }
 
     uint8 type = petition->petitionType;
-    WorldPacket data(SMSG_PETITION_QUERY_RESPONSE, (4 + 8 + petition->petitionName.size() + 1 + 1 + 4 * 12 + 2 + 10));
+    WorldPacket data(SMSG_QUERY_PETITION_RESPONSE, (4 + 8 + petition->petitionName.size() + 1 + 1 + 4 * 12 + 2 + 10));
     data << uint32(petition->petitionId);                   // guild/team id (was item low guid)
     data << petition->ownerGuid;                            // charter owner guid
     data << petition->petitionName;                         // name (guild/arena team)
@@ -334,7 +334,7 @@ void WorldSession::SendPetitionQueryOpcode(ObjectGuid petitionguid)
 
 void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "Received opcode MSG_PETITION_RENAME");   // ok
+    LOG_DEBUG("network", "Received opcode CMSG_PETITION_RENAME_GUILD");   // ok
 
     ObjectGuid petitionGuid;
     std::string newName;
@@ -349,7 +349,7 @@ void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
     Petition const* petition = sPetitionMgr->GetPetition(petitionGuid);
     if (!petition)
     {
-        LOG_DEBUG("network", "CMSG_PETITION_QUERY failed for petition ({})", petitionGuid.ToString());
+        LOG_DEBUG("network", "CMSG_QUERY_PETITION failed for petition ({})", petitionGuid.ToString());
         return;
     }
 
@@ -391,7 +391,7 @@ void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
     const_cast<Petition*>(petition)->petitionName = newName;
 
     LOG_DEBUG("network", "Petition ({}) renamed to {}", petitionGuid.ToString(), newName);
-    WorldPacket data(MSG_PETITION_RENAME, (8 + newName.size() + 1));
+    WorldPacket data(SMSG_PETITION_RENAME_GUILD_RESPONSE, (8 + newName.size() + 1));
     data << petitionGuid;
     data << newName;
     SendPacket(&data);
@@ -399,7 +399,7 @@ void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePetitionSignOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "Received opcode CMSG_PETITION_SIGN");    // ok
+    LOG_DEBUG("network", "Received opcode CMSG_SIGN_PETITION");    // ok
 
     ObjectGuid petitionGuid;
     uint8 unk;
@@ -546,7 +546,7 @@ void WorldSession::HandlePetitionSignOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePetitionDeclineOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "Received opcode MSG_PETITION_DECLINE");  // ok
+    LOG_DEBUG("network", "Received opcode CMSG_DECLINE_PETITION");  // ok
 
     ObjectGuid petitionguid;
     ObjectGuid ownerguid;
@@ -559,7 +559,7 @@ void WorldSession::HandlePetitionDeclineOpcode(WorldPacket& recvData)
 
     if (Player* owner = ObjectAccessor::FindConnectedPlayer(ownerguid))                 // petition owner online
     {
-        WorldPacket data(MSG_PETITION_DECLINE, 8);
+        WorldPacket data(CMSG_DECLINE_PETITION, 8);
         data << _player->GetGUID();
         owner->SendDirectMessage(&data);
     }
@@ -701,7 +701,7 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
         // Check if player is already in a guild
         if (_player->GetGuildId())
         {
-            data.Initialize(SMSG_TURN_IN_PETITION_RESULTS, 4);
+            data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
             data << (uint32)PETITION_TURN_ALREADY_IN_GUILD;
             SendPacket(&data);
             return;
@@ -752,7 +752,7 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     // Notify player if signatures are missing
     if (signs < requiredSignatures)
     {
-        data.Initialize(SMSG_TURN_IN_PETITION_RESULTS, 4);
+        data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
         data << (uint32)PETITION_TURN_NEED_MORE_SIGNATURES;
         SendPacket(&data);
         return;
@@ -830,14 +830,14 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     // created
     LOG_DEBUG("network", "TURN IN PETITION {}", petitionGuid.ToString());
 
-    data.Initialize(SMSG_TURN_IN_PETITION_RESULTS, 4);
+    data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
     data << (uint32)PETITION_TURN_OK;
     SendPacket(&data);
 }
 
 void WorldSession::HandlePetitionShowListOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "Received CMSG_PETITION_SHOWLIST");
+    LOG_DEBUG("network", "Received CMSG_PETITION_SHOW_LIST");
 
     ObjectGuid guid;
     recvData >> guid;
@@ -854,7 +854,7 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
         return;
     }
 
-    WorldPacket data(SMSG_PETITION_SHOWLIST, 8 + 1 + 4 * 6);
+    WorldPacket data(SMSG_PETITION_SHOW_LIST, 8 + 1 + 4 * 6);
     data << guid;                                           // npc guid
 
     // For guild default
@@ -921,5 +921,5 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
     }
 
     SendPacket(&data);
-    LOG_DEBUG("network", "Sent SMSG_PETITION_SHOWLIST");
+    LOG_DEBUG("network", "Sent SMSG_PETITION_SHOW_LIST");
 }

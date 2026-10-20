@@ -81,16 +81,6 @@ void WorldPackets::Item::BuybackItem::Read()
     _worldPacket >> Slot;
 }
 
-void WorldPackets::Item::BuyItemInSlot::Read()
-{
-    _worldPacket >> VendorGuid;
-    _worldPacket >> Item;
-    _worldPacket >> Slot;
-    _worldPacket >> BagGuid;
-    _worldPacket >> BagSlot;
-    _worldPacket >> Count;
-}
-
 void WorldPackets::Item::BuyItem::Read()
 {
     _worldPacket >> VendorGuid;

@@ -98,7 +98,7 @@ namespace WorldPackets
         class PlayedTimeClient final : public ClientPacket
         {
         public:
-            PlayedTimeClient(WorldPacket&& packet) : ClientPacket(CMSG_PLAYED_TIME, std::move(packet)) { }
+            PlayedTimeClient(WorldPacket&& packet) : ClientPacket(CMSG_REQUEST_PLAYED_TIME, std::move(packet)) { }
 
             void Read() override;
 

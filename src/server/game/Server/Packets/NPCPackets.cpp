@@ -59,11 +59,3 @@ WorldPacket const* WorldPackets::NPC::TrainerBuyFailed::Write()
 
     return &_worldPacket;
 }
-
-WorldPacket const* WorldPackets::NPC::TrainerBuySucceeded::Write()
-{
-    _worldPacket << TrainerGUID;
-    _worldPacket << int32(SpellID);
-
-    return &_worldPacket;
-}

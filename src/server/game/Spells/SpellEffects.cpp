@@ -353,7 +353,7 @@ void Spell::EffectInstaKill(SpellEffIndex /*effIndex*/)
     if (m_caster == unitTarget)                              // prevent interrupt message
         finish();
 
-    WorldPacket data(SMSG_SPELLINSTAKILLLOG, 8 + 8 + 4);
+    WorldPacket data(SMSG_SPELL_INSTAKILL_LOG, 8 + 8 + 4);
     data << m_caster->GetGUID();
     data << unitTarget->GetGUID();
     data << uint32(m_spellInfo->Id);
@@ -2848,7 +2848,7 @@ void Spell::EffectDispel(SpellEffIndex effIndex)
     if (success_list.empty())
         return;
 
-    WorldPacket dataSuccess(SMSG_SPELLDISPELLOG, 8 + 8 + 4 + 1 + 4 + success_list.size() * 5);
+    WorldPacket dataSuccess(SMSG_SPELL_DISPELL_LOG, 8 + 8 + 4 + 1 + 4 + success_list.size() * 5);
     // Send packet header
     dataSuccess << unitTarget->GetPackGUID();               // Victim GUID
     dataSuccess << unitCaster->GetPackGUID();                 // Caster GUID
@@ -6038,19 +6038,10 @@ void Spell::EffectStealBeneficialBuff(SpellEffIndex effIndex)
     if (success_list.empty())
         return;
 
-    WorldPacket dataSuccess(SMSG_SPELLSTEALLOG, 8 + 8 + 4 + 1 + 4 + damage * 5);
-    dataSuccess << unitTarget->GetPackGUID();       // Victim GUID
-    dataSuccess << unitCaster->GetPackGUID();         // Caster GUID
-    dataSuccess << uint32(m_spellInfo->Id);         // dispel spell id
-    dataSuccess << uint8(0);                        // not used
-    dataSuccess << uint32(success_list.size());     // count
+    // the 3.4.3 client has no SMSG_SPELLSTEALLOG (a steal is SMSG_SPELL_DISPELL_LOG with IsSteal); not
+    // logged to the client until ported
     for (DispelList::iterator itr = success_list.begin(); itr != success_list.end(); ++itr)
-    {
-        dataSuccess << uint32(itr->first);          // Spell Id
-        dataSuccess << uint8(0);                    // 0 - steals !=0 transfers
         unitTarget->RemoveAurasDueToSpellBySteal(itr->first, itr->second, unitCaster);
-    }
-    unitCaster->SendMessageToSet(&dataSuccess, true);
 }
 
 void Spell::EffectKillCreditPersonal(SpellEffIndex effIndex)
@@ -6707,7 +6698,7 @@ void Spell::EffectBind(SpellEffIndex effIndex)
     player->SetHomebind(homeLoc, areaId);
 
     // binding
-    WorldPacket data(SMSG_BINDPOINTUPDATE, 4 + 4 + 4 + 4 + 4);
+    WorldPacket data(SMSG_BIND_POINT_UPDATE, 4 + 4 + 4 + 4 + 4);
     data << float(homeLoc.GetPositionX());
     data << float(homeLoc.GetPositionY());
     data << float(homeLoc.GetPositionZ());
@@ -6718,7 +6709,7 @@ void Spell::EffectBind(SpellEffIndex effIndex)
     LOG_DEBUG("spells.aura", "EffectBind: New homebind X: {}, Y: {}, Z: {}, MapId: {}, AreaId: {}",
                    homeLoc.GetPositionX(), homeLoc.GetPositionY(), homeLoc.GetPositionZ(), homeLoc.GetMapId(), areaId);
     // zone update
-    data.Initialize(SMSG_PLAYERBOUND, 8 + 4);
+    data.Initialize(SMSG_PLAYER_BOUND, 8 + 4);
     data << unitCaster->GetGUID();
     data << uint32(areaId);
     player->SendDirectMessage(&data);

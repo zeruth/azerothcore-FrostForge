@@ -693,7 +693,7 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recv_data)
     uint32 triggerId;
     recv_data >> triggerId;
 
-    LOG_DEBUG("network", "CMSG_AREATRIGGER. Trigger ID: {}", triggerId);
+    LOG_DEBUG("network", "CMSG_AREA_TRIGGER. Trigger ID: {}", triggerId);
 
     Player* player = GetPlayer();
     if (player->IsInFlight())
@@ -820,12 +820,6 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recv_data)
     if (decompressedSize == 0)                               // erase
     {
         SetAccountData(AccountDataType(type), 0, "");
-
-        WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA_COMPLETE, 4 + 4);
-        data << uint32(type);
-        data << uint32(0);
-        SendPacket(&data);
-
         return;
     }
 
@@ -852,12 +846,8 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recv_data)
     std::string adata;
     dest >> adata;
 
+    // the 3.4.3 client has no SMSG_UPDATE_ACCOUNT_DATA_COMPLETE
     SetAccountData(AccountDataType(type), timestamp, adata);
-
-    WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA_COMPLETE, 4 + 4);
-    data << uint32(type);
-    data << uint32(0);
-    SendPacket(&data);
 }
 
 void WorldSession::HandleRequestAccountData(WorldPacket& recv_data)
@@ -998,7 +988,7 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recv_data)
 
     uint32 talent_points = 0x47;
     uint32 guid_size = player->GetPackGUID().size();
-    WorldPacket data(SMSG_INSPECT_TALENT, guid_size + 4 + talent_points);
+    WorldPacket data(SMSG_INSPECT_RESULT, guid_size + 4 + talent_points);
     data << player->GetPackGUID();
 
     if (sWorld->getBoolConfig(CONFIG_TALENTS_INSPECTING) || _player->CanBeGameMaster())
@@ -1024,7 +1014,7 @@ void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recv_data)
     Player* player = ObjectAccessor::GetPlayer(*_player, guid);
     if (!player)
     {
-        LOG_DEBUG("network", "MSG_INSPECT_HONOR_STATS: No player found from {}", guid.ToString());
+        LOG_DEBUG("network", "CMSG_REQUEST_HONOR_STATS: No player found from {}", guid.ToString());
         return;
     }
 
@@ -1038,7 +1028,7 @@ void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recv_data)
         return;
     }
 
-    WorldPacket data(MSG_INSPECT_HONOR_STATS, 8 + 1 + 4 * 4);
+    WorldPacket data(SMSG_INSPECT_HONOR_STATS, 8 + 1 + 4 * 4);
     data << player->GetGUID();
     data << uint8(player->GetHonorPoints());
     data << uint32(player->GetUInt32Value(PLAYER_FIELD_KILLS));
@@ -1080,7 +1070,7 @@ void WorldSession::HandleWorldTeleportOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleWhoisOpcode(WorldPacket& recv_data)
 {
-    LOG_DEBUG("network", "Received opcode CMSG_WHOIS");
+    LOG_DEBUG("network", "Received opcode CMSG_WHO_IS");
     std::string charname;
     recv_data >> charname;
 
@@ -1131,7 +1121,7 @@ void WorldSession::HandleWhoisOpcode(WorldPacket& recv_data)
 
     std::string msg = charname + "'s " + "account is " + acc + ", e-mail: " + email + ", last ip: " + lastip;
 
-    WorldPacket data(SMSG_WHOIS, msg.size() + 1);
+    WorldPacket data(SMSG_WHO_IS, msg.size() + 1);
     data << msg;
     SendPacket(&data);
 
@@ -1140,7 +1130,7 @@ void WorldSession::HandleWhoisOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleComplainOpcode(WorldPackets::Misc::Complain& packet)
 {
-    LOG_DEBUG("network", "WORLD: CMSG_COMPLAIN");
+    LOG_DEBUG("network", "WORLD: CMSG_COMPLAINT");
 
     // NOTE: all chat messages from this spammer automatically ignored by spam reporter until logout in case chat spam.
     // if it's mail spam - ALL mails from this spammer automatically removed by client
@@ -1163,25 +1153,6 @@ void WorldSession::HandleComplainOpcode(WorldPackets::Misc::Complain& packet)
 
         CharacterDatabase.Execute(stmt);
     }
-}
-
-void WorldSession::HandleRealmSplitOpcode(WorldPacket& recv_data)
-{
-    LOG_DEBUG("network", "CMSG_REALM_SPLIT");
-
-    uint32 unk;
-    std::string split_date = "01/01/01";
-    recv_data >> unk;
-
-    WorldPacket data(SMSG_REALM_SPLIT, 4 + 4 + split_date.size() + 1);
-    data << unk;
-    data << uint32(0x00000000);                             // realm split state
-    // split states:
-    // 0x0 realm normal
-    // 0x1 realm split
-    // 0x2 realm split pending
-    data << split_date;
-    SendPacket(&data);
 }
 
 void WorldSession::HandleFarSightOpcode(WorldPacket& recvData)
@@ -1267,7 +1238,7 @@ void WorldSession::HandleResetInstancesOpcode(WorldPackets::Instance::ResetInsta
 
 void WorldSession::HandleSetDungeonDifficultyOpcode(WorldPackets::Instance::SetDungeonDifficultyClient& packet)
 {
-    LOG_DEBUG("network", "MSG_SET_DUNGEON_DIFFICULTY");
+    LOG_DEBUG("network", "CMSG_SET_DUNGEON_DIFFICULTY");
 
     if (packet.Mode >= MAX_DUNGEON_DIFFICULTY)
         return;
@@ -1317,7 +1288,7 @@ void WorldSession::HandleSetDungeonDifficultyOpcode(WorldPackets::Instance::SetD
 
 void WorldSession::HandleSetRaidDifficultyOpcode(WorldPackets::Instance::SetRaidDifficultyClient& packet)
 {
-    LOG_DEBUG("network", "MSG_SET_RAID_DIFFICULTY");
+    LOG_DEBUG("network", "CMSG_SET_RAID_DIFFICULTY");
 
     if (packet.Mode >= MAX_RAID_DIFFICULTY)
         return;
@@ -1543,12 +1514,12 @@ void WorldSession::HandleMoveFlagChangeOpcode(WorldPacket& recv_data)
 
     switch (recv_data.GetOpcode())
     {
-        case CMSG_MOVE_HOVER_ACK: response = MSG_MOVE_HOVER; break;
-        case CMSG_MOVE_FEATHER_FALL_ACK: response = MSG_MOVE_FEATHER_FALL; break;
-        case CMSG_MOVE_WATER_WALK_ACK: response = MSG_MOVE_WATER_WALK; break;
-        case CMSG_MOVE_SET_CAN_FLY_ACK: response = MSG_MOVE_UPDATE_CAN_FLY; break;
-        case CMSG_MOVE_GRAVITY_DISABLE_ACK: response = MSG_MOVE_GRAVITY_CHNG; break;
-        case CMSG_MOVE_GRAVITY_ENABLE_ACK: response = MSG_MOVE_GRAVITY_CHNG; break;
+        case CMSG_MOVE_HOVER_ACK: response = SMSG_MOVE_UPDATE; break;
+        case CMSG_MOVE_FEATHER_FALL_ACK: response = SMSG_MOVE_UPDATE; break;
+        case CMSG_MOVE_WATER_WALK_ACK: response = SMSG_MOVE_UPDATE; break;
+        case CMSG_MOVE_SET_CAN_FLY_ACK: response = SMSG_MOVE_UPDATE; break;
+        case CMSG_MOVE_GRAVITY_DISABLE_ACK: response = SMSG_MOVE_UPDATE; break;
+        case CMSG_MOVE_GRAVITY_ENABLE_ACK: response = SMSG_MOVE_UPDATE; break;
         default: return;
     }
 
@@ -1611,16 +1582,6 @@ void WorldSession::HandleQueryInspectAchievements(WorldPacket& recv_data)
     player->SendRespondInspectAchievements(_player);
 }
 
-void WorldSession::HandleWorldStateUITimerUpdate(WorldPacket& /*recv_data*/)
-{
-    // empty opcode
-    LOG_DEBUG("network", "WORLD: CMSG_WORLD_STATE_UI_TIMER_UPDATE");
-
-    WorldPackets::Misc::UITime response;
-    response.Time = GameTime::GetGameTime().count();
-    SendPacket(response.Write());
-}
-
 void WorldSession::HandleReadyForAccountDataTimes(WorldPacket& /*recv_data*/)
 {
     // empty opcode
@@ -1631,7 +1592,7 @@ void WorldSession::HandleReadyForAccountDataTimes(WorldPacket& /*recv_data*/)
 
 void WorldSession::SendSetPhaseShift(uint32 PhaseShift)
 {
-    WorldPacket data(SMSG_SET_PHASE_SHIFT, 4);
+    WorldPacket data(SMSG_PHASE_SHIFT_CHANGE, 4);
     data << uint32(PhaseShift);
     SendPacket(&data);
 }

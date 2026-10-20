@@ -134,29 +134,7 @@ void GmTicket::WritePacket(WorldPacket& data) const
 
 void GmTicket::SendResponse(WorldSession* session) const
 {
-    WorldPacket data(SMSG_GMRESPONSE_RECEIVED);
-    data << uint32(1);          // responseID
-    data << uint32(_id);        // ticketID
-    data << _message.c_str();
-
-    std::size_t len = _response.size();
-    char const* s = _response.c_str();
-
-    for (int i = 0; i < 4; i++)
-    {
-        if (len)
-        {
-            std::size_t writeLen = std::min<size_t>(len, 3999);
-            data.append(s, writeLen);
-
-            len -= writeLen;
-            s += writeLen;
-        }
-
-        data << uint8(0);
-    }
-
-    session->SendPacket(&data);
+    // the 3.4.3 client has support tickets, not GM tickets: no SMSG_GMRESPONSE_RECEIVED
 }
 
 std::string GmTicket::FormatMessageString(ChatHandler& handler, bool detailed) const
@@ -435,14 +413,7 @@ void TicketMgr::ShowEscalatedList(ChatHandler& handler) const
 
 void TicketMgr::SendTicket(WorldSession* session, GmTicket* ticket) const
 {
-    WorldPacket data(SMSG_GMTICKET_GETTICKET, (ticket ? (4 + 4 + 1 + 4 + 4 + 4 + 1 + 1) : 4));
-
-    if (ticket)
-        ticket->WritePacket(data);
-    else
-        data << uint32(GMTICKET_STATUS_DEFAULT);
-
-    session->SendPacket(&data);
+    // the 3.4.3 client has support tickets, not GM tickets: no SMSG_GMTICKET_GETTICKET
 }
 
 void TicketMgr::UpdateLastChange(GmTicket* ticket)

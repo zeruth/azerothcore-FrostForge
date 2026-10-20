@@ -371,7 +371,7 @@ protected:
     Rolls               RollId;
     uint8*              m_subGroupsCounts;
     ObjectGuid          m_guid;
-    uint32              m_counter;                      // used only in SMSG_GROUP_LIST
+    uint32              m_counter;                      // used only in SMSG_PARTY_UPDATE
     uint32              m_maxEnchantingLevel;
     uint8               m_lfgGroupFlags;
 

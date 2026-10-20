@@ -115,7 +115,7 @@ void ChatHandler::SendNotification(std::string_view str)
     std::vector<std::string_view> lines = Acore::Tokenize(str, '\n', true);
     for (std::string_view line : lines)
     {
-        WorldPacket data(SMSG_NOTIFICATION, line.size() + 1);
+        WorldPacket data(SMSG_PRINT_NOTIFICATION, line.size() + 1);
         data << line.data();
         m_session->SendPacket(&data);
     }
@@ -275,7 +275,7 @@ std::size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, La
                                     uint32 achievementId /*= 0*/, bool gmMessage /*= false*/, std::string const& channelName /*= ""*/)
 {
     std::size_t receiverGUIDPos = 0;
-    data.Initialize(!gmMessage ? SMSG_MESSAGECHAT : SMSG_GM_MESSAGECHAT);
+    data.Initialize(!gmMessage ? SMSG_CHAT : SMSG_CHAT);
     data << uint8(chatType);
     data << int32(language);
     data << senderGUID;

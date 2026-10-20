@@ -179,7 +179,7 @@ CreatureModel const* CreatureTemplate::GetFirstVisibleModel() const
 
 void CreatureTemplate::InitializeQueryData()
 {
-    queryData.Initialize(SMSG_CREATURE_QUERY_RESPONSE, 1);
+    queryData.Initialize(SMSG_QUERY_CREATURE_RESPONSE, 1);
 
     queryData << uint32(Entry);                                   // creature entry
     queryData << Name;
@@ -3400,7 +3400,7 @@ bool Creature::SetWalk(bool enable)
     if (!Unit::SetWalk(enable))
         return false;
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_SET_WALK_MODE : SMSG_SPLINE_MOVE_SET_RUN_MODE, 9);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_SET_WALK_MODE : SMSG_MOVE_SPLINE_SET_RUN_MODE, 9);
     data << GetPackGUID();
     SendMessageToSet(&data, false);
     return true;
@@ -3411,7 +3411,7 @@ bool Creature::SetSwim(bool enable)
     if (!Unit::SetSwim(enable))
         return false;
 
-    WorldPacket data(enable ? SMSG_SPLINE_MOVE_START_SWIM : SMSG_SPLINE_MOVE_STOP_SWIM);
+    WorldPacket data(enable ? SMSG_MOVE_SPLINE_START_SWIM : SMSG_MOVE_SPLINE_STOP_SWIM);
     data << GetPackGUID();
     SendMessageToSet(&data, true);
     return true;

@@ -729,7 +729,7 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
         // If guild does not exist - send player's name to the server
         if (achievement->flags & ACHIEVEMENT_FLAG_REALM_FIRST_KILL && guild)
         {
-            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENT, guild->GetName().size() + 1 + 8 + 4 + 4);
+            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENTS, guild->GetName().size() + 1 + 8 + 4 + 4);
             data << guild->GetName();
             data << GetPlayer()->GetGUID();
             data << uint32(achievement->ID);
@@ -741,7 +741,7 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
             TeamId teamId = GetPlayer()->GetTeamId();
 
             // broadcast realm first reached
-            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENT, GetPlayer()->GetName().size() + 1 + 8 + 4 + 4);
+            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENTS, GetPlayer()->GetName().size() + 1 + 8 + 4 + 4);
             data << GetPlayer()->GetName();
             data << GetPlayer()->GetGUID();
             data << uint32(achievement->ID);

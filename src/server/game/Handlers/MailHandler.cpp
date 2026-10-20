@@ -692,7 +692,7 @@ void WorldSession::HandleGetMailList(WorldPacket& recvData)
     _player->UpdateNextMailTimeAndUnreads();
 }
 
-// Builds and sends the inbox. Normally a reply to CMSG_GET_MAIL_LIST, but it is also pushed
+// Builds and sends the inbox. Normally a reply to CMSG_MAIL_GET_LIST, but it is also pushed
 // unsolicited on delivery when Mail.PushInboxOnDelivery is on, because the client refuses to
 // re-query its inbox more than once a minute and would otherwise show a stale mailbox
 void WorldSession::SendMailList()
@@ -890,7 +890,7 @@ void WorldSession::HandleMailCreateTextItem(WorldPacket& recvData)
 //TODO Fix me! ... this void has probably bad condition, but good data are sent
 void WorldSession::HandleQueryNextMailTime(WorldPacket& /*recvData*/)
 {
-    WorldPacket data(MSG_QUERY_NEXT_MAIL_TIME, 8);
+    WorldPacket data(SMSG_MAIL_QUERY_NEXT_TIME_RESULT, 8);
 
     if (_player->unReadMails > 0)
     {

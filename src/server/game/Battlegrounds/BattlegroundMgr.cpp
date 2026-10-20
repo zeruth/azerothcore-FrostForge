@@ -198,15 +198,25 @@ void BattlegroundMgr::BuildBattlegroundStatusPacket(WorldPacket* data, Battlegro
     // pussywizard:
     //ASSERT(QueueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES);
 
+    // 3.4.3 splits SMSG_BATTLEFIELD_STATUS into one opcode per status (the body below is still 3.3.5's)
     if (StatusID == STATUS_NONE || !bg)
     {
-        data->Initialize(SMSG_BATTLEFIELD_STATUS, 4 + 8);
+        data->Initialize(SMSG_BATTLEFIELD_STATUS_NONE, 4 + 8);
         *data << uint32(QueueSlot);
         *data << uint64(0);
         return;
     }
 
-    data->Initialize(SMSG_BATTLEFIELD_STATUS, (4 + 8 + 1 + 1 + 4 + 1 + 4 + 4 + 4));
+    Opcodes opcode = SMSG_BATTLEFIELD_STATUS_NONE;
+    switch (StatusID)
+    {
+        case STATUS_WAIT_QUEUE: opcode = SMSG_BATTLEFIELD_STATUS_QUEUED; break;
+        case STATUS_WAIT_JOIN: opcode = SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION; break;
+        case STATUS_IN_PROGRESS: opcode = SMSG_BATTLEFIELD_STATUS_ACTIVE; break;
+        default: break;
+    }
+
+    data->Initialize(opcode, (4 + 8 + 1 + 1 + 4 + 1 + 4 + 4 + 4));
     *data << uint32(QueueSlot);
     // The following segment is read as uint64 in client but can be appended as their original type.
     *data << uint8(arenatype);
@@ -247,7 +257,7 @@ void BattlegroundMgr::BuildBattlegroundStatusPacket(WorldPacket* data, Battlegro
 
 void BattlegroundMgr::BuildGroupJoinedBattlegroundPacket(WorldPacket* data, GroupJoinBattlegroundResult result)
 {
-    data->Initialize(SMSG_GROUP_JOINED_BATTLEGROUND, 4);
+    data->Initialize(SMSG_BATTLEFIELD_STATUS_FAILED, 4);     // 3.3.5's SMSG_GROUP_JOINED_BATTLEGROUND
     *data << int32(result);
     if (result == ERR_BATTLEGROUND_JOIN_TIMED_OUT || result == ERR_BATTLEGROUND_JOIN_FAILED)
         *data << uint64(0);                                 // player guid

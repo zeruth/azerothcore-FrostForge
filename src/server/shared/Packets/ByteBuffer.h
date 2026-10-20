@@ -511,7 +511,7 @@ public:
         append(arr.data(), Size);
     }
 
-    // can be used in SMSG_MONSTER_MOVE opcode
+    // can be used in SMSG_ON_MONSTER_MOVE opcode
     void appendPackXYZ(float x, float y, float z)
     {
         uint32 packed = 0;

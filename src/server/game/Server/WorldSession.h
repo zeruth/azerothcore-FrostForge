@@ -114,11 +114,9 @@ namespace WorldPackets
     namespace Guild
     {
         class QueryGuildInfo;
-        class GuildCreate;
         class GuildInviteByName;
         class AcceptGuildInvite;
         class GuildDeclineInvitation;
-        class GuildGetInfo;
         class GuildGetRoster;
         class GuildPromoteMember;
         class GuildDemoteMember;
@@ -138,7 +136,6 @@ namespace WorldPackets
         class GuildBankQueryTab;
         class GuildBankDepositMoney;
         class GuildBankWithdrawMoney;
-        class GuildBankSwapItems;
         class GuildBankBuyTab;
         class GuildBankUpdateTab;
         class GuildBankLogQuery;
@@ -182,7 +179,6 @@ namespace WorldPackets
         class ReadItem;
         class SellItem;
         class BuybackItem;
-        class BuyItemInSlot;
         class BuyItem;
         class ListInventory;
         class AutoStoreBagItem;
@@ -196,8 +192,6 @@ namespace WorldPackets
     namespace Quest
     {
         class QuestPushResultClient;
-        class QuestGiverQuestAutoLaunch;
-        class QuestLogSwapQuest;
         class QuestLogRemoveQuest;
         class QuestConfirmAcceptClient;
         class PushQuestToParty;
@@ -206,8 +200,6 @@ namespace WorldPackets
     namespace Calendar
     {
         class GetEvent;
-        class GuildFilter;
-        class ArenaTeam;
         class CalendarComplain;
     }
 
@@ -451,9 +443,6 @@ public:
     bool PlayerLogout() const { return m_playerLogout; }
     bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
     bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
-
-    void ReadAddonsInfo(ByteBuffer& data);
-    void SendAddonsInfo();
 
     void ReadMovementInfo(WorldPacket& data, MovementInfo* mi);
     void WriteMovementInfo(WorldPacket* data, MovementInfo* mi);
@@ -752,14 +741,9 @@ public:                                                 // opcodes handlers
     void HandleLogoutCancelOpcode(WorldPackets::Character::LogoutCancel& logoutCancel);
 
     // GM Ticket opcodes
-    void HandleGMTicketCreateOpcode(WorldPacket& recvPacket);
-    void HandleGMTicketUpdateOpcode(WorldPacket& recvPacket);
-    void HandleGMTicketDeleteOpcode(WorldPacket& recvPacket);
-    void HandleGMTicketGetTicketOpcode(WorldPacket& recvPacket);
     void HandleGMTicketSystemStatusOpcode(WorldPacket& recvPacket);
     void HandleGMSurveySubmit(WorldPacket& recvPacket);
     void HandleReportLag(WorldPacket& recvPacket);
-    void HandleGMResponseResolve(WorldPacket& recvPacket);
 
     void HandleTogglePvP(WorldPacket& recvPacket);
 
@@ -775,7 +759,6 @@ public:                                                 // opcodes handlers
     void HandleSetContactNotesOpcode(WorldPacket& recvPacket);
     void HandleBugOpcode(WorldPacket& recvPacket);
     void HandleSetAmmoOpcode(WorldPacket& recvPacket);
-    void HandleItemNameQueryOpcode(WorldPacket& recvPacket);
 
     void HandleAreaTriggerOpcode(WorldPacket& recvPacket);
 
@@ -844,12 +827,10 @@ public:                                                 // opcodes handlers
     void HandleTurnInPetitionOpcode(WorldPacket& recvData);
 
     void HandleGuildQueryOpcode(WorldPackets::Guild::QueryGuildInfo& query);
-    void HandleGuildCreateOpcode(WorldPackets::Guild::GuildCreate& packet);
     void HandleGuildInviteOpcode(WorldPackets::Guild::GuildInviteByName& packet);
     void HandleGuildRemoveOpcode(WorldPackets::Guild::GuildOfficerRemoveMember& packet);
     void HandleGuildAcceptOpcode(WorldPackets::Guild::AcceptGuildInvite& invite);
     void HandleGuildDeclineOpcode(WorldPackets::Guild::GuildDeclineInvitation& decline);
-    void HandleGuildInfoOpcode(WorldPackets::Guild::GuildGetInfo& packet);
     void HandleGuildEventLogQueryOpcode(WorldPackets::Guild::GuildEventLogQuery& packet);
     void HandleGuildRosterOpcode(WorldPackets::Guild::GuildGetRoster& packet);
     void HandleGuildPromoteOpcode(WorldPackets::Guild::GuildPromoteMember& promote);
@@ -937,9 +918,7 @@ public:                                                 // opcodes handlers
     void HandleSwapInvItemOpcode(WorldPackets::Item::SwapInventoryItem& packet);
     void HandleDestroyItemOpcode(WorldPackets::Item::DestroyItem& packet);
     void HandleAutoEquipItemOpcode(WorldPackets::Item::AutoEquipItem& packet);
-    void HandleItemQuerySingleOpcode(WorldPacket& recvPacket);
     void HandleSellItemOpcode(WorldPackets::Item::SellItem& packet);
-    void HandleBuyItemInSlotOpcode(WorldPackets::Item::BuyItemInSlot& packet);
     void HandleBuyItemOpcode(WorldPackets::Item::BuyItem& packet);
     void HandleListInventoryOpcode(WorldPackets::Item::ListInventory& packet);
     void HandleAutoStoreBagItemOpcode(WorldPackets::Item::AutoStoreBagItem& packet);
@@ -975,11 +954,9 @@ public:                                                 // opcodes handlers
     void HandleQuestgiverRequestRewardOpcode(WorldPacket& recvPacket);
     void HandleQuestQueryOpcode(WorldPacket& recvPacket);
     void HandleQuestgiverCancel(WorldPacket& recvData);
-    void HandleQuestLogSwapQuest(WorldPackets::Quest::QuestLogSwapQuest& packet);
     void HandleQuestLogRemoveQuest(WorldPackets::Quest::QuestLogRemoveQuest& packet);
     void HandleQuestConfirmAccept(WorldPackets::Quest::QuestConfirmAcceptClient& packet);
     void HandleQuestgiverCompleteQuest(WorldPacket& recvData);
-    void HandleQuestgiverQuestAutoLaunch(WorldPackets::Quest::QuestGiverQuestAutoLaunch& packet);
     void HandlePushQuestToParty(WorldPackets::Quest::PushQuestToParty& packet);
     void HandleQuestPushResult(WorldPackets::Quest::QuestPushResultClient& packet);
 
@@ -1015,7 +992,6 @@ public:                                                 // opcodes handlers
     void HandleChannelModerateOpcode(WorldPacket& recvPacket);
     void HandleChannelDeclineInvite(WorldPacket& recvPacket);
     void HandleChannelDisplayListQuery(WorldPacket& recvPacket);
-    void HandleGetChannelMemberCount(WorldPacket& recvPacket);
     void HandleSetChannelWatch(WorldPacket& recvPacket);
     void HandleClearChannelWatch(WorldPacket& recvPacket);
 
@@ -1071,7 +1047,6 @@ public:                                                 // opcodes handlers
     void HandleSetRaidDifficultyOpcode(WorldPackets::Instance::SetRaidDifficultyClient& packet);
     void HandleMoveFlagChangeOpcode(WorldPacket& recvData);
     void HandleSetTitleOpcode(WorldPacket& recvData);
-    void HandleRealmSplitOpcode(WorldPacket& recvData);
     void HandleTimeSyncResp(WorldPacket& recvData);
     void HandleWhoisOpcode(WorldPacket& recvData);
     void HandleResetInstancesOpcode(WorldPackets::Instance::ResetInstances& packet);
@@ -1099,8 +1074,6 @@ public:                                                 // opcodes handlers
     void HandleLfgProposalResultOpcode(WorldPacket& recvData);
     void HandleLfgSetBootVoteOpcode(WorldPacket& recvData);
     void HandleLfgTeleportOpcode(WorldPacket& recvData);
-    void HandleLfrSearchJoinOpcode(WorldPacket& recvData);
-    void HandleLfrSearchLeaveOpcode(WorldPacket& recvData);
     void HandleLfgGetStatus(WorldPacket& recvData);
 
     void SendLfgUpdatePlayer(lfg::LfgUpdateData const& updateData);
@@ -1118,7 +1091,6 @@ public:                                                 // opcodes handlers
     void SendLfgTeleportError(uint8 err);
 
     // Arena Team
-    void HandleInspectArenaTeamsOpcode(WorldPacket& recvData);
     void HandleArenaTeamQueryOpcode(WorldPacket& recvData);
     void HandleArenaTeamRosterOpcode(WorldPacket& recvData);
     void HandleArenaTeamInviteOpcode(WorldPacket& recvData);
@@ -1157,7 +1129,6 @@ public:                                                 // opcodes handlers
     void HandleGuildBankLogQuery(WorldPackets::Guild::GuildBankLogQuery& packet);
     void HandleGuildBankDepositMoney(WorldPackets::Guild::GuildBankDepositMoney& packet);
     void HandleGuildBankWithdrawMoney(WorldPackets::Guild::GuildBankWithdrawMoney& packet);
-    void HandleGuildBankSwapItems(WorldPackets::Guild::GuildBankSwapItems& packet);
 
     void HandleGuildBankUpdateTab(WorldPackets::Guild::GuildBankUpdateTab& packet);
     void HandleGuildBankBuyTab(WorldPackets::Guild::GuildBankBuyTab& packet);
@@ -1171,8 +1142,6 @@ public:                                                 // opcodes handlers
     // Calendar
     void HandleCalendarGetCalendar(WorldPacket& recvData);
     void HandleCalendarGetEvent(WorldPackets::Calendar::GetEvent& packet);
-    void HandleCalendarGuildFilter(WorldPackets::Calendar::GuildFilter& packet);
-    void HandleCalendarArenaTeam(WorldPackets::Calendar::ArenaTeam& packet);
     void HandleCalendarAddEvent(WorldPacket& recvData);
     void HandleCalendarUpdateEvent(WorldPacket& recvData);
     void HandleCalendarRemoveEvent(WorldPacket& recvData);
@@ -1200,13 +1169,10 @@ public:                                                 // opcodes handlers
     void HandleEquipmentSetSave(WorldPacket& recvData);
     void HandleEquipmentSetDelete(WorldPacket& recvData);
     void HandleEquipmentSetUse(WorldPacket& recvData);
-    void HandleWorldStateUITimerUpdate(WorldPacket& recvData);
     void HandleReadyForAccountDataTimes(WorldPacket& recvData);
-    void HandleQueryQuestsCompleted(WorldPacket& recvData);
     void HandleQuestPOIQuery(WorldPacket& recvData);
     void HandleEjectPassenger(WorldPacket& data);
     void HandleEnterPlayerVehicle(WorldPacket& data);
-    void HandleUpdateProjectilePosition(WorldPacket& recvPacket);
 
     bool HandleSocketClosed();
     void SetOfflineTime(uint32 time) { _offlineTime = time; }
@@ -1323,7 +1289,6 @@ private:
     AccountData m_accountData[NUM_ACCOUNT_DATA_TYPES];
     uint32 m_Tutorials[MAX_ACCOUNT_TUTORIAL_VALUES];
     bool   m_TutorialsChanged;
-    AddonsList m_addonsList;
     uint32 recruiterId;
     bool isRecruiter;
     LockedQueue<WorldPacket*> _recvQueue;

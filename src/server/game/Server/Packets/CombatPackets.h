@@ -38,7 +38,7 @@ namespace WorldPackets
         class SAttackStop final : public ServerPacket
         {
         public:
-            SAttackStop() : ServerPacket(SMSG_ATTACKSTOP, 8 + 8 + 4) { }
+            SAttackStop() : ServerPacket(SMSG_ATTACK_STOP, 8 + 8 + 4) { }
 
             WorldPacket const* Write() override;
 

@@ -49,7 +49,7 @@ void WorldSession::HandleGrantLevel(WorldPacket& recvData)
 
     if (error)
     {
-        WorldPacket data(SMSG_REFER_A_FRIEND_FAILURE, 24);
+        WorldPacket data(SMSG_RECRUIT_A_FRIEND_FAILURE, 24);
         data << uint32(error);
         if (error == ERR_REFER_A_FRIEND_NOT_IN_GROUP)
             data << target->GetName();

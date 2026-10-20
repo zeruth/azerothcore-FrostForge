@@ -66,16 +66,14 @@ void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
 
 void WorldSession::SendTabardVendorActivate(ObjectGuid guid)
 {
-    WorldPacket data(MSG_TABARDVENDOR_ACTIVATE, 8);
+    WorldPacket data(CMSG_TABARD_VENDOR_ACTIVATE, 8);
     data << guid;
     SendPacket(&data);
 }
 
 void WorldSession::SendShowMailBox(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_SHOW_MAILBOX, 8);
-    data << guid;
-    SendPacket(&data);
+    // the 3.4.3 client opens the mailbox through SMSG_NPC_INTERACTION_OPEN_RESULT; not sent until ported
 }
 
 void WorldSession::HandleTrainerListOpcode(WorldPackets::NPC::Hello& packet)
@@ -323,17 +321,12 @@ void WorldSession::SendBindPoint(Creature* npc)
     // send spell for homebinding (3286)
     npc->CastSpell(_player, bindspell, true);
 
-    WorldPacket data(SMSG_TRAINER_BUY_SUCCEEDED, (8 + 4));
-    data << npc->GetGUID();
-    data << uint32(bindspell);
-    SendPacket(&data);
-
     _player->PlayerTalkClass->SendCloseGossip();
 }
 
 void WorldSession::HandleListStabledPetsOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: Recv MSG_LIST_STABLED_PETS");
+    LOG_DEBUG("network", "WORLD: Recv CMSG_REQUEST_STABLED_PETS");
     ObjectGuid npcGUID;
 
     recvData >> npcGUID;
@@ -354,9 +347,9 @@ void WorldSession::HandleListStabledPetsOpcode(WorldPacket& recvData)
 
 void WorldSession::SendStablePet(ObjectGuid guid)
 {
-    LOG_DEBUG("network", "WORLD: Recv MSG_LIST_STABLED_PETS Send.");
+    LOG_DEBUG("network", "WORLD: Recv CMSG_REQUEST_STABLED_PETS Send.");
 
-    WorldPacket data(MSG_LIST_STABLED_PETS, 200);           // guess size
+    WorldPacket data(CMSG_REQUEST_STABLED_PETS, 200);           // guess size
     data << guid;
     std::size_t wpos = data.wpos();
     data << uint8(0);                                       // place holder for slot show number
@@ -417,7 +410,7 @@ void WorldSession::SendStablePet(ObjectGuid guid)
 
 void WorldSession::SendStableResult(uint8 res)
 {
-    WorldPacket data(SMSG_STABLE_RESULT, 1);
+    WorldPacket data(SMSG_PET_STABLE_RESULT, 1);
     data << uint8(res);
     SendPacket(&data);
 }

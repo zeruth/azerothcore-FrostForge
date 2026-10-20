@@ -27,7 +27,7 @@ namespace WorldPackets::NPC
     // CMSG_BANKER_ACTIVATE
     // CMSG_BATTLEMASTER_HELLO
     // CMSG_BINDER_ACTIVATE
-    // CMSG_GOSSIP_HELLO
+    // CMSG_TALK_TO_GOSSIP
     // CMSG_LIST_INVENTORY
     // CMSG_TRAINER_LIST
     class Hello final : public ClientPacket
@@ -88,16 +88,6 @@ namespace WorldPackets::NPC
         int32 TrainerFailedReason = 0;
     };
 
-    class TrainerBuySucceeded final : public ServerPacket
-    {
-    public:
-        TrainerBuySucceeded() : ServerPacket(SMSG_TRAINER_BUY_SUCCEEDED, 8 + 4) { }
-
-        WorldPacket const* Write() override;
-
-        ObjectGuid TrainerGUID;
-        int32 SpellID = 0;
-    };
 }
 
 #endif // NPCPackets_h__

@@ -35,28 +35,6 @@ namespace WorldPackets
             uint64 EventId = 0;
         };
 
-        class GuildFilter final : public ClientPacket
-        {
-        public:
-            GuildFilter(WorldPacket&& packet) : ClientPacket(CMSG_CALENDAR_GUILD_FILTER, std::move(packet)) {}
-
-            void Read() override;
-
-            uint32 MinimumLevel = 1;
-            uint32 MaximumLevel = 1;
-            uint32 MinimumRank = GR_GUILDMASTER;
-        };
-
-        class ArenaTeam final : public ClientPacket
-        {
-        public:
-            ArenaTeam(WorldPacket&& packet) : ClientPacket(CMSG_CALENDAR_ARENA_TEAM, std::move(packet)) {}
-
-            void Read() override;
-
-            uint32 ArenaTeamId = 0;
-        };
-
         class CalendarComplain final : public ClientPacket
         {
         public:

@@ -544,7 +544,7 @@ struct npc_pet_gen_imp_in_a_bottle : public NullCreatureAI
                         _hasParty = true;
                         std::string const& text = sCreatureTextMgr->GetLocalizedChatString(me->GetEntry(), 0, 0 /*text group*/, urand(0, 60) /*text id*/, LOCALE_enUS);
 
-                        _data.Initialize(SMSG_MESSAGECHAT, 200);                // guess size
+                        _data.Initialize(SMSG_CHAT, 200);                // guess size
                         _data << uint8(CHAT_MSG_MONSTER_PARTY);
                         _data << uint32(LANG_UNIVERSAL);
                         _data << me->GetGUID();

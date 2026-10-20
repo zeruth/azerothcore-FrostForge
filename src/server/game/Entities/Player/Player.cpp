@@ -1345,7 +1345,7 @@ uint8 Player::GetChatTag() const
 
 void Player::SendTeleportAckPacket()
 {
-    WorldPacket data(MSG_MOVE_TELEPORT_ACK, 41);
+    WorldPacket data(SMSG_MOVE_TELEPORT, 41);
     data << GetPackGUID();
     data << GetSession()->GetOrderCounter(); // movement counter
     BuildMovementPacket(&data);
@@ -1489,9 +1489,9 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         SetFallInformation(GameTime::GetGameTime().count(), z);
 
         // code for finish transfer called in WorldSession::HandleMovementOpcodes()
-        // at client packet MSG_MOVE_TELEPORT_ACK
+        // at client packet CMSG_MOVE_TELEPORT_ACK
         SetSemaphoreTeleportNear(GameTime::GetGameTime().count());
-        // near teleport, triggering send MSG_MOVE_TELEPORT_ACK from client at landing
+        // near teleport, triggering send CMSG_MOVE_TELEPORT_ACK from client at landing
         if (!GetSession()->PlayerLogout())
         {
             SetCanTeleport(true);
@@ -2336,7 +2336,7 @@ void Player::RemoveFromGroup(Group* group, ObjectGuid guid, RemoveMethod method 
 
 void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool recruitAFriend, float /*group_rate*/)
 {
-    WorldPacket data(SMSG_LOG_XPGAIN, 22); // guess size?
+    WorldPacket data(SMSG_LOG_XP_GAIN, 22); // guess size?
     data << (victim ? victim->GetGUID() : ObjectGuid::Empty);   // guid
     data << uint32(GivenXP + BonusXP);                          // given experience
     data << uint8(victim ? 0 : 1);                              // 00-kill_xp type, 01-non_kill_xp type
@@ -2745,7 +2745,7 @@ void Player::SendInitialSpells()
 
     uint16 spellCount = 0;
 
-    WorldPacket data(SMSG_INITIAL_SPELLS, (1 + 2 + 4 * m_spells.size() + 2 + m_spellCooldowns.size() * (4 + 2 + 2 + 4 + 4)));
+    WorldPacket data(SMSG_SEND_KNOWN_SPELLS, (1 + 2 + 4 * m_spells.size() + 2 + m_spellCooldowns.size() * (4 + 2 + 2 + 4 + 4)));
     data << uint8(0);
 
     std::size_t countPos = data.wpos();
@@ -2916,7 +2916,7 @@ void Player::RemoveMail(uint32 id)
 
 void Player::SendMailResult(uint32 mailId, MailResponseType mailAction, MailResponseResult mailError, uint32 equipError, ObjectGuid::LowType item_guid, uint32 item_count)
 {
-    WorldPacket data(SMSG_SEND_MAIL_RESULT, (4 + 4 + 4 + (mailError == MAIL_ERR_EQUIP_ERROR ? 4 : (mailAction == MAIL_ITEM_TAKEN ? 4 + 4 : 0))));
+    WorldPacket data(SMSG_MAIL_COMMAND_RESULT, (4 + 4 + 4 + (mailError == MAIL_ERR_EQUIP_ERROR ? 4 : (mailAction == MAIL_ITEM_TAKEN ? 4 + 4 : 0))));
     data << (uint32) mailId;
     data << (uint32) mailAction;
     data << (uint32) mailError;
@@ -2933,7 +2933,7 @@ void Player::SendMailResult(uint32 mailId, MailResponseType mailAction, MailResp
 void Player::SendNewMail()
 {
     // deliver undelivered mail
-    WorldPacket data(SMSG_RECEIVED_MAIL, 4);
+    WorldPacket data(SMSG_NOTIFY_RECEIVED_MAIL, 4);
     data << (uint32) 0;
     SendDirectMessage(&data);
 
@@ -3097,14 +3097,14 @@ void Player::SendLearnPacket(uint32 spellId, bool learn)
 {
     if (learn)
     {
-        WorldPacket data(SMSG_LEARNED_SPELL, 6);
+        WorldPacket data(SMSG_LEARNED_SPELLS, 6);
         data << uint32(spellId);
         data << uint16(0);
         SendDirectMessage(&data);
     }
     else
     {
-        WorldPacket data(SMSG_REMOVED_SPELL, 4);
+        WorldPacket data(SMSG_UNLEARNED_SPELLS, 4);
         data << uint32(spellId);
         SendDirectMessage(&data);
     }
@@ -3139,7 +3139,7 @@ bool Player::addSpell(uint32 spellId, uint8 addSpecMask, bool updateActive, bool
 
                     if (IsInWorld())
                     {
-                        WorldPacket data(SMSG_SUPERCEDED_SPELL, 4 + 4);
+                        WorldPacket data(SMSG_SUPERCEDED_SPELLS, 4 + 4);
                         data << uint32(nextSpellInfo->Id);
                         data << uint32(spellInfo->Id);
                         SendDirectMessage(&data);
@@ -4470,7 +4470,7 @@ void Player::DeleteOldRecoveryItems(uint32 keepDays)
 */
 void Player::BuildPlayerRepop()
 {
-    WorldPacket data(SMSG_PRE_RESURRECT, GetPackGUID().size());
+    WorldPacket data(SMSG_PRE_RESSURECT, GetPackGUID().size());
     data << GetPackGUID();
     SendDirectMessage(&data);
     if (getRace(true) == RACE_NIGHTELF)
@@ -5687,12 +5687,12 @@ void Player::SendActionButtons(uint32 state) const
 {
     LOG_DEBUG("entities.player", "Sending Action Buttons for {} spec {}", GetGUID().ToString(), m_activeSpec);
 
-    WorldPacket data(SMSG_ACTION_BUTTONS, 1 + (MAX_ACTION_BUTTONS * 4));
+    WorldPacket data(SMSG_UPDATE_ACTION_BUTTONS, 1 + (MAX_ACTION_BUTTONS * 4));
     data << uint8(state);
     /*
         state can be 0, 1, 2
         0 - Looks to be sent when initial action buttons get sent, however on Trinity we use 1 since 0 had some difficulties
-        1 - Used in any SMSG_ACTION_BUTTONS packet with button data on Trinity. Only used after spec swaps on retail.
+        1 - Used in any SMSG_UPDATE_ACTION_BUTTONS packet with button data on Trinity. Only used after spec swaps on retail.
         2 - Clears the action bars client sided. This is sent during spec swap before unlearning and before sending the new buttons
     */
     if (state != 2)
@@ -6535,7 +6535,7 @@ void Player::CheckDuelDistance(time_t currTime)
         {
             duel->OutOfBoundsTime = currTime + 10;
 
-            WorldPacket data(SMSG_DUEL_OUTOFBOUNDS, 0);
+            WorldPacket data(SMSG_DUEL_OUT_OF_BOUNDS, 0);
             SendDirectMessage(&data);
         }
     }
@@ -6545,7 +6545,7 @@ void Player::CheckDuelDistance(time_t currTime)
         {
             duel->OutOfBoundsTime = 0;
 
-            WorldPacket data(SMSG_DUEL_INBOUNDS, 0);
+            WorldPacket data(SMSG_DUEL_IN_BOUNDS, 0);
             SendDirectMessage(&data);
         }
         else if (currTime >= duel->OutOfBoundsTime)
@@ -7864,7 +7864,7 @@ void Player::SendQuestGiverStatusMultiple()
 
     uint32 count = 0;
 
-    WorldPacket data(SMSG_QUESTGIVER_STATUS_MULTIPLE, 4);
+    WorldPacket data(SMSG_QUEST_GIVER_STATUS_MULTIPLE, 4);
     data << uint32(count); // placeholder
 
     DoForAllVisibleWorldObjects([this, &data, &count](WorldObject* worldObject)
@@ -7940,7 +7940,7 @@ void Player::RemovedInsignia(Player* looterPlr)
 
 void Player::SendLootRelease(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_LOOT_RELEASE_RESPONSE, (8 + 1));
+    WorldPacket data(SMSG_LOOT_RELEASE, (8 + 1));
     data << guid << uint8(1);
     SendDirectMessage(&data);
 }
@@ -8365,7 +8365,7 @@ void Player::SendLootError(ObjectGuid guid, LootError error)
 
 void Player::SendNotifyLootMoneyRemoved()
 {
-    WorldPacket data(SMSG_LOOT_CLEAR_MONEY, 0);
+    WorldPacket data(SMSG_COIN_REMOVED, 0);
     SendDirectMessage(&data);
 }
 
@@ -9076,14 +9076,12 @@ uint32 Player::GetXPRestBonus(uint32 xp)
 
 void Player::SetBindPoint(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_BINDER_CONFIRM, 8);
-    data << guid;
-    SendDirectMessage(&data);
+    // the 3.4.3 client has no SMSG_BINDER_CONFIRM
 }
 
 void Player::SendTalentWipeConfirm(ObjectGuid guid)
 {
-    WorldPacket data(MSG_TALENT_WIPE_CONFIRM, (8 + 4));
+    WorldPacket data(SMSG_RESPEC_WIPE_CONFIRM, (8 + 4));
     data << guid;
     uint32 cost = sWorld->getBoolConfig(CONFIG_NO_RESET_TALENT_COST) ? 0 : resetTalentsCost();
     data << cost;
@@ -9341,7 +9339,7 @@ void Player::RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent)
 
         if (pet->isControlled())
         {
-            WorldPacket data(SMSG_PET_SPELLS, 8);
+            WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8);
             data << uint64(0);
             SendDirectMessage(&data);
 
@@ -9723,7 +9721,7 @@ void Player::PetSpellInitialize()
 
     CharmInfo* charmInfo = pet->GetCharmInfo();
 
-    WorldPacket data(SMSG_PET_SPELLS, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 1);
+    WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 1);
     data << pet->GetGUID();
     data << uint16(pet->GetCreatureTemplate()->family);         // creature family (required for pet talents)
     data << uint32(pet->GetDuration().count());
@@ -9798,7 +9796,7 @@ void Player::PossessSpellInitialize()
         return;
     }
 
-    WorldPacket data(SMSG_PET_SPELLS, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 1);
+    WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 1);
     data << charm->GetGUID();
     data << uint16(0);
     data << uint32(0);
@@ -9820,7 +9818,7 @@ void Player::VehicleSpellInitialize()
 
     uint8 cooldownCount = vehicle->m_CreatureSpellCooldowns.size();
 
-    WorldPacket data(SMSG_PET_SPELLS, 8 + 2 + 4 + 4 + 4 * 10 + 1 + 1 + cooldownCount * (4 + 2 + 4 + 4));
+    WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8 + 2 + 4 + 4 + 4 * 10 + 1 + 1 + cooldownCount * (4 + 2 + 4 + 4));
     data << vehicle->GetGUID();                             // Guid
     data << uint16(0);                                      // Pet Family (0 for all vehicles)
     data << uint32(vehicle->IsSummon() ? vehicle->ToTempSummon()->GetTimer() : 0); // Duration
@@ -9912,7 +9910,7 @@ void Player::CharmSpellInitialize()
         }
     }
 
-    WorldPacket data(SMSG_PET_SPELLS, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 4 * addlist + 1);
+    WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8 + 2 + 4 + 4 + 4 * MAX_UNIT_ACTION_BAR_INDEX + 1 + 4 * addlist + 1);
     data << charm->GetGUID();
     data << uint16(0);
     data << uint32(0);
@@ -9943,7 +9941,7 @@ void Player::CharmSpellInitialize()
 
 void Player::SendRemoveControlBar()
 {
-    WorldPacket data(SMSG_PET_SPELLS, 8);
+    WorldPacket data(SMSG_PET_SPELLS_MESSAGE, 8);
     data << uint64(0);
     SendDirectMessage(&data);
 }
@@ -10671,7 +10669,7 @@ void Player::SendTaxiNodeStatusMultiple()
         if (!nearestNode)
             return;
 
-        WorldPacket data(SMSG_TAXINODE_STATUS, 9);
+        WorldPacket data(SMSG_TAXI_NODE_STATUS, 9);
         data << creature->GetGUID();
         data << uint8(m_taxi.IsTaximaskNodeKnown(nearestNode) ? 1 : 0);
         SendDirectMessage(&data);
@@ -10822,7 +10820,7 @@ inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 c
     {
         uint32 new_count = pVendor->UpdateVendorItemCurrentCount(crItem, pProto->BuyCount * count);
 
-        WorldPacket data(SMSG_BUY_ITEM, (8 + 4 + 4 + 4));
+        WorldPacket data(SMSG_BUY_SUCCEEDED, (8 + 4 + 4 + 4));
         data << pVendor->GetGUID();
         data << uint32(vendorslot + 1);                   // numbered from 1 at client
         data << int32(crItem->maxcount > 0 ? new_count : 0xFFFFFFFF);
@@ -11731,7 +11729,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
     // guild bank list?
 
     // Homebind
-    WorldPacket data(SMSG_BINDPOINTUPDATE, 5 * 4);
+    WorldPacket data(SMSG_BIND_POINT_UPDATE, 5 * 4);
     data << m_homebindX << m_homebindY << m_homebindZ;
     data << (uint32) m_homebindMapId;
     data << (uint32) m_homebindAreaId;
@@ -11744,12 +11742,6 @@ void Player::SendInitialPacketsBeforeAddToMap()
 
     SendTalentsInfoData(false);
 
-    // SMSG_INSTANCE_DIFFICULTY
-    data.Initialize(SMSG_INSTANCE_DIFFICULTY, 4 + 4);
-    data << uint32(GetMap()->GetDifficulty());
-    data << uint32(GetMap()->GetEntry()->IsDynamicDifficultyMap() && GetMap()->IsHeroic()); // Raid dynamic difficulty
-    SendDirectMessage(&data);
-
     SendInitialSpells();
     SendUnlearnSpells();
 
@@ -11759,7 +11751,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
 
     SendEquipmentSetList();
 
-    data.Initialize(SMSG_LOGIN_SETTIMESPEED, 4 + 4 + 4);
+    data.Initialize(SMSG_LOGIN_SET_TIME_SPEED, 4 + 4 + 4);
     data.AppendPackedTime(GameTime::GetGameTime().count());
     data << float(0.01666667f);                             // game speed
     data << uint32(0);                                      // added in 3.1.2
@@ -11767,7 +11759,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
 
     GetReputationMgr().SendForceReactions();                // SMSG_SET_FORCED_REACTIONS
 
-    // SMSG_TALENTS_INFO x 2 for pet (unspent points and talents in separate packets...)
+    // SMSG_UPDATE_TALENT_DATA x 2 for pet (unspent points and talents in separate packets...)
     // SMSG_PET_GUIDS
     // SMSG_UPDATE_WORLD_STATE
     // SMSG_POWER_UPDATE
@@ -11822,7 +11814,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     GetZoneAndAreaId(newzone, newarea);
     UpdateZone(newzone, newarea);                            // also call SendInitWorldStates();
 
-    WorldPacket setCompoundState(SMSG_MULTIPLE_MOVES, 100);
+    WorldPacket setCompoundState(SMSG_MOVE_SET_COMPOUND_STATE, 100);
     setCompoundState << uint32(0); // size placeholder
 
     // manual send package (have code in HandleEffect(this, AURA_EFFECT_HANDLE_SEND_FOR_CLIENT, true); that must not be re-applied.
@@ -11830,7 +11822,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     {
         uint32 const counter = GetSession()->GetOrderCounter();
         setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_FORCE_MOVE_ROOT);
+        setCompoundState << uint16(SMSG_MOVE_ROOT);
         setCompoundState << GetPackGUID();
         setCompoundState << uint32(counter);
         GetSession()->IncrementOrderCounter();
@@ -11840,7 +11832,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     {
         uint32 const counter = GetSession()->GetOrderCounter();
         setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_FEATHER_FALL);
+        setCompoundState << uint16(SMSG_MOVE_SET_FEATHER_FALL);
         setCompoundState << GetPackGUID();
         setCompoundState << uint32(counter);
         GetSession()->IncrementOrderCounter();
@@ -11850,7 +11842,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     {
         uint32 const counter = GetSession()->GetOrderCounter();
         setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_WATER_WALK);
+        setCompoundState << uint16(SMSG_MOVE_SET_WATER_WALK);
         setCompoundState << GetPackGUID();
         setCompoundState << uint32(counter);
         GetSession()->IncrementOrderCounter();
@@ -11860,7 +11852,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     {
         uint32 const counter = GetSession()->GetOrderCounter();
         setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_SET_HOVER);
+        setCompoundState << uint16(SMSG_MOVE_SET_HOVERING);
         setCompoundState << GetPackGUID();
         setCompoundState << uint32(counter);
         GetSession()->IncrementOrderCounter();
@@ -12302,7 +12294,7 @@ void Player::GetAurasForTarget(Unit* target, bool force /*= false*/)
     if (!target || (!force && target->GetVisibleAuras()->empty()))    // speedup things
         return;
 
-    WorldPacket data(SMSG_AURA_UPDATE_ALL);
+    WorldPacket data(SMSG_AURA_UPDATE);
     data<< target->GetPackGUID();
 
     Unit::VisibleAuraMap const* visibleAuras = target->GetVisibleAuras();
@@ -13141,7 +13133,7 @@ void Player::SetClientControl(Unit* target, bool allowMove, bool packetOnly /*= 
 
     // A fleeing/confused target can't be controlled by the client yet, but the mover
     // must still switch so control is restored once the crowd control ends.
-    WorldPacket data(SMSG_CLIENT_CONTROL_UPDATE, target->GetPackGUID().size() + 1);
+    WorldPacket data(SMSG_CONTROL_UPDATE, target->GetPackGUID().size() + 1);
     data << target->GetPackGUID();
     data << uint8((allowMove && !target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED)) ? 1 : 0);
     SendDirectMessage(&data);
@@ -13496,8 +13488,6 @@ void Player::SetViewpoint(WorldObject* target, bool apply)
         // must immediately set seer back otherwise may crash
         SetSeer(this);
 
-        //WorldPacket data(SMSG_CLEAR_FAR_SIGHT_IMMEDIATE, 0);
-        //SendDirectMessage(&data);
     }
 }
 
@@ -14820,7 +14810,7 @@ void Player::BuildPetTalentsInfoData(WorldPacket* data)
 
 void Player::SendTalentsInfoData(bool pet)
 {
-    WorldPacket data(SMSG_TALENTS_INFO, 50);
+    WorldPacket data(SMSG_UPDATE_TALENT_DATA, 50);
     data << uint8(pet ? 1 : 0);
     if (pet)
         BuildPetTalentsInfoData(&data);
@@ -14875,7 +14865,7 @@ void Player::BuildEnchantmentsInfoData(WorldPacket* data)
 void Player::SendEquipmentSetList()
 {
     uint32 count = 0;
-    WorldPacket data(SMSG_EQUIPMENT_SET_LIST, 4);
+    WorldPacket data(SMSG_LOAD_EQUIPMENT_SET, 4);
     std::size_t count_pos = data.wpos();
     data << uint32(count);                                  // count placeholder
     for (EquipmentSets::iterator itr = m_EquipmentSets.begin(); itr != m_EquipmentSets.end(); ++itr)
@@ -14934,7 +14924,7 @@ void Player::SetEquipmentSet(uint32 index, EquipmentSet eqset)
     {
         eqslot.Guid = sObjectMgr->GenerateEquipmentSetGuid();
 
-        WorldPacket data(SMSG_EQUIPMENT_SET_SAVED, 4 + 1);
+        WorldPacket data(SMSG_EQUIPMENT_SET_ID, 4 + 1);
         data << uint32(index);
         data.appendPackGUID(eqslot.Guid);
         SendDirectMessage(&data);
@@ -15967,7 +15957,7 @@ void Player::SendRefundInfo(Item* item)
         return;
     }
 
-    WorldPacket data(SMSG_ITEM_REFUND_INFO_RESPONSE, 8 + 4 + 4 + 4 + 4 * 4 + 4 * 4 + 4 + 4);
+    WorldPacket data(SMSG_SET_ITEM_PURCHASE_DATA, 8 + 4 + 4 + 4 + 4 * 4 + 4 * 4 + 4 + 4);
     data << item->GetGUID();                            // item guid
     data << uint32(item->GetPaidMoney());               // money cost
     data << uint32(iece->reqhonorpoints);               // honor point cost
@@ -16024,7 +16014,7 @@ void Player::RefundItem(Item* item)
     if (item->IsRefundExpired())    // item refund has expired
     {
         item->SetNotRefundable(this);
-        WorldPacket data(SMSG_ITEM_REFUND_RESULT, 8 + 4);
+        WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4);
         data << item->GetGUID();                     // Guid
         data << uint32(10);                          // Error!
         SendDirectMessage(&data);
@@ -16065,14 +16055,14 @@ void Player::RefundItem(Item* item)
 
     if (store_error)
     {
-        WorldPacket data(SMSG_ITEM_REFUND_RESULT, 8 + 4);
+        WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4);
         data << item->GetGUID();                         // Guid
         data << uint32(10);                              // Error!
         SendDirectMessage(&data);
         return;
     }
 
-    WorldPacket data(SMSG_ITEM_REFUND_RESULT, 8 + 4 + 4 + 4 + 4 + 4 * 4 + 4 * 4);
+    WorldPacket data(SMSG_ITEM_PURCHASE_REFUND_RESULT, 8 + 4 + 4 + 4 + 4 + 4 * 4 + 4 * 4);
     data << item->GetGUID();                            // item guid
     data << uint32(0);                                  // 0, or error code
     data << uint32(item->GetPaidMoney());               // money cost

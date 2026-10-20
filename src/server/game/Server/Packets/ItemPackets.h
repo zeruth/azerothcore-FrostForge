@@ -54,7 +54,7 @@ namespace WorldPackets
         class AutoEquipItemSlot final : public ClientPacket
         {
         public:
-            AutoEquipItemSlot(WorldPacket&& packet) : ClientPacket(CMSG_AUTOEQUIP_ITEM_SLOT, std::move(packet)) {}
+            AutoEquipItemSlot(WorldPacket&& packet) : ClientPacket(CMSG_AUTO_EQUIP_ITEM_SLOT, std::move(packet)) {}
 
             void Read() override;
 
@@ -78,7 +78,7 @@ namespace WorldPackets
         class AutoEquipItem final : public ClientPacket
         {
         public:
-            AutoEquipItem(WorldPacket&& packet) : ClientPacket(CMSG_AUTOEQUIP_ITEM, std::move(packet)) {}
+            AutoEquipItem(WorldPacket&& packet) : ClientPacket(CMSG_AUTO_EQUIP_ITEM, std::move(packet)) {}
 
             void Read() override;
 
@@ -89,7 +89,7 @@ namespace WorldPackets
         class DestroyItem final : public ClientPacket
         {
         public:
-            DestroyItem(WorldPacket&& packet) : ClientPacket(CMSG_DESTROYITEM, std::move(packet)) {}
+            DestroyItem(WorldPacket&& packet) : ClientPacket(CMSG_DESTROY_ITEM, std::move(packet)) {}
 
             void Read() override;
 
@@ -127,27 +127,12 @@ namespace WorldPackets
         class BuybackItem final : public ClientPacket
         {
         public:
-            BuybackItem(WorldPacket&& packet) : ClientPacket(CMSG_BUYBACK_ITEM, std::move(packet)) {}
+            BuybackItem(WorldPacket&& packet) : ClientPacket(CMSG_BUY_BACK_ITEM, std::move(packet)) {}
 
             void Read() override;
 
             ObjectGuid VendorGuid;
             uint32 Slot = 0;
-        };
-
-        class BuyItemInSlot final : public ClientPacket
-        {
-        public:
-            BuyItemInSlot(WorldPacket&& packet) : ClientPacket(CMSG_BUY_ITEM_IN_SLOT, std::move(packet)) {}
-
-            void Read() override;
-
-            ObjectGuid VendorGuid;
-            uint32 Item = 0;
-            uint32 Slot = 0;
-            ObjectGuid BagGuid;
-            uint8 BagSlot = 0;
-            uint32 Count = 0;
         };
 
         class BuyItem final : public ClientPacket
@@ -177,7 +162,7 @@ namespace WorldPackets
         class AutoStoreBagItem final : public ClientPacket
         {
         public:
-            AutoStoreBagItem(WorldPacket&& packet) : ClientPacket(CMSG_AUTOSTORE_BAG_ITEM, std::move(packet)) {}
+            AutoStoreBagItem(WorldPacket&& packet) : ClientPacket(CMSG_AUTO_STORE_BAG_ITEM, std::move(packet)) {}
 
             void Read() override;
 
@@ -189,7 +174,7 @@ namespace WorldPackets
         class EnchantmentLog final : public ServerPacket
         {
         public:
-            EnchantmentLog() : ServerPacket(SMSG_ENCHANTMENTLOG, 8 + 8 + 4 + 4) {}
+            EnchantmentLog() : ServerPacket(SMSG_ENCHANTMENT_LOG, 8 + 8 + 4 + 4) {}
 
             WorldPacket const* Write() override;
 
@@ -250,7 +235,7 @@ namespace WorldPackets
         class ItemRefundInfo final : public ClientPacket
         {
         public:
-            ItemRefundInfo(WorldPacket&& packet) : ClientPacket(CMSG_ITEM_REFUND_INFO, std::move(packet)) {}
+            ItemRefundInfo(WorldPacket&& packet) : ClientPacket(CMSG_GET_ITEM_PURCHASE_DATA, std::move(packet)) {}
 
             void Read() override;
 
@@ -260,7 +245,7 @@ namespace WorldPackets
         class ItemRefund final : public ClientPacket
         {
         public:
-            ItemRefund(WorldPacket&& packet) : ClientPacket(CMSG_ITEM_REFUND, std::move(packet)) {}
+            ItemRefund(WorldPacket&& packet) : ClientPacket(CMSG_ITEM_PURCHASE_REFUND, std::move(packet)) {}
 
             void Read() override;
 

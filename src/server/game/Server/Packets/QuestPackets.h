@@ -29,7 +29,7 @@ namespace WorldPackets
         class QuestLogFull final : public ServerPacket
         {
         public:
-            QuestLogFull() : ServerPacket(SMSG_QUESTLOG_FULL, 0) {}
+            QuestLogFull() : ServerPacket(SMSG_QUEST_LOG_FULL, 0) {}
 
             WorldPacket const* Write() override { return &_worldPacket; }
         };
@@ -37,7 +37,7 @@ namespace WorldPackets
         class QuestUpdateComplete final : public ServerPacket
         {
         public:
-            QuestUpdateComplete() : ServerPacket(SMSG_QUESTUPDATE_COMPLETE, 4) {}
+            QuestUpdateComplete() : ServerPacket(SMSG_QUEST_UPDATE_COMPLETE, 4) {}
 
             WorldPacket const* Write() override;
 
@@ -47,7 +47,7 @@ namespace WorldPackets
         class QuestGiverQuestComplete final : public ServerPacket
         {
         public:
-            QuestGiverQuestComplete() : ServerPacket(SMSG_QUESTGIVER_QUEST_COMPLETE, 4 + 4 + 4 + 4 + 4 + 4) {}
+            QuestGiverQuestComplete() : ServerPacket(SMSG_QUEST_GIVER_QUEST_COMPLETE, 4 + 4 + 4 + 4 + 4 + 4) {}
 
             WorldPacket const* Write() override;
 
@@ -62,7 +62,7 @@ namespace WorldPackets
         class QuestGiverQuestFailed final : public ServerPacket
         {
         public:
-            QuestGiverQuestFailed() : ServerPacket(SMSG_QUESTGIVER_QUEST_FAILED, 4 + 4) {}
+            QuestGiverQuestFailed() : ServerPacket(SMSG_QUEST_GIVER_QUEST_FAILED, 4 + 4) {}
 
             WorldPacket const* Write() override;
 
@@ -73,7 +73,7 @@ namespace WorldPackets
         class QuestUpdateFailedTimer final : public ServerPacket
         {
         public:
-            QuestUpdateFailedTimer() : ServerPacket(SMSG_QUESTUPDATE_FAILEDTIMER, 4) {}
+            QuestUpdateFailedTimer() : ServerPacket(SMSG_QUEST_UPDATE_FAILED_TIMER, 4) {}
 
             WorldPacket const* Write() override;
 
@@ -83,7 +83,7 @@ namespace WorldPackets
         class QuestGiverQuestInvalid final : public ServerPacket
         {
         public:
-            QuestGiverQuestInvalid() : ServerPacket(SMSG_QUESTGIVER_QUEST_INVALID, 4) {}
+            QuestGiverQuestInvalid() : ServerPacket(SMSG_QUEST_GIVER_INVALID_QUEST, 4) {}
 
             WorldPacket const* Write() override;
 
@@ -106,7 +106,7 @@ namespace WorldPackets
         class QuestPushResult final : public ServerPacket
         {
         public:
-            QuestPushResult() : ServerPacket(MSG_QUEST_PUSH_RESULT, 8 + 1) {}
+            QuestPushResult() : ServerPacket(SMSG_QUEST_PUSH_RESULT, 8 + 1) {}
 
             WorldPacket const* Write() override;
 
@@ -114,18 +114,10 @@ namespace WorldPackets
             QuestShareMessages QuestShareMessage = QUEST_PARTY_MSG_SHARING_QUEST; // valid values: 0-10
         };
 
-        class QuestUpdateAddItem final : public ServerPacket
-        {
-        public:
-            QuestUpdateAddItem() : ServerPacket(SMSG_QUESTUPDATE_ADD_ITEM, 0) {}
-
-            WorldPacket const* Write() override { return &_worldPacket; }
-        };
-
         class QuestUpdateAddKill final : public ServerPacket
         {
         public:
-            QuestUpdateAddKill() : ServerPacket(SMSG_QUESTUPDATE_ADD_KILL, 4 * 4 + 8) {}
+            QuestUpdateAddKill() : ServerPacket(SMSG_QUEST_UPDATE_ADD_CREDIT, 4 * 4 + 8) {}
 
             WorldPacket const* Write() override;
 
@@ -139,7 +131,7 @@ namespace WorldPackets
         class QuestUpdateAddPvPKill final : public ServerPacket
         {
         public:
-            QuestUpdateAddPvPKill() : ServerPacket(SMSG_QUESTUPDATE_ADD_PVP_KILL, 3 * 4) {}
+            QuestUpdateAddPvPKill() : ServerPacket(SMSG_QUEST_UPDATE_ADD_PVP_CREDIT, 3 * 4) {}
 
             WorldPacket const* Write() override;
 
@@ -151,7 +143,7 @@ namespace WorldPackets
         class QuestPushResultClient final : public ClientPacket
         {
         public:
-            QuestPushResultClient(WorldPacket&& packet) : ClientPacket(MSG_QUEST_PUSH_RESULT, std::move(packet)) {}
+            QuestPushResultClient(WorldPacket&& packet) : ClientPacket(SMSG_QUEST_PUSH_RESULT, std::move(packet)) {}
 
             void Read() override;
 
@@ -160,29 +152,10 @@ namespace WorldPackets
             QuestShareMessages QuestShareMessage = QUEST_PARTY_MSG_SHARING_QUEST;
         };
 
-        class QuestGiverQuestAutoLaunch final : public ClientPacket
-        {
-        public:
-            QuestGiverQuestAutoLaunch(WorldPacket&& packet) : ClientPacket(CMSG_QUESTGIVER_QUEST_AUTOLAUNCH, std::move(packet)) {}
-
-            void Read() override {}
-        };
-
-        class QuestLogSwapQuest final : public ClientPacket
-        {
-        public:
-            QuestLogSwapQuest(WorldPacket&& packet) : ClientPacket(CMSG_QUESTLOG_SWAP_QUEST, std::move(packet)) {}
-
-            void Read() override;
-
-            uint8 Slot1 = 0;
-            uint8 Slot2 = 0;
-        };
-
         class QuestLogRemoveQuest final : public ClientPacket
         {
         public:
-            QuestLogRemoveQuest(WorldPacket&& packet) : ClientPacket(CMSG_QUESTLOG_REMOVE_QUEST, std::move(packet)) {}
+            QuestLogRemoveQuest(WorldPacket&& packet) : ClientPacket(CMSG_QUEST_LOG_REMOVE_QUEST, std::move(packet)) {}
 
             void Read() override;
 
@@ -202,7 +175,7 @@ namespace WorldPackets
         class PushQuestToParty final : public ClientPacket
         {
         public:
-            PushQuestToParty(WorldPacket&& packet) : ClientPacket(CMSG_PUSHQUESTTOPARTY, std::move(packet)) {}
+            PushQuestToParty(WorldPacket&& packet) : ClientPacket(CMSG_PUSH_QUEST_TO_PARTY, std::move(packet)) {}
 
             void Read() override;
 

@@ -43,7 +43,7 @@ void WorldSession::HandleQuestgiverStatusQueryOpcode(WorldPacket& recvData)
 
     if (!questGiver)
     {
-        LOG_DEBUG("network.opcode", "Error in CMSG_QUESTGIVER_STATUS_QUERY, called for not found questgiver ({})", guid.ToString());
+        LOG_DEBUG("network.opcode", "Error in CMSG_QUEST_GIVER_STATUS_QUERY, called for not found questgiver ({})", guid.ToString());
         return;
     }
 
@@ -51,7 +51,7 @@ void WorldSession::HandleQuestgiverStatusQueryOpcode(WorldPacket& recvData)
     {
         case TYPEID_UNIT:
         {
-            LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_STATUS_QUERY for npc {}", guid.ToString());
+            LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_STATUS_QUERY for npc {}", guid.ToString());
             if (!questGiver->ToCreature()->IsHostileTo(_player)) // do not show quest status to enemies
                 questStatus = _player->GetQuestDialogStatus(questGiver);
             break;
@@ -59,7 +59,7 @@ void WorldSession::HandleQuestgiverStatusQueryOpcode(WorldPacket& recvData)
 
         case TYPEID_GAMEOBJECT:
         {
-            LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_STATUS_QUERY for GameObject {}", guid.ToString());
+            LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_STATUS_QUERY for GameObject {}", guid.ToString());
             if (sWorld->getBoolConfig(CONFIG_OBJECT_QUEST_MARKERS))
             {
                 questStatus = _player->GetQuestDialogStatus(questGiver);
@@ -81,7 +81,7 @@ void WorldSession::HandleQuestgiverHelloOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_HELLO npc {}", guid.ToString());
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_HELLO npc {}", guid.ToString());
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_NONE);
     if (!creature)
@@ -117,7 +117,7 @@ void WorldSession::HandleQuestgiverAcceptQuestOpcode(WorldPacket& recvData)
     uint32 unk1;
     recvData >> guid >> questId >> unk1;
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_ACCEPT_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_ACCEPT_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
 
     Object* object = ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_ITEM | TYPEMASK_PLAYER);
 
@@ -206,7 +206,7 @@ void WorldSession::HandleQuestgiverQueryQuestOpcode(WorldPacket& recvData)
     uint32 questId;
     uint8 unk1;
     recvData >> guid >> questId >> unk1;
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_QUERY_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_QUERY_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
 
     // Verify that the guid is valid and is a questgiver or involved in the requested quest
     Object* object = ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_ITEM);
@@ -241,7 +241,7 @@ void WorldSession::HandleQuestQueryOpcode(WorldPacket& recvData)
 
     uint32 questId;
     recvData >> questId;
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_QUERY quest = {}", questId);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUERY_QUEST_INFO quest = {}", questId);
 
     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
         _player->PlayerTalkClass->SendQuestQueryResponse(quest);
@@ -255,12 +255,12 @@ void WorldSession::HandleQuestgiverChooseRewardOpcode(WorldPacket& recvData)
 
     if (reward >= QUEST_REWARD_CHOICES_COUNT)
     {
-        LOG_ERROR("network.opcode", "Error in CMSG_QUESTGIVER_CHOOSE_REWARD: player {} ({}) tried to get invalid reward ({}) (probably packet hacking)",
+        LOG_ERROR("network.opcode", "Error in CMSG_QUEST_GIVER_CHOOSE_REWARD: player {} ({}) tried to get invalid reward ({}) (probably packet hacking)",
             _player->GetName(), _player->GetGUID().ToString(), reward);
         return;
     }
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_CHOOSE_REWARD npc {}, quest = {}, reward = {}", guid.ToString(), questId, reward);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_CHOOSE_REWARD npc {}, quest = {}, reward = {}", guid.ToString(), questId, reward);
 
     Object* object = ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT);
     if (!object || !object->hasInvolvedQuest(questId))
@@ -358,7 +358,7 @@ void WorldSession::HandleQuestgiverRequestRewardOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid >> questId;
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_REQUEST_REWARD npc {}, quest = {}", guid.ToString(), questId);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_REQUEST_REWARD npc {}, quest = {}", guid.ToString(), questId);
 
     Object* object = ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT);
     if (!object || !object->hasInvolvedQuest(questId))
@@ -383,19 +383,9 @@ void WorldSession::HandleQuestgiverCancel(WorldPacket& /*recvData*/)
     _player->PlayerTalkClass->SendCloseGossip();
 }
 
-void WorldSession::HandleQuestLogSwapQuest(WorldPackets::Quest::QuestLogSwapQuest& packet)
-{
-    if (packet.Slot1 == packet.Slot2 || packet.Slot1 >= MAX_QUEST_LOG_SIZE || packet.Slot2 >= MAX_QUEST_LOG_SIZE)
-        return;
-
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTLOG_SWAP_QUEST slot 1 = {}, slot 2 = {}", packet.Slot1, packet.Slot2);
-
-    GetPlayer()->SwapQuestSlot(packet.Slot1, packet.Slot2);
-}
-
 void WorldSession::HandleQuestLogRemoveQuest(WorldPackets::Quest::QuestLogRemoveQuest& packet)
 {
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTLOG_REMOVE_QUEST slot = {}", packet.Slot);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_LOG_REMOVE_QUEST slot = {}", packet.Slot);
 
     if (packet.Slot < MAX_QUEST_LOG_SIZE)
     {
@@ -482,7 +472,7 @@ void WorldSession::HandleQuestgiverCompleteQuest(WorldPacket& recvData)
 
     recvData >> guid >> questId;
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_QUESTGIVER_COMPLETE_QUEST npc {}, quest = {}", guid.ToString(), questId);
+    LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_COMPLETE_QUEST npc {}, quest = {}", guid.ToString(), questId);
 
     Object* object = ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT);
     if (!object || !object->hasInvolvedQuest(questId))
@@ -522,16 +512,12 @@ void WorldSession::HandleQuestgiverCompleteQuest(WorldPacket& recvData)
     }
 }
 
-void WorldSession::HandleQuestgiverQuestAutoLaunch(WorldPackets::Quest::QuestGiverQuestAutoLaunch& /*packet*/)
-{
-}
-
 void WorldSession::HandlePushQuestToParty(WorldPackets::Quest::PushQuestToParty& packet)
 {
     if (!_player->CanShareQuest(packet.QuestId))
         return;
 
-    LOG_DEBUG("network", "WORLD: Received CMSG_PUSHQUESTTOPARTY quest = {}", packet.QuestId);
+    LOG_DEBUG("network", "WORLD: Received CMSG_PUSH_QUEST_TO_PARTY quest = {}", packet.QuestId);
 
     if (Quest const* quest = sObjectMgr->GetQuestTemplate(packet.QuestId))
     {
@@ -620,18 +606,4 @@ void WorldSession::HandleQuestPushResult(WorldPackets::Quest::QuestPushResultCli
 void WorldSession::HandleQuestgiverStatusMultipleQuery(WorldPacket& /*recvPacket*/)
 {
     _player->SendQuestGiverStatusMultiple();
-}
-
-void WorldSession::HandleQueryQuestsCompleted(WorldPacket& /*recvData*/)
-{
-    std::size_t rew_count = _player->GetRewardedQuestCount();
-
-    WorldPacket data(SMSG_QUERY_QUESTS_COMPLETED_RESPONSE, 4 + 4 * rew_count);
-    data << uint32(rew_count);
-
-    RewardedQuestSet const& rewQuests = _player->getRewardedQuests();
-    for (RewardedQuestSet::const_iterator itr = rewQuests.begin(); itr != rewQuests.end(); ++itr)
-        data << uint32(*itr);
-
-    SendPacket(&data);
 }

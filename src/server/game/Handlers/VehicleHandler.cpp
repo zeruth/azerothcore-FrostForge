@@ -25,7 +25,7 @@
 
 void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: Recvd CMSG_DISMISS_CONTROLLED_VEHICLE");
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_MOVE_DISMISS_VEHICLE");
 
     ObjectGuid vehicleGUID = _player->GetCharmGUID();
 
@@ -60,7 +60,7 @@ void WorldSession::HandleDismissControlledVehicle(WorldPacket& recvData)
 
 void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: Recvd CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE");
+    LOG_DEBUG("network", "WORLD: Recvd CMSG_MOVE_CHANGE_VEHICLE_SEATS");
 
     Unit* vehicle_base = GetPlayer()->GetVehicleBase();
     if (!vehicle_base)
@@ -86,7 +86,7 @@ void WorldSession::HandleChangeSeatsOnControlledVehicle(WorldPacket& recvData)
         case CMSG_REQUEST_VEHICLE_NEXT_SEAT:
             GetPlayer()->ChangeSeat(-1, true);
             break;
-        case CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE:
+        case CMSG_MOVE_CHANGE_VEHICLE_SEATS:
             {
                 ObjectGuid guid;        // current vehicle guid
                 recvData >> guid.ReadAsPacked();

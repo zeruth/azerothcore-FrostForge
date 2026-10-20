@@ -446,7 +446,7 @@ bool Vehicle::AddPassenger(Unit* unit, int8 seatId)
     if (_me->IsInWorld())
     {
         unit->SendClearTarget();                                // SMSG_BREAK_TARGET
-        unit->SetControlled(true, UNIT_STATE_ROOT);             // SMSG_FORCE_ROOT - In some cases we send SMSG_SPLINE_MOVE_ROOT here (for creatures)
+        unit->SetControlled(true, UNIT_STATE_ROOT);             // SMSG_FORCE_ROOT - In some cases we send SMSG_MOVE_SPLINE_ROOT here (for creatures)
         if (unit->IsPlayer())
             unit->ToPlayer()->SetExpectingChangeTransport(true);
         // also adds MOVEMENTFLAG_ROOT

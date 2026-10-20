@@ -71,7 +71,7 @@ namespace WorldPackets
         class PetLearnedSpell final : public ServerPacket
         {
         public:
-            PetLearnedSpell() : ServerPacket(SMSG_PET_LEARNED_SPELL, 4) { }
+            PetLearnedSpell() : ServerPacket(SMSG_PET_LEARNED_SPELLS, 4) { }
 
             WorldPacket const* Write() override;
 
@@ -81,7 +81,7 @@ namespace WorldPackets
         class PetUnlearnedSpell final : public ServerPacket
         {
         public:
-            PetUnlearnedSpell() : ServerPacket(SMSG_PET_UNLEARNED_SPELL, 4) { }
+            PetUnlearnedSpell() : ServerPacket(SMSG_PET_UNLEARNED_SPELLS, 4) { }
 
             WorldPacket const* Write() override;
 

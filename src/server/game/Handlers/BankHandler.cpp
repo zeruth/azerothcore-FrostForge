@@ -142,11 +142,9 @@ void WorldSession::HandleAutoStoreBankItemOpcode(WorldPackets::Bank::AutoStoreBa
 
 void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyBankSlot)
 {
-    WorldPackets::Bank::BuyBankSlotResult packet;
+    // the 3.4.3 client has no SMSG_BUY_BANK_SLOT_RESULT: the bag slot count update is the answer
     if (!CanUseBank(buyBankSlot.Banker))
     {
-        packet.Result = ERR_BANKSLOT_NOTBANKER;
-        SendPacket(packet.Write());
         LOG_DEBUG("network", "WORLD: HandleBuyBankSlotOpcode - {} not found or you can't interact with him.", buyBankSlot.Banker.ToString());
         return;
     }
@@ -159,26 +157,15 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
     BankBagSlotPricesEntry const* slotEntry = sBankBagSlotPricesStore.LookupEntry(slot);
 
     if (!slotEntry)
-    {
-        packet.Result = ERR_BANKSLOT_FAILED_TOO_MANY;
-        SendPacket(packet.Write());
         return;
-    }
 
     uint32 price = slotEntry->price;
 
     if (!_player->HasEnoughMoney(price))
-    {
-        packet.Result = ERR_BANKSLOT_INSUFFICIENT_FUNDS;
-        SendPacket(packet.Write());
         return;
-    }
 
     _player->SetBankBagSlotCount(slot);
     _player->ModifyMoney(-int32(price));
-
-    packet.Result = ERR_BANKSLOT_OK;
-    SendPacket(packet.Write());
 
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT);
 }
@@ -186,7 +173,5 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
 void WorldSession::SendShowBank(ObjectGuid guid)
 {
     m_currentBankerGUID = guid;
-    WorldPackets::Bank::ShowBank packet;
-    packet.Banker = guid;
-    SendPacket(packet.Write());
+    // the 3.4.3 client opens the bank through SMSG_NPC_INTERACTION_OPEN_RESULT; not sent until ported
 }

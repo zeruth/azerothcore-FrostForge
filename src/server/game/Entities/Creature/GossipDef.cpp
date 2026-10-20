@@ -314,7 +314,7 @@ void QuestMenu::ClearMenu()
 
 void PlayerMenu::SendQuestGiverQuestList(QEmote const& eEmote, std::string const& Title, ObjectGuid guid)
 {
-    WorldPacket data(SMSG_QUESTGIVER_QUEST_LIST, 100);  // guess size
+    WorldPacket data(SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE, 100);  // guess size
     data << guid;
 
     if (QuestGreeting const* questGreeting = sObjectMgr->GetQuestGreeting(guid.GetTypeId(), guid.GetEntry()))
@@ -372,17 +372,17 @@ void PlayerMenu::SendQuestGiverQuestList(QEmote const& eEmote, std::string const
 
     data.put<uint8>(count_pos, count);
     _session->SendPacket(&data);
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_QUEST_LIST (QuestGiver: {})", guid.ToString());
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE (QuestGiver: {})", guid.ToString());
 }
 
 void PlayerMenu::SendQuestGiverStatus(uint8 questStatus, ObjectGuid npcGUID) const
 {
-    WorldPacket data(SMSG_QUESTGIVER_STATUS, 9);
+    WorldPacket data(SMSG_QUEST_GIVER_STATUS, 9);
     data << npcGUID;
     data << uint8(questStatus);
 
     _session->SendPacket(&data);
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_STATUS NPC {}, status={}", npcGUID.ToString(), questStatus);
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_STATUS NPC {}, status={}", npcGUID.ToString(), questStatus);
 }
 
 void PlayerMenu::SendQuestGiverQuestDetails(Quest const* quest, ObjectGuid npcGUID, bool activateAccept) const
@@ -401,7 +401,7 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const* quest, ObjectGuid npcGU
         ObjectMgr::GetLocaleString(localeData->AreaDescription, locale, questAreaDescription);
     }
 
-    WorldPacket data(SMSG_QUESTGIVER_QUEST_DETAILS, 500);   // guess size
+    WorldPacket data(SMSG_QUEST_GIVER_QUEST_DETAILS, 500);   // guess size
     data << npcGUID;
     data << _session->GetPlayer()->GetDivider();
     data << uint32(quest->GetQuestId());
@@ -501,7 +501,7 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const* quest, ObjectGuid npcGU
     }
     _session->SendPacket(&data);
 
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_QUEST_DETAILS {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_QUEST_DETAILS {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
 }
 
 void PlayerMenu::SendQuestQueryResponse(Quest const* quest) const
@@ -529,7 +529,7 @@ void PlayerMenu::SendQuestQueryResponse(Quest const* quest) const
             ObjectMgr::GetLocaleString(localeData->ObjectiveText[i], locale, questObjectiveText[i]);
     }
 
-    WorldPacket data(SMSG_QUEST_QUERY_RESPONSE, 100);       // guess size
+    WorldPacket data(SMSG_QUERY_QUEST_INFO_RESPONSE, 100);       // guess size
 
     data << uint32(quest->GetQuestId());                    // quest id
     data << uint32(quest->GetQuestMethod());                // Accepted values: 0, 1 or 2. 0 == IsAutoComplete() (skip objectives/details)
@@ -641,7 +641,7 @@ void PlayerMenu::SendQuestQueryResponse(Quest const* quest) const
         data << questObjectiveText[i];
 
     _session->SendPacket(&data);
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_QUERY_RESPONSE questid={}", quest->GetQuestId());
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUERY_QUEST_INFO_RESPONSE questid={}", quest->GetQuestId());
 }
 
 void PlayerMenu::SendQuestGiverOfferReward(Quest const* quest, ObjectGuid npcGUID, bool enableNext) const
@@ -656,7 +656,7 @@ void PlayerMenu::SendQuestGiverOfferReward(Quest const* quest, ObjectGuid npcGUI
     if (QuestOfferRewardLocale const* questOfferRewardLocale = sObjectMgr->GetQuestOfferRewardLocale(quest->GetQuestId()))
         ObjectMgr::GetLocaleString(questOfferRewardLocale->RewardText, locale, RewardText);
 
-    WorldPacket data(SMSG_QUESTGIVER_OFFER_REWARD, 400);    // guess size
+    WorldPacket data(SMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE, 400);    // guess size
     data << npcGUID;
     data << uint32(quest->GetQuestId());
     data << questTitle;
@@ -746,7 +746,7 @@ void PlayerMenu::SendQuestGiverOfferReward(Quest const* quest, ObjectGuid npcGUI
         data << uint32(quest->RewardFactionValueIdOverride[i]);
 
     _session->SendPacket(&data);
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_OFFER_REWARD {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
 }
 
 void PlayerMenu::SendQuestGiverRequestItems(Quest const* quest, ObjectGuid npcGUID, bool canComplete, bool closeOnCancel) const
@@ -787,7 +787,7 @@ void PlayerMenu::SendQuestGiverRequestItems(Quest const* quest, ObjectGuid npcGU
         }
     }
 
-    WorldPacket data(SMSG_QUESTGIVER_REQUEST_ITEMS, 300);   // guess size
+    WorldPacket data(SMSG_QUEST_GIVER_REQUEST_ITEMS, 300);   // guess size
     data << npcGUID;
     data << uint32(quest->GetQuestId());
     data << questTitle;
@@ -837,5 +837,5 @@ void PlayerMenu::SendQuestGiverRequestItems(Quest const* quest, ObjectGuid npcGU
     data << uint32(0x10);
 
     _session->SendPacket(&data);
-    LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_REQUEST_ITEMS {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
+    LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_REQUEST_ITEMS {}, questid={}", npcGUID.ToString(), quest->GetQuestId());
 }

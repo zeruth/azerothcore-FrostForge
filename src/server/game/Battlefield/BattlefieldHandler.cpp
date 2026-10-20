@@ -30,21 +30,14 @@
 // Param3:(time) Time in seconds that the player has to accept
 void WorldSession::SendBfInvitePlayerToWar(uint32 battleId, uint32 zoneId, uint32 time)
 {
-    WorldPacket data(SMSG_BATTLEFIELD_MGR_ENTRY_INVITE, 12);
-    data << uint32(battleId);
-    data << uint32(zoneId);
-    data << uint32(GameTime::GetGameTime().count() + time);
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_BATTLEFIELD_MGR_* messages
 }
 
 // Sends invitation to player to join the queue
 // Param1:(battleId) the BattleId of Bf
 void WorldSession::SendBfInvitePlayerToQueue(uint32 battleId)
 {
-    WorldPacket data(SMSG_BATTLEFIELD_MGR_QUEUE_INVITE, 5);
-    data << uint32(battleId);
-    data << uint8(1);                                       // warmup ? used ?
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_BATTLEFIELD_MGR_* messages
 }
 
 // Sends packet to inform player that they joined the queue
@@ -54,35 +47,19 @@ void WorldSession::SendBfInvitePlayerToQueue(uint32 battleId)
 // Param4:(full) on log in is full
 void WorldSession::SendBfQueueInviteResponse(uint32 battleId, uint32 zoneId, bool canQueue, bool full)
 {
-    WorldPacket data(SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE, 11);
-    data << uint32(battleId);
-    data << uint32(zoneId);
-    data << uint8((canQueue ? 1 : 0));  //Accepted          //0 you cannot queue wg     //1 you are queued
-    data << uint8((full ? 0 : 1));      //Logging In        //0 wg full                 //1 queue for upcoming
-    data << uint8(1); //Warmup
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_BATTLEFIELD_MGR_* messages
 }
 
 // Called when player accepts to join war
 // Param1:(battleId) the BattleId of Bf
 void WorldSession::SendBfEntered(uint32 battleId)
 {
-    WorldPacket data(SMSG_BATTLEFIELD_MGR_ENTERED, 7);
-    data << uint32(battleId);
-    data << uint8(1);                                       // unk
-    data << uint8(1);                                       // unk
-    data << uint8(_player->isAFK() ? 1 : 0);               // Clear AFK
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_BATTLEFIELD_MGR_* messages
 }
 
 void WorldSession::SendBfLeaveMessage(uint32 battleId, BFLeaveReason reason)
 {
-    WorldPacket data(SMSG_BATTLEFIELD_MGR_EJECTED, 7);
-    data << uint32(battleId);
-    data << uint8(reason);  // byte Reason
-    data << uint8(2);       // byte BattleStatus
-    data << uint8(0);       // bool Relocated
-    SendPacket(&data);
+    // the 3.4.3 client has no SMSG_BATTLEFIELD_MGR_* messages
 }
 
 // Sent by client when they click accept for queue

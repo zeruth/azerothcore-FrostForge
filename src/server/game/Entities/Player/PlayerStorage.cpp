@@ -4185,8 +4185,8 @@ void Player::SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32
 
 void Player::SendSellError(SellResult msg, Creature* creature, ObjectGuid guid, uint32 param)
 {
-    LOG_DEBUG("network", "WORLD: Sent SMSG_SELL_ITEM");
-    WorldPacket data(SMSG_SELL_ITEM, (8 + 8 + (param ? 4 : 0) + 1)); // last check 2.0.10
+    LOG_DEBUG("network", "WORLD: Sent SMSG_SELL_RESPONSE");
+    WorldPacket data(SMSG_SELL_RESPONSE, (8 + 8 + (param ? 4 : 0) + 1)); // last check 2.0.10
     data << (creature ? creature->GetGUID() : ObjectGuid::Empty);
     data << guid;
     if (param > 0)
@@ -6702,7 +6702,7 @@ void Player::SendRaidInfo()
 {
     uint32 counter = 0;
 
-    WorldPacket data(SMSG_RAID_INSTANCE_INFO, 4);
+    WorldPacket data(SMSG_INSTANCE_INFO, 4);
 
     std::size_t p_counter = data.wpos();
     data << uint32(counter);                                // placeholder
@@ -7466,7 +7466,7 @@ void Player::_SaveInventory(CharacterDatabaseTransaction trans)
 
     // Updated played time for refundable items. We don't do this in Player::Update because there's simply no need for it,
     // the client auto counts down in real time after having received the initial played time on the first
-    // SMSG_ITEM_REFUND_INFO_RESPONSE packet.
+    // SMSG_SET_ITEM_PURCHASE_DATA packet.
     // Item::UpdatePlayedTime is only called when needed, which is in DB saves, and item refund info requests.
     RefundableItemsSet::iterator i_next;
     for (RefundableItemsSet::iterator itr = m_refundableItems.begin(); itr != m_refundableItems.end(); itr = i_next)

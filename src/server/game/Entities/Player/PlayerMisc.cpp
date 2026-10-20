@@ -79,7 +79,7 @@ bool Player::CanSpeak() const
 
 void Player::SendAttackSwingNotInRange()
 {
-    WorldPacket data(SMSG_ATTACKSWING_NOTINRANGE, 0);
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
     SendDirectMessage(&data);
 }
 
@@ -129,13 +129,13 @@ void Player::Customize(CharacterCustomizeInfo const* customizeInfo, CharacterDat
 
 void Player::SendAttackSwingDeadTarget()
 {
-    WorldPacket data(SMSG_ATTACKSWING_DEADTARGET, 0);
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
     SendDirectMessage(&data);
 }
 
 void Player::SendAttackSwingCantAttack()
 {
-    WorldPacket data(SMSG_ATTACKSWING_CANT_ATTACK, 0);
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
     SendDirectMessage(&data);
 }
 
@@ -147,7 +147,7 @@ void Player::SendAttackSwingCancelAttack()
 
 void Player::SendAttackSwingBadFacingAttack()
 {
-    WorldPacket data(SMSG_ATTACKSWING_BADFACING, 0);
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
     SendDirectMessage(&data);
 }
 

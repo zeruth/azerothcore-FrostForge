@@ -57,25 +57,6 @@ namespace WorldPackets
             ObjectGuid Banker;
         };
 
-        class BuyBankSlotResult final : public ServerPacket
-        {
-        public:
-            BuyBankSlotResult() : ServerPacket(SMSG_BUY_BANK_SLOT_RESULT, 4) { }
-
-            WorldPacket const* Write() override;
-
-            uint32 Result = 0;
-        };
-
-        class ShowBank final : public ServerPacket
-        {
-        public:
-            ShowBank() : ServerPacket(SMSG_SHOW_BANK, 8) { }
-
-            WorldPacket const* Write() override;
-
-            ObjectGuid Banker;
-        };
     }
 }
 #endif // BankPackets_h__
