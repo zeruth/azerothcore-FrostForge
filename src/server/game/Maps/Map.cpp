@@ -2306,8 +2306,10 @@ void InstanceMap::PermBindAllPlayers()
 
         if (!bind || !bind->perm)
         {
-            WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 4);
-            data << uint32(0);
+            // SMSG_INSTANCE_SAVE_CREATED, 3.4.3 (FUN_1406bcba0): bit Gm, flush
+            WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 1);
+            data.WriteBit(false);
+            data.FlushBits();
             player->SendDirectMessage(&data);
             sInstanceSaveMgr->PlayerBindToInstance(player->GetGUID(), save, true, player);
         }

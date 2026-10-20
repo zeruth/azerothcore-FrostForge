@@ -71,7 +71,7 @@ namespace WorldPackets
         class ResetFailedNotify final : public ServerPacket
         {
         public:
-            ResetFailedNotify() : ServerPacket(SMSG_RESET_FAILED_NOTIFY, 4) {}
+            ResetFailedNotify() : ServerPacket(SMSG_RESET_FAILED_NOTIFY, 0) {}
 
             WorldPacket const* Write() override;
 

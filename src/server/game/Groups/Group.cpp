@@ -577,6 +577,9 @@ bool Group::AddMember(Player* player, uint8 roles /* = 0 */)
 
         if (m_maxEnchantingLevel < player->GetSkillValue(SKILL_ENCHANTING))
             m_maxEnchantingLevel = player->GetSkillValue(SKILL_ENCHANTING);
+
+        // 3.4.3 has no raid icon list request: the new member gets the list
+        SendTargetIconList(player->GetSession());
     }
 
     return true;
@@ -926,18 +929,37 @@ void Group::Disband(bool hideDestroy /* = false */)
 /***                   LOOT SYSTEM                     ***/
 /*********************************************************/
 
+/// The roll's item as LootItemData (FUN_140714bb0): the client matches a pending roll by LootObj and LootListID
+static void WriteRollItem(ByteBuffer& data, Roll const& r)
+{
+    LootItem li;
+    li.itemid = r.itemid;
+    li.randomSuffix = r.itemRandomSuffix;
+    li.randomPropertyId = r.itemRandomPropId;
+    li.count = r.itemCount;
+    WriteLootItemData(data, r.itemSlot, li, LOOT_SLOT_TYPE_ROLL_ONGOING);
+}
+
+/// SMSG_START_LOOT_ROLL, 3.4.3 (FUN_1406cb9b0, handler FUN_141808610): PackedGuid128 LootObj, u32 MapID (the
+/// client drops the roll when it is not its current map), u32 RollTime (ms), u8 ValidRolls (1 << RollType: pass
+/// must be set), 3 x u32 ineligibility reasons (unread), u8 Method, u32 DungeonEncounterID, LootItemData
+static void BuildLootStartRoll(WorldPacket& data, uint32 countDown, uint32 mapId, uint8 voteMask, uint8 method, Roll const& r)
+{
+    data.Initialize(SMSG_START_LOOT_ROLL, 18 + 4 + 4 + 1 + 12 + 1 + 4 + 40);
+    Guid128::Write(data, r.lootObj);
+    data << uint32(mapId);
+    data << uint32(countDown);
+    data << uint8(voteMask);
+    data << uint32(0) << uint32(0) << uint32(0);
+    data << uint8(method);
+    data << uint32(0);                                      // DungeonEncounterID
+    WriteRollItem(data, r);
+}
+
 void Group::SendLootStartRoll(uint32 CountDown, uint32 mapid, Roll const& r)
 {
-    WorldPacket data(SMSG_START_LOOT_ROLL, (8 + 4 + 4 + 4 + 4 + 4 + 4 + 1));
-    data << r.itemGUID;                                     // guid of rolled item
-    data << uint32(mapid);                                  // 3.3.3 mapid
-    data << uint32(r.itemSlot);                             // itemslot
-    data << uint32(r.itemid);                               // the itemEntryId for the item that shall be rolled for
-    data << uint32(r.itemRandomSuffix);                     // randomSuffix
-    data << uint32(r.itemRandomPropId);                     // item random property ID
-    data << uint32(r.itemCount);                            // items in stack
-    data << uint32(CountDown);                              // the countdown time to choose "need" or "greed"
-    data << uint8(r.rollVoteMask);                          // roll type mask
+    WorldPacket data;
+    BuildLootStartRoll(data, CountDown, mapid, r.rollVoteMask, GetLootMethod(), r);
 
     for (Roll::PlayerVote::const_iterator itr = r.playerVote.begin(); itr != r.playerVote.end(); ++itr)
     {
@@ -999,35 +1021,29 @@ void Group::SendLootStartRollToPlayer(uint32 countDown, uint32 mapId, Player* p,
     if (!p)
         return;
 
-    WorldPacket data(SMSG_START_LOOT_ROLL, (8 + 4 + 4 + 4 + 4 + 4 + 4 + 1));
-    data << r.itemGUID;                                     // guid of rolled item
-    data << uint32(mapId);                                  // 3.3.3 mapid
-    data << uint32(r.itemSlot);                             // itemslot
-    data << uint32(r.itemid);                               // the itemEntryId for the item that shall be rolled for
-    data << uint32(r.itemRandomSuffix);                     // randomSuffix
-    data << uint32(r.itemRandomPropId);                     // item random property ID
-    data << uint32(r.itemCount);                            // items in stack
-    data << uint32(countDown);                              // the countdown time to choose "need" or "greed"
     uint8 voteMask = r.rollVoteMask;
     if (!canNeed)
         voteMask &= ~ROLL_FLAG_TYPE_NEED;
-    data << uint8(voteMask);                                // roll type mask
-
+    WorldPacket data;
+    BuildLootStartRoll(data, countDown, mapId, voteMask, GetLootMethod(), r);
     p->SendDirectMessage(&data);
 }
 
-void Group::SendLootRoll(ObjectGuid sourceGuid, ObjectGuid targetGuid, uint8 rollNumber, uint8 rollType, Roll const& roll, bool autoPass)
+/// SMSG_LOOT_ROLL, 3.4.3 (FUN_1406c4660, handler FUN_141807c40): PackedGuid128 LootObj, PackedGuid128 Player,
+/// i32 Roll, u8 RollType (0 pass, 1 need, 2 greed, 3 disenchant), u32 DungeonEncounterID, LootItemData, bits
+/// Autopassed, OffSpec. The first one per player is the "has selected" line, the second the rolled number.
+void Group::SendLootRoll(ObjectGuid targetGuid, int32 rollNumber, uint8 rollType, Roll const& roll, bool autoPass)
 {
-    WorldPacket data(SMSG_LOOT_ROLL, (8 + 4 + 8 + 4 + 4 + 4 + 1 + 1 + 1));
-    data << sourceGuid;                                     // guid of the item rolled
-    data << uint32(roll.itemSlot);                          // slot
-    data << targetGuid;
-    data << uint32(roll.itemid);                            // the itemEntryId for the item that shall be rolled for
-    data << uint32(roll.itemRandomSuffix);                  // randomSuffix
-    data << uint32(roll.itemRandomPropId);                  // Item random property ID
-    data << uint8(rollNumber);                              // 0: "Need for: [item name]" > 127: "you passed on: [item name]"      Roll number
-    data << uint8(rollType);                                // 0: "Need for: [item name]" 0: "You have selected need for [item name] 1: need roll 2: greed roll
-    data << uint8(autoPass);                                // 1: "You automatically passed on: %s because you cannot loot that item."
+    WorldPacket data(SMSG_LOOT_ROLL, 36 + 4 + 1 + 4 + 40 + 1);
+    Guid128::Write(data, roll.lootObj);
+    Guid128::Write(data, targetGuid);
+    data << int32(rollNumber);
+    data << uint8(rollType);
+    data << uint32(0);                                      // DungeonEncounterID
+    WriteRollItem(data, roll);
+    data.WriteBit(autoPass);
+    data.WriteBit(false);                                   // OffSpec
+    data.FlushBits();
 
     for (Roll::PlayerVote::const_iterator itr = roll.playerVote.begin(); itr != roll.playerVote.end(); ++itr)
     {
@@ -1040,17 +1056,19 @@ void Group::SendLootRoll(ObjectGuid sourceGuid, ObjectGuid targetGuid, uint8 rol
     }
 }
 
-void Group::SendLootRollWon(ObjectGuid sourceGuid, ObjectGuid targetGuid, uint8 rollNumber, uint8 rollType, Roll const& roll)
+/// SMSG_LOOT_ROLL_WON, 3.4.3 (FUN_1406c47f0, handler FUN_141808150): PackedGuid128 LootObj, PackedGuid128
+/// Winner, i32 Roll, u8 RollType, u32 DungeonEncounterID, LootItemData, bit MainSpec
+void Group::SendLootRollWon(ObjectGuid targetGuid, int32 rollNumber, uint8 rollType, Roll const& roll)
 {
-    WorldPacket data(SMSG_LOOT_ROLL_WON, (8 + 4 + 4 + 4 + 4 + 8 + 1 + 1));
-    data << sourceGuid;                                     // guid of the item rolled
-    data << uint32(roll.itemSlot);                          // slot
-    data << uint32(roll.itemid);                            // the itemEntryId for the item that shall be rolled for
-    data << uint32(roll.itemRandomSuffix);                  // randomSuffix
-    data << uint32(roll.itemRandomPropId);                  // Item random property
-    data << targetGuid;                                     // guid of the player who won.
-    data << uint8(rollNumber);                              // rollnumber realted to SMSG_LOOT_ROLL
-    data << uint8(rollType);                                // rollType related to SMSG_LOOT_ROLL
+    WorldPacket data(SMSG_LOOT_ROLL_WON, 36 + 4 + 1 + 4 + 40 + 1);
+    Guid128::Write(data, roll.lootObj);
+    Guid128::Write(data, targetGuid);
+    data << int32(rollNumber);
+    data << uint8(rollType);
+    data << uint32(0);                                      // DungeonEncounterID
+    WriteRollItem(data, roll);
+    data.WriteBit(rollType == ROLL_NEED);                   // MainSpec
+    data.FlushBits();
 
     for (Roll::PlayerVote::const_iterator itr = roll.playerVote.begin(); itr != roll.playerVote.end(); ++itr)
     {
@@ -1063,14 +1081,34 @@ void Group::SendLootRollWon(ObjectGuid sourceGuid, ObjectGuid targetGuid, uint8 
     }
 }
 
+/// SMSG_LOOT_ALL_PASSED, 3.4.3 (FUN_1406c4330, handler FUN_141807f80): PackedGuid128 LootObj, u32
+/// DungeonEncounterID, LootItemData
 void Group::SendLootAllPassed(Roll const& roll)
 {
-    WorldPacket data(SMSG_LOOT_ALL_PASSED, (8 + 4 + 4 + 4 + 4));
-    data << roll.itemGUID;                                     // Guid of the item rolled
-    data << uint32(roll.itemSlot);                             // Item loot slot
-    data << uint32(roll.itemid);                               // The itemEntryId for the item that shall be rolled for
-    data << uint32(roll.itemRandomPropId);                     // Item random property ID
-    data << uint32(roll.itemRandomSuffix);                     // Item random suffix ID
+    WorldPacket data(SMSG_LOOT_ALL_PASSED, 18 + 4 + 40);
+    Guid128::Write(data, roll.lootObj);
+    data << uint32(0);                                      // DungeonEncounterID
+    WriteRollItem(data, roll);
+
+    for (Roll::PlayerVote::const_iterator itr = roll.playerVote.begin(); itr != roll.playerVote.end(); ++itr)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(itr->first);
+        if (!player)
+            continue;
+
+        if (itr->second != NOT_VALID)
+            player->SendDirectMessage(&data);
+    }
+}
+
+/// SMSG_LOOT_ROLLS_COMPLETE, 3.4.3 (FUN_1406c4940, handler FUN_141808370): PackedGuid128 LootObj, u8
+/// LootListID, u32 DungeonEncounterID. Closes the roll's loot history entry, after ROLL_WON or ALL_PASSED.
+void Group::SendLootRollsComplete(Roll const& roll)
+{
+    WorldPacket data(SMSG_LOOT_ROLLS_COMPLETE, 18 + 1 + 4);
+    Guid128::Write(data, roll.lootObj);
+    data << uint8(roll.itemSlot);
+    data << uint32(0);                                      // DungeonEncounterID
 
     for (Roll::PlayerVote::const_iterator itr = roll.playerVote.begin(); itr != roll.playerVote.end(); ++itr)
     {
@@ -1124,6 +1162,7 @@ bool CanRollOnItem(LootItem const& item, Player const* player, Loot* loot)
 
 void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
 {
+    ObjectGuid const pLootedObjectGuid = pLootedObject->GetGUID();
     std::vector<LootItem>::iterator i;
     ItemTemplate const* item;
     uint8 itemSlot = 0;
@@ -1174,6 +1213,7 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
             if (r->totalPlayersRolling > 0)
             {
                 r->setLoot(loot);
+                r->lootObj = pLootedObjectGuid;
                 r->itemSlot = itemSlot;
                 if (item->DisenchantID && m_maxEnchantingLevel >= item->RequiredDisenchantSkill)
                     r->rollVoteMask |= ROLL_FLAG_TYPE_DISENCHANT;
@@ -1190,7 +1230,7 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
                             continue;
 
                         if (itr->second == PASS)
-                            SendLootRoll(newitemGUID, p->GetGUID(), 128, ROLL_PASS, *r, true);
+                            SendLootRoll(p->GetGUID(), -1, ROLL_PASS, *r, true);
                     }
                 }
 
@@ -1263,6 +1303,7 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
         if (r->totalPlayersRolling > 0)
         {
             r->setLoot(loot);
+            r->lootObj = pLootedObjectGuid;
             r->itemSlot = itemSlot;
 
             loot->quest_items[itemSlot - loot->items.size()].is_blocked = true;
@@ -1289,6 +1330,7 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
 
 void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
 {
+    ObjectGuid const pLootedObjectGuid = lootedObject->GetGUID();
     ItemTemplate const* item;
     uint8 itemSlot = 0;
     for (std::vector<LootItem>::iterator i = loot->items.begin(); i != loot->items.end(); ++i, ++itemSlot)
@@ -1332,6 +1374,7 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
             if (r->totalPlayersRolling > 0)
             {
                 r->setLoot(loot);
+                r->lootObj = pLootedObjectGuid;
                 r->itemSlot = itemSlot;
                 if (item->DisenchantID && m_maxEnchantingLevel >= item->RequiredDisenchantSkill)
                     r->rollVoteMask |= ROLL_FLAG_TYPE_DISENCHANT;
@@ -1349,7 +1392,7 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
                         continue;
 
                     if (itr->second == PASS)
-                        SendLootRoll(newitemGUID, p->GetGUID(), 128, ROLL_PASS, *r);
+                        SendLootRoll(p->GetGUID(), -1, ROLL_PASS, *r, true);
                     else
                         SendLootStartRollToPlayer(60000, lootedObject->GetMapId(), p, p->CanRollForItemInLFG(item, lootedObject) == EQUIP_ERR_OK, *r);
                 }
@@ -1407,6 +1450,7 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
         if (r->totalPlayersRolling > 0)
         {
             r->setLoot(loot);
+            r->lootObj = pLootedObjectGuid;
             r->itemSlot = itemSlot;
 
             loot->quest_items[itemSlot - loot->items.size()].is_blocked = true;
@@ -1419,7 +1463,7 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
                     continue;
 
                 if (itr->second == PASS)
-                    SendLootRoll(newitemGUID, p->GetGUID(), 128, ROLL_PASS, *r);
+                    SendLootRoll(p->GetGUID(), -1, ROLL_PASS, *r, true);
                 else
                     SendLootStartRollToPlayer(60000, lootedObject->GetMapId(), p, p->CanRollForItemInLFG(item, lootedObject) == EQUIP_ERR_OK, *r);
             }
@@ -1482,12 +1526,15 @@ void Group::MasterLoot(Loot* loot, WorldObject* pLootedObject)
         }
     }
 
-    WorldPacket data(SMSG_MASTER_LOOT_CANDIDATE_LIST, 1 + looters.size() * (1 + 8));
-    data << uint8(looters.size());
+    // SMSG_MASTER_LOOT_CANDIDATE_LIST, 3.4.3 (FUN_1406c4f20, handler FUN_1418083d0): PackedGuid128 LootObj, u32
+    // count, the candidates' PackedGuid128s. The client keeps one list per LootObj.
+    WorldPacket data(SMSG_MASTER_LOOT_CANDIDATE_LIST, 18 + 4 + looters.size() * 18);
+    Guid128::Write(data, pLootedObject->GetGUID());
+    data << uint32(looters.size());
 
     for (Player* looter : looters)
     {
-        data << looter->GetGUID();
+        Guid128::Write(data, looter->GetGUID());
     }
 
     for (Player* looter : looters)
@@ -1496,9 +1543,9 @@ void Group::MasterLoot(Loot* loot, WorldObject* pLootedObject)
     }
 }
 
-bool Group::CountRollVote(ObjectGuid playerGUID, ObjectGuid Guid, uint8 Choice)
+bool Group::CountRollVote(ObjectGuid playerGUID, ObjectGuid lootObj, uint8 lootListId, uint8 Choice)
 {
-    Rolls::iterator rollI = GetRoll(Guid);
+    Rolls::iterator rollI = GetRoll(lootObj, lootListId);
     if (rollI == RollId.end())
         return false;
     Roll* roll = *rollI;
@@ -1517,22 +1564,22 @@ bool Group::CountRollVote(ObjectGuid playerGUID, ObjectGuid Guid, uint8 Choice)
     switch (Choice)
     {
         case ROLL_PASS:                                     // Player choose pass
-            SendLootRoll(ObjectGuid::Empty, playerGUID, 128, ROLL_PASS, *roll);
+            SendLootRoll(playerGUID, -1, ROLL_PASS, *roll);
             ++roll->totalPass;
             itr->second = PASS;
             break;
         case ROLL_NEED:                                     // player choose Need
-            SendLootRoll(ObjectGuid::Empty, playerGUID, 0, 0, *roll);
+            SendLootRoll(playerGUID, 0, ROLL_NEED, *roll);
             ++roll->totalNeed;
             itr->second = NEED;
             break;
         case ROLL_GREED:                                    // player choose Greed
-            SendLootRoll(ObjectGuid::Empty, playerGUID, 128, ROLL_GREED, *roll);
+            SendLootRoll(playerGUID, 0, ROLL_GREED, *roll);
             ++roll->totalGreed;
             itr->second = GREED;
             break;
         case ROLL_DISENCHANT:                               // player choose Disenchant
-            SendLootRoll(ObjectGuid::Empty, playerGUID, 128, ROLL_DISENCHANT, *roll);
+            SendLootRoll(playerGUID, 0, ROLL_DISENCHANT, *roll);
             ++roll->totalGreed;
             itr->second = DISENCHANT;
             break;
@@ -1561,7 +1608,7 @@ void Group::EndRoll(Loot* pLoot)
 
                 vote = PASS;
                 ++roll->totalPass;
-                SendLootRoll(roll->itemGUID, playerGuid, 128, ROLL_PASS, *roll);
+                SendLootRoll(playerGuid, -1, ROLL_PASS, *roll, true);
             }
 
             CountTheRoll(itr);
@@ -1596,7 +1643,7 @@ void Group::RemovePlayerFromRolls(ObjectGuid guid)
 
         roll->playerVote.erase(itr2);
 
-        if (CountRollVote(guid, roll->itemGUID, MAX_ROLL_TYPE))
+        if (CountRollVote(guid, roll->lootObj, roll->itemSlot, MAX_ROLL_TYPE))
             it = RollId.begin();
         else
             ++it;
@@ -1635,7 +1682,7 @@ void Group::CountTheRoll(Rolls::iterator rollI)
                 }
 
                 uint8 randomN = urand(1, 100);
-                SendLootRoll(ObjectGuid::Empty, itr->first, randomN, ROLL_NEED, *roll);
+                SendLootRoll(itr->first, randomN, ROLL_NEED, *roll);
                 if (maxresul < randomN)
                 {
                     maxguid  = itr->first;
@@ -1645,7 +1692,7 @@ void Group::CountTheRoll(Rolls::iterator rollI)
 
             if (maxguid) // pussywizard: added condition
             {
-                SendLootRollWon(roll->itemGUID, maxguid, maxresul, ROLL_NEED, *roll);
+                SendLootRollWon(maxguid, maxresul, ROLL_NEED, *roll);
                 player = ObjectAccessor::FindPlayer(maxguid);
 
                 if (player)
@@ -1715,7 +1762,7 @@ void Group::CountTheRoll(Rolls::iterator rollI)
                 }
 
                 uint8 randomN = urand(1, 100);
-                SendLootRoll(ObjectGuid::Empty, itr->first, randomN, itr->second, *roll);
+                SendLootRoll(itr->first, randomN, itr->second, *roll);
                 if (maxresul < randomN)
                 {
                     maxguid  = itr->first;
@@ -1726,7 +1773,7 @@ void Group::CountTheRoll(Rolls::iterator rollI)
 
             if (maxguid) // pussywizard: added condition
             {
-                SendLootRollWon(roll->itemGUID, maxguid, maxresul, rollvote, *roll);
+                SendLootRollWon(maxguid, maxresul, rollvote, *roll);
                 player = ObjectAccessor::FindPlayer(maxguid);
 
                 if (player)
@@ -1826,6 +1873,7 @@ void Group::CountTheRoll(Rolls::iterator rollI)
         }
     }
 
+    SendLootRollsComplete(*roll);
     RollId.erase(rollI);
     delete roll;
 }
@@ -1843,11 +1891,13 @@ void Group::SetTargetIcon(uint8 id, ObjectGuid whoGuid, ObjectGuid targetGuid)
 
     m_targetIcons[id] = targetGuid;
 
-    WorldPacket data(SMSG_SEND_RAID_TARGET_UPDATE_SINGLE, (1 + 8 + 1 + 8));
-    data << uint8(0);                                       // set targets
-    data << whoGuid;
+    // SMSG_SEND_RAID_TARGET_UPDATE_SINGLE, 3.4.3 (FUN_1406ca270, handler FUN_141987010): u8 PartyIndex, u8 Symbol,
+    // PackedGuid128 Target, PackedGuid128 ChangedBy (the chat line needs both non-empty)
+    WorldPacket data(SMSG_SEND_RAID_TARGET_UPDATE_SINGLE, 2 + 18 + 18);
+    data << uint8(0);
     data << uint8(id);
-    data << targetGuid;
+    Guid128::Write(data, targetGuid);
+    Guid128::Write(data, whoGuid);
     BroadcastPacket(&data, true);
 }
 
@@ -1856,16 +1906,23 @@ void Group::SendTargetIconList(WorldSession* session)
     if (!session)
         return;
 
-    WorldPacket data(SMSG_SEND_RAID_TARGET_UPDATE_SINGLE, (1 + TARGETICONCOUNT * 9));
-    data << uint8(1);                                       // list targets
+    // SMSG_SEND_RAID_TARGET_UPDATE_ALL, 3.4.3 (FUN_1406ca180, handler FUN_141986fe0): u8 PartyIndex, u32 count,
+    // {PackedGuid128 Target, u8 Symbol}. Replaces the client's whole table.
+    uint32 count = 0;
+    for (uint8 i = 0; i < TARGETICONCOUNT; ++i)
+        if (m_targetIcons[i])
+            ++count;
 
+    WorldPacket data(SMSG_SEND_RAID_TARGET_UPDATE_ALL, 5 + TARGETICONCOUNT * 19);
+    data << uint8(0);
+    data << uint32(count);
     for (uint8 i = 0; i < TARGETICONCOUNT; ++i)
     {
         if (!m_targetIcons[i])
             continue;
 
+        Guid128::Write(data, m_targetIcons[i]);
         data << uint8(i);
-        data << m_targetIcons[i];
     }
 
     session->SendPacket(&data);
@@ -2032,30 +2089,88 @@ void Group::BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRai
     }
 }
 
-void Group::BroadcastReadyCheck(WorldPacket const* packet)
+/// SMSG_READY_CHECK_RESPONSE, 3.4.3 (FUN_1406c8f90, handler FUN_141986c90): PackedGuid128 PartyGUID (the client finds
+/// the party by it), PackedGuid128 Player, bit IsReady, flush. To everyone: the frames need every answer.
+void Group::BroadcastReadyCheck(ObjectGuid member, bool isReady)
 {
-    for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
-    {
-        Player* player = itr->GetSource();
-        if (player)
-            if (IsLeader(player->GetGUID()) || IsAssistant(player->GetGUID()))
-                player->SendDirectMessage(packet);
-    }
+    WorldPacket data(SMSG_READY_CHECK_RESPONSE, 18 + 18 + 1);
+    Guid128::Write(data, m_guid);
+    Guid128::Write(data, member);
+    data.WriteBit(isReady);
+    data.FlushBits();
+    BroadcastPacket(&data, false);
 }
 
+/// The members who are offline answer "not ready" at once
 void Group::OfflineReadyCheck()
 {
     for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr)
     {
         Player* player = ObjectAccessor::FindConnectedPlayer(citr->guid);
-        if (!player)
-        {
-            WorldPacket data(SMSG_READY_CHECK_RESPONSE, 9);
-            data << citr->guid;
-            data << uint8(0);
-            BroadcastReadyCheck(&data);
-        }
+        if (!player && m_readyCheckAnswered.insert(citr->guid).second)
+            BroadcastReadyCheck(citr->guid, false);
     }
+}
+
+/// SMSG_READY_CHECK_STARTED, 3.4.3 (FUN_1406c9020, handler FUN_141986940): u8 PartyIndex, PackedGuid128 PartyGUID,
+/// PackedGuid128 InitiatorGUID, i64 Duration (ms). Every client marks the initiator ready by itself. 3.4.3 has no
+/// client "finished" message: the server ends the check when everyone has answered or the time is up.
+void Group::StartReadyCheck(Player* initiator)
+{
+    static constexpr uint32 READY_CHECK_DURATION = 35000;
+
+    m_readyCheckActive = true;
+    uint32 checkId = ++m_readyCheckId;
+    m_readyCheckAnswered.clear();
+    m_readyCheckAnswered.insert(initiator->GetGUID());
+
+    WorldPacket data(SMSG_READY_CHECK_STARTED, 1 + 18 + 18 + 8);
+    data << uint8(0);
+    Guid128::Write(data, m_guid);
+    Guid128::Write(data, initiator->GetGUID());
+    data << int64(READY_CHECK_DURATION);
+    BroadcastPacket(&data, false);
+
+    OfflineReadyCheck();
+    if (m_readyCheckAnswered.size() >= GetMembersCount())
+    {
+        EndReadyCheck();
+        return;
+    }
+
+    ObjectGuid groupGuid = m_guid;
+    initiator->m_Events.AddEventAtOffset([groupGuid, checkId]()
+    {
+        if (Group* group = sGroupMgr->GetGroupByGUID(groupGuid.GetCounter()))
+            if (group->m_readyCheckActive && group->m_readyCheckId == checkId)
+                group->EndReadyCheck();
+    }, Milliseconds(READY_CHECK_DURATION));
+}
+
+void Group::SetMemberReadyCheck(ObjectGuid member, bool isReady)
+{
+    if (!m_readyCheckActive || !IsMember(member) || !m_readyCheckAnswered.insert(member).second)
+        return;
+
+    BroadcastReadyCheck(member, isReady);
+    if (m_readyCheckAnswered.size() >= GetMembersCount())
+        EndReadyCheck();
+}
+
+/// SMSG_READY_CHECK_COMPLETED, 3.4.3 (FUN_1406c8f10, handler FUN_141986c30): u8 PartyIndex, PackedGuid128 PartyGUID.
+/// Leaders and assistants list whoever did not answer ready.
+void Group::EndReadyCheck()
+{
+    if (!m_readyCheckActive)
+        return;
+
+    m_readyCheckActive = false;
+    m_readyCheckAnswered.clear();
+
+    WorldPacket data(SMSG_READY_CHECK_COMPLETED, 1 + 18);
+    data << uint8(0);
+    Guid128::Write(data, m_guid);
+    BroadcastPacket(&data, false);
 }
 
 bool Group::SameSubGroup(Player const* member1, Player const* member2) const
@@ -2732,11 +2847,12 @@ bool Group::isRollLootActive() const
     return !RollId.empty();
 }
 
-Group::Rolls::iterator Group::GetRoll(ObjectGuid Guid)
+/// 3.4.3 names a roll by its LootObj (the looted object's GUID) and LootListID
+Group::Rolls::iterator Group::GetRoll(ObjectGuid lootObj, uint8 lootListId)
 {
     Rolls::iterator iter;
     for (iter = RollId.begin(); iter != RollId.end(); ++iter)
-        if ((*iter)->itemGUID == Guid && (*iter)->isValid())
+        if ((*iter)->lootObj == lootObj && (*iter)->itemSlot == lootListId && (*iter)->isValid())
             return iter;
     return RollId.end();
 }

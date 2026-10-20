@@ -17,6 +17,7 @@
 
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "WorldSession.h"
 
@@ -58,8 +59,9 @@ void WorldSession::HandleGrantLevel(WorldPacket& recvData)
         return;
     }
 
-    WorldPacket data2(SMSG_PROPOSE_LEVEL_GRANT, 8);
-    data2 << _player->GetPackGUID();
+    // SMSG_PROPOSE_LEVEL_GRANT, 3.4.3 (FUN_1406b8960, handler FUN_141928880): PackedGuid128 Sender
+    WorldPacket data2(SMSG_PROPOSE_LEVEL_GRANT, 18);
+    Guid128::Write(data2, _player->GetGUID());
     target->SendDirectMessage(&data2);
 }
 

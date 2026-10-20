@@ -964,7 +964,7 @@ bool Loot::hasOverThresholdItem() const
 /// LootItemData, 3.4.3 (FUN_140714bb0): 2-bit Type (0 item), 3-bit UIType (LootSlotType), bit
 /// CanTradeToTapList, flush, ItemInstance, u32 Quantity, u8 LootItemType, u8 LootListID (what the client
 /// sends back in CMSG_LOOT_ITEM)
-static void WriteLootItemData(ByteBuffer& b, uint8 lootListId, LootItem const& li, uint8 uiType)
+void WriteLootItemData(ByteBuffer& b, uint8 lootListId, LootItem const& li, uint8 uiType)
 {
     b.WriteBits(0, 2);
     b.WriteBits(uiType, 3);

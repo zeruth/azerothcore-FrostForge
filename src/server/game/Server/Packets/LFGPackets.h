@@ -23,6 +23,17 @@
 
 namespace WorldPackets::LFG
 {
+    /// A queue as the 3.4.3 client names it (FUN_14070f950): it keys its queue records on all four fields
+    struct RideTicket
+    {
+        ObjectGuid RequesterGuid;
+        uint32 Id = 0;
+        uint32 Type = 0;
+        int64 Time = 0;
+    };
+
+    void ReadRideTicket(ByteBuffer& data, RideTicket& ticket);
+
     class LFGJoin final : public ClientPacket
     {
     public:
@@ -32,10 +43,8 @@ namespace WorldPackets::LFG
 
         uint32 Roles = 0;
         Array<uint32, 50> Slots;
-        std::string Comment;
-        bool NoPartialClear = false;
-        bool Achievements = false;
-        std::array<uint8, 3> Needs = { };
+        std::string Comment;                                // not in 3.4.3: always empty
+        bool QueueAsGroup = false;
     };
 
     class LFGLeave final : public ClientPacket
@@ -43,7 +52,9 @@ namespace WorldPackets::LFG
     public:
         LFGLeave(WorldPacket&& packet) : ClientPacket(CMSG_DF_LEAVE, std::move(packet)) { }
 
-        void Read() override { };
+        void Read() override;
+
+        RideTicket Ticket;
     };
 }
 

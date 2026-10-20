@@ -162,9 +162,11 @@ WorldPacket const* WorldPackets::Misc::StopMirrorTimer::Write()
     return &_worldPacket;
 }
 
+// SMSG_CROSSED_INEBRIATION_THRESHOLD, 3.4.3 (FUN_1406b6fc0, handler FUN_1417351b0): PackedGuid128 Guid, u32
+// Threshold (AC's DrunkenState: DRUNK_MESSAGE_*%d with Threshold + 1), u32 ItemID
 WorldPacket const* WorldPackets::Misc::CrossedInebriationThreshold::Write()
 {
-    _worldPacket << Guid;
+    Guid128::Write(_worldPacket, Guid);
     _worldPacket << uint32(Threshold);
     _worldPacket << uint32(ItemID);
 

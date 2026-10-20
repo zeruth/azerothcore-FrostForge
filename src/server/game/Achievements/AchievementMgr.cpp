@@ -730,11 +730,17 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
         // If guild does not exist - send player's name to the server
         if (achievement->flags & ACHIEVEMENT_FLAG_REALM_FIRST_KILL && guild)
         {
-            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENTS, guild->GetName().size() + 1 + 8 + 4 + 4);
-            data << guild->GetName();
-            data << GetPlayer()->GetGUID();
+            // SMSG_BROADCAST_ACHIEVEMENT, 3.4.3 (inline in the chat switch, handler FUN_1419057e0): 7-bit name length,
+            // bit PlainName, flush, PackedGuid128 PlayerGUID, u32 AchievementID, the name. 3.4.3's
+            // SERVER_FIRST_ACHIEVEMENTS only reaches the client's debug log.
+            std::string_view name = std::string_view(guild->GetName()).substr(0, 127);
+            WorldPacket data(SMSG_BROADCAST_ACHIEVEMENT, 1 + 18 + 4 + name.size());
+            data.WriteBits(name.size(), 7);
+            data.WriteBit(true);                                // plain: a guild's name
+            data.FlushBits();
+            Guid128::Write(data, GetPlayer()->GetGUID());
             data << uint32(achievement->ID);
-            data << uint32(0);                                  // display name as plain string in chat (always 0 for guild)
+            data.WriteString(name);
             sWorldSessionMgr->SendGlobalMessage(&data);
         }
         else
@@ -742,16 +748,19 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
             TeamId teamId = GetPlayer()->GetTeamId();
 
             // broadcast realm first reached
-            WorldPacket data(SMSG_SERVER_FIRST_ACHIEVEMENTS, GetPlayer()->GetName().size() + 1 + 8 + 4 + 4);
-            data << GetPlayer()->GetName();
-            data << GetPlayer()->GetGUID();
-            data << uint32(achievement->ID);
-            std::size_t linkTypePos = data.wpos();
-            data << uint32(1);                                  // display name as clickable link in chat
-            sWorldSessionMgr->SendGlobalMessage(&data, nullptr, teamId);
-
-            data.put<uint32>(linkTypePos, 0);                   // display name as plain string in chat
-            sWorldSessionMgr->SendGlobalMessage(&data, nullptr, teamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE);
+            // SMSG_BROADCAST_ACHIEVEMENT (see above): a clickable name for the player's own faction, plain for the other
+            std::string_view name = std::string_view(GetPlayer()->GetName()).substr(0, 127);
+            for (bool plain : { false, true })
+            {
+                WorldPacket data(SMSG_BROADCAST_ACHIEVEMENT, 1 + 18 + 4 + name.size());
+                data.WriteBits(name.size(), 7);
+                data.WriteBit(plain);
+                data.FlushBits();
+                Guid128::Write(data, GetPlayer()->GetGUID());
+                data << uint32(achievement->ID);
+                data.WriteString(name);
+                sWorldSessionMgr->SendGlobalMessage(&data, nullptr, plain ? (teamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE) : teamId);
+            }
         }
     }
     // if player is in world he can tell his friends about new achievement

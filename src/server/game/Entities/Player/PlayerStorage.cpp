@@ -6713,8 +6713,10 @@ void Player::BindToInstance()
     if (!mapSave) //it seems sometimes mapSave is nullptr, but I did not check why
         return;
 
-    WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 4);
-    data << uint32(0);
+    // SMSG_INSTANCE_SAVE_CREATED, 3.4.3 (FUN_1406bcba0, handler FUN_1419f0160): bit Gm, flush
+    WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 1);
+    data.WriteBit(false);
+    data.FlushBits();
     SendDirectMessage(&data);
     sInstanceSaveMgr->PlayerBindToInstance(this->GetGUID(), mapSave, true, this);
 }

@@ -633,12 +633,13 @@ void WorldSession::HandleLootMethodOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleLootRoll(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    uint32 itemSlot;
-    uint8  rollType;
-    recvData >> guid;                  // guid of the item rolled
-    recvData >> itemSlot;
-    recvData >> rollType;              // 0: pass, 1: need, 2: greed
+    // 3.4.3 (writer FUN_14075e950): PackedGuid128 LootObj (SMSG_START_LOOT_ROLL's), u8 LootListID, u8 RollType
+    // (0 pass, 1 need, 2 greed, 3 disenchant)
+    ObjectGuid lootObj = Guid128::Read(recvData);
+    uint8 lootListId = recvData.read<uint8>();
+    uint8 rollType = recvData.read<uint8>();
+    if (rollType >= MAX_ROLL_TYPE)
+        return;
 
     Group* group = GetPlayer()->GetGroup();
     if (!group)
@@ -650,7 +651,7 @@ void WorldSession::HandleLootRoll(WorldPacket& recvData)
         rollType = ROLL_PASS;
     }
 
-    group->CountRollVote(GetPlayer()->GetGUID(), guid, rollType);
+    group->CountRollVote(GetPlayer()->GetGUID(), lootObj, lootListId, rollType);
 
     switch (rollType)
     {
@@ -694,39 +695,32 @@ void WorldSession::HandleRandomRollOpcode(WorldPackets::Misc::RandomRollClient& 
 
 void WorldSession::HandleRaidTargetUpdateOpcode(WorldPacket& recvData)
 {
+    // CMSG_UPDATE_RAID_TARGET, 3.4.3 (writer FUN_140769f60): bit HasPartyIndex, flush, PackedGuid128 Target, u8
+    // Symbol (0-based), [u8 PartyIndex]. An empty Target clears that symbol. There is no list request any more:
+    // the server pushes SMSG_SEND_RAID_TARGET_UPDATE_ALL on joining and on login.
+    bool hasPartyIndex = recvData.ReadBit();
+    recvData.ResetBitReader();
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint8 symbol = recvData.read<uint8>();
+    if (hasPartyIndex)
+        recvData.read_skip<uint8>();
+
     Group* group = GetPlayer()->GetGroup();
     if (!group)
         return;
 
-    uint8  x;
-    recvData >> x;
+    if (group->isRaidGroup() && !group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
+        return;
 
-    /** error handling **/
-    /********************/
+    if (guid.IsPlayer())
+    {
+        Player* target = ObjectAccessor::FindConnectedPlayer(guid);
 
-    // everything's fine, do it
-    if (x == 0xFF)                                           // target icon request
-    {
-        group->SendTargetIconList(this);
-    }
-    else                                                    // target icon update
-    {
-        if (group->isRaidGroup() && !group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
+        if (!target || target->IsHostileTo(GetPlayer()))
             return;
-
-        ObjectGuid guid;
-        recvData >> guid;
-
-        if (guid.IsPlayer())
-        {
-            Player* target = ObjectAccessor::FindConnectedPlayer(guid);
-
-            if (!target || target->IsHostileTo(GetPlayer()))
-                return;
-        }
-
-        group->SetTargetIcon(x, _player->GetGUID(), guid);
     }
+
+    group->SetTargetIcon(symbol, _player->GetGUID(), guid);
 }
 
 void WorldSession::HandleGroupRaidConvertOpcode(WorldPacket& recvData)
@@ -760,15 +754,16 @@ void WorldSession::HandleGroupRaidConvertOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleGroupChangeSubGroupOpcode(WorldPacket& recvData)
 {
+    // CMSG_CHANGE_SUB_GROUP, 3.4.3 (writer FUN_1407658f0, Lua SetRaidSubgroup): PackedGuid128 TargetGUID, u8
+    // NewSubGroup (0-based), then bit HasPartyIndex, flush, [u8 PartyIndex]
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint8 groupNr = recvData.read<uint8>();
+    recvData.rfinish();
+
     // we will get correct pointer for group here, so we don't have to check if group is BG raid
     Group* group = GetPlayer()->GetGroup();
     if (!group)
         return;
-
-    std::string name;
-    uint8 groupNr;
-    recvData >> name;
-    recvData >> groupNr;
 
     if (groupNr >= MAX_RAID_SUBGROUPS)
         return;
@@ -777,20 +772,8 @@ void WorldSession::HandleGroupChangeSubGroupOpcode(WorldPacket& recvData)
     if (!group->IsLeader(senderGuid) && !group->IsAssistant(senderGuid))
         return;
 
-    if (!group->HasFreeSlotSubGroup(groupNr))
+    if (!group->HasFreeSlotSubGroup(groupNr) || !group->IsMember(guid))
         return;
-
-    Player* movedPlayer = ObjectAccessor::FindPlayerByName(name, false);
-    ObjectGuid guid;
-    if (movedPlayer)
-    {
-        guid = movedPlayer->GetGUID();
-    }
-    else
-    {
-        CharacterDatabase.EscapeString(name);
-        guid = sCharacterCache->GetCharacterGuidByName(name);
-    }
 
     group->ChangeMembersGroup(guid, groupNr);
 }
@@ -819,6 +802,15 @@ void WorldSession::HandleGroupAssistantLeaderOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePartyAssignmentOpcode(WorldPacket& recvData)
 {
+    // CMSG_SET_PARTY_ASSIGNMENT, 3.4.3 (writer FUN_1407692b0): bits HasPartyIndex, Set, flush, u8 Assignment (0 main
+    // tank, 1 main assist: AC's GROUP_ASSIGN_*), PackedGuid128 Target, [u8 PartyIndex]
+    recvData.ReadBit();
+    bool apply = recvData.ReadBit();
+    recvData.ResetBitReader();
+    uint8 assignment = recvData.read<uint8>();
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.rfinish();
+
     Group* group = GetPlayer()->GetGroup();
     if (!group)
         return;
@@ -826,12 +818,6 @@ void WorldSession::HandlePartyAssignmentOpcode(WorldPacket& recvData)
     ObjectGuid senderGuid = GetPlayer()->GetGUID();
     if (!group->IsLeader(senderGuid) && !group->IsAssistant(senderGuid))
         return;
-
-    uint8 assignment;
-    bool apply;
-    ObjectGuid guid;
-    recvData >> assignment >> apply;
-    recvData >> guid;
 
     switch (assignment)
     {
@@ -851,50 +837,10 @@ void WorldSession::HandlePartyAssignmentOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleRaidReadyCheckOpcode(WorldPacket& recvData)
 {
-    Group* group = GetPlayer()->GetGroup();
-    if (!group)
-        return;
+    // CMSG_DO_READY_CHECK, 3.4.3 (writer FUN_140766d50, Lua DoReadyCheck): bit HasPartyIndex, flush, [u8 PartyIndex].
+    // Never empty; the answers come as CMSG_READY_CHECK_RESPONSE.
+    recvData.rfinish();
 
-    if (recvData.empty())                                   // request
-    {
-        /** error handling **/
-        if (!group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
-            return;
-        /********************/
-
-        // Check if Ready Check in BG is enabled
-        if (sWorld->getBoolConfig(CONFIG_BATTLEGROUND_DISABLE_READY_CHECK_IN_BG))
-        {
-            // Check if player is in BG
-            if (_player->InBattleground())
-            {
-                ChatHandler(_player->GetSession()).SendNotification(LANG_BG_READY_CHECK_ERROR);
-                return;
-            }
-        }
-
-        // everything's fine, do it
-        WorldPacket data(SMSG_READY_CHECK_STARTED, 8);
-        data << GetPlayer()->GetGUID();
-        group->BroadcastPacket(&data, false, -1);
-
-        group->OfflineReadyCheck();
-    }
-    else                                                    // answer
-    {
-        uint8 state;
-        recvData >> state;
-
-        // everything's fine, do it
-        WorldPacket data(SMSG_READY_CHECK_RESPONSE, 9);
-        data << GetPlayer()->GetGUID();
-        data << uint8(state);
-        group->BroadcastReadyCheck(&data);
-    }
-}
-
-void WorldSession::HandleRaidReadyCheckFinishedOpcode(WorldPacket& /*recvData*/)
-{
     Group* group = GetPlayer()->GetGroup();
     if (!group)
         return;
@@ -902,8 +848,68 @@ void WorldSession::HandleRaidReadyCheckFinishedOpcode(WorldPacket& /*recvData*/)
     if (!group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
         return;
 
-    WorldPacket data(SMSG_READY_CHECK_COMPLETED);
-    group->BroadcastPacket(&data, true, -1);
+    // Check if Ready Check in BG is enabled
+    if (sWorld->getBoolConfig(CONFIG_BATTLEGROUND_DISABLE_READY_CHECK_IN_BG))
+    {
+        // Check if player is in BG
+        if (_player->InBattleground())
+        {
+            ChatHandler(_player->GetSession()).SendNotification(LANG_BG_READY_CHECK_ERROR);
+            return;
+        }
+    }
+
+    group->StartReadyCheck(GetPlayer());
+}
+
+void WorldSession::HandleReadyCheckResponseOpcode(WorldPacket& recvData)
+{
+    // CMSG_READY_CHECK_RESPONSE, 3.4.3 (writer FUN_140768ac0, Lua ConfirmReadyCheck): bits HasPartyIndex, IsReady,
+    // flush, [u8 PartyIndex]
+    recvData.ReadBit();
+    bool isReady = recvData.ReadBit();
+    recvData.rfinish();
+
+    if (Group* group = GetPlayer()->GetGroup())
+        group->SetMemberReadyCheck(GetPlayer()->GetGUID(), isReady);
+}
+
+/// PartyMemberAuraStates (FUN_140715cb0): i32 SpellID, u16 Flags (0x4 duration, 0x10 negative), u32 ActiveFlags (the
+/// effect mask), u32 point count, the points. Returns the count; the list itself goes to `out`.
+static uint32 BuildPartyMemberAuras(Unit* unit, ByteBuffer& out)
+{
+    uint32 count = 0;
+    for (uint8 i = 0; unit && i < MAX_AURAS_GROUP_UPDATE; ++i)
+    {
+        AuraApplication const* aurApp = unit->GetVisibleAura(i);
+        if (!aurApp)
+            continue;
+        uint16 flags = (aurApp->GetFlags() & AFLAG_NEGATIVE) ? 0x10 : 0;
+        if (aurApp->GetBase()->GetMaxDuration() > 0)
+            flags |= 0x4;
+        out << int32(aurApp->GetBase()->GetId());
+        out << uint16(flags);
+        out << uint32(aurApp->GetEffectMask());
+        out << uint32(0);
+        ++count;
+    }
+    return count;
+}
+
+static uint16 PartyMemberStatus(Player* player)
+{
+    uint16 playerStatus = MEMBER_STATUS_ONLINE;
+    if (player->IsPvP())
+        playerStatus |= MEMBER_STATUS_PVP;
+    if (!player->IsAlive())
+        playerStatus |= player->HasPlayerFlag(PLAYER_FLAGS_GHOST) ? MEMBER_STATUS_GHOST : MEMBER_STATUS_DEAD;
+    if (player->IsFFAPvP())
+        playerStatus |= MEMBER_STATUS_PVP_FFA;
+    if (player->isAFK())
+        playerStatus |= MEMBER_STATUS_AFK;
+    if (player->isDND())
+        playerStatus |= MEMBER_STATUS_DND;
+    return playerStatus;
 }
 
 /// SMSG_PARTY_MEMBER_FULL_STATE, 3.4.3 (FUN_1406c63e0 -> FUN_140715fe0, handler FUN_141736300): bit
@@ -919,27 +925,7 @@ void WorldSession::BuildPartyMemberFullState(Player* player, ObjectGuid memberGu
     data.WriteBit(false);                                   // ForEnemy
     data.FlushBits();
 
-    // PartyMemberAuraStates (FUN_140715cb0): i32 SpellID, u16 Flags (0x4 duration, 0x10 negative), u32
-    // ActiveFlags (the effect mask), u32 point count, the points
-    auto buildAuras = [](Unit* unit, ByteBuffer& out) -> uint32
-    {
-        uint32 count = 0;
-        for (uint8 i = 0; unit && i < MAX_AURAS_GROUP_UPDATE; ++i)
-        {
-            AuraApplication const* aurApp = unit->GetVisibleAura(i);
-            if (!aurApp)
-                continue;
-            uint16 flags = (aurApp->GetFlags() & AFLAG_NEGATIVE) ? 0x10 : 0;
-            if (aurApp->GetBase()->GetMaxDuration() > 0)
-                flags |= 0x4;
-            out << int32(aurApp->GetBase()->GetId());
-            out << uint16(flags);
-            out << uint32(aurApp->GetEffectMask());
-            out << uint32(0);
-            ++count;
-        }
-        return count;
-    };
+    auto buildAuras = &BuildPartyMemberAuras;
 
     if (!player)
     {
@@ -961,17 +947,7 @@ void WorldSession::BuildPartyMemberFullState(Player* player, ObjectGuid memberGu
         return;
     }
 
-    uint16 playerStatus = MEMBER_STATUS_ONLINE;
-    if (player->IsPvP())
-        playerStatus |= MEMBER_STATUS_PVP;
-    if (!player->IsAlive())
-        playerStatus |= player->HasPlayerFlag(PLAYER_FLAGS_GHOST) ? MEMBER_STATUS_GHOST : MEMBER_STATUS_DEAD;
-    if (player->IsFFAPvP())
-        playerStatus |= MEMBER_STATUS_PVP_FFA;
-    if (player->isAFK())
-        playerStatus |= MEMBER_STATUS_AFK;
-    if (player->isDND())
-        playerStatus |= MEMBER_STATUS_DND;
+    uint16 playerStatus = PartyMemberStatus(player);
 
     Powers powerType = player->getPowerType();
     data << uint8(player->GetGroup() ? 1 : 0) << uint8(0);   // PartyType: in a normal party
@@ -1019,12 +995,119 @@ void WorldSession::BuildPartyMemberFullState(Player* player, ObjectGuid memberGu
     Guid128::Write(data, memberGuid);
 }
 
+/// SMSG_PARTY_MEMBER_PARTIAL_STATE, 3.4.3 (FUN_1406c6560 -> FUN_1407016c0, handler FUN_1417364c0): bits ForEnemy,
+/// Unk1 (sets or clears Status 0x20 on every partial: 0), Unk2, then a Has bit per field (PartyType, Status, PowerType,
+/// PowerDisplayID, CurrentHealth, MaxHealth, CurrentPower, MaxPower, Level, SpecID, ZoneID, WmoGroupID,
+/// WmoDoodadPlacementID, Position, VehicleSeat, Auras, Pet, Phase, ChromieTime), flush, [pet: bits HasGUID, HasName,
+/// HasModelId, HasCurrentHealth, HasMaxHealth, HasAuras, flush, the name, GUID, model, health, max, auras], the member's
+/// PackedGuid128, then the fields that are present in the full state's order. The client merges it into what it has
+/// (members it does not know are dropped), except the pet: a partial without HasPet removes it.
 void WorldSession::BuildPartyMemberStatsChangedPacket(Player* player, WorldPacket* data)
 {
-    if (player->GetGroupUpdateFlag() == GROUP_UPDATE_FLAG_NONE)
+    uint32 mask = player->GetGroupUpdateFlag();
+    if (mask == GROUP_UPDATE_FLAG_NONE)
         return;
 
-    BuildPartyMemberFullState(player, player->GetGUID(), *data);
+    if (mask & GROUP_UPDATE_FLAG_POWER_TYPE)
+        mask |= GROUP_UPDATE_FLAG_CUR_POWER | GROUP_UPDATE_FLAG_MAX_POWER;
+
+    Pet* pet = player->GetPet();
+    Powers powerType = player->getPowerType();
+    data->Initialize(SMSG_PARTY_MEMBER_PARTIAL_STATE, 64);
+    data->WriteBit(false);                                  // ForEnemy
+    data->WriteBit(false);                                  // Unk1
+    data->WriteBit(false);                                  // Unk2
+    data->WriteBit(false);                                  // PartyType
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_STATUS) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_POWER_TYPE) != 0);
+    data->WriteBit(false);                                  // PowerDisplayID
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_CUR_HP) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_MAX_HP) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_CUR_POWER) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_MAX_POWER) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_LEVEL) != 0);
+    data->WriteBit(false);                                  // SpecID
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_ZONE) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_ZONE) != 0);   // WmoGroupID
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_ZONE) != 0);   // WmoDoodadPlacementID
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_POSITION) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_VEHICLE_SEAT) != 0);
+    data->WriteBit((mask & GROUP_UPDATE_FLAG_AURAS) != 0);
+    data->WriteBit(pet != nullptr);                         // HasPet: always while there is one
+    data->WriteBit(false);                                  // Phase
+    data->WriteBit(false);                                  // ChromieTime
+    data->FlushBits();
+
+    if (pet)
+    {
+        bool hasName = (mask & GROUP_UPDATE_FLAG_PET_NAME) != 0;
+        data->WriteBit((mask & GROUP_UPDATE_FLAG_PET_GUID) != 0);
+        data->WriteBit(hasName);
+        data->WriteBit((mask & GROUP_UPDATE_FLAG_PET_MODEL_ID) != 0);
+        data->WriteBit((mask & GROUP_UPDATE_FLAG_PET_CUR_HP) != 0);
+        data->WriteBit((mask & GROUP_UPDATE_FLAG_PET_MAX_HP) != 0);
+        data->WriteBit((mask & GROUP_UPDATE_FLAG_PET_AURAS) != 0);
+        data->FlushBits();
+        if (hasName)
+        {
+            std::string_view petName = std::string_view(pet->GetName()).substr(0, 0xFF);
+            *data << uint8(petName.size());
+            data->WriteString(petName);
+        }
+        if (mask & GROUP_UPDATE_FLAG_PET_GUID)
+            Guid128::Write(*data, pet->GetGUID());
+        if (mask & GROUP_UPDATE_FLAG_PET_MODEL_ID)
+            *data << int32(pet->GetDisplayId());
+        if (mask & GROUP_UPDATE_FLAG_PET_CUR_HP)
+            *data << int32(pet->GetHealth());
+        if (mask & GROUP_UPDATE_FLAG_PET_MAX_HP)
+            *data << int32(pet->GetMaxHealth());
+        if (mask & GROUP_UPDATE_FLAG_PET_AURAS)
+        {
+            ByteBuffer petAuras;
+            *data << uint32(BuildPartyMemberAuras(pet, petAuras));
+            data->append(petAuras);
+        }
+    }
+
+    Guid128::Write(*data, player->GetGUID());
+    if (mask & GROUP_UPDATE_FLAG_STATUS)
+        *data << uint16(PartyMemberStatus(player));
+    if (mask & GROUP_UPDATE_FLAG_POWER_TYPE)
+        *data << uint8(powerType);
+    if (mask & GROUP_UPDATE_FLAG_CUR_HP)
+        *data << int32(player->GetHealth());
+    if (mask & GROUP_UPDATE_FLAG_MAX_HP)
+        *data << int32(player->GetMaxHealth());
+    if (mask & GROUP_UPDATE_FLAG_CUR_POWER)
+        *data << uint16(player->GetPower(powerType));
+    if (mask & GROUP_UPDATE_FLAG_MAX_POWER)
+        *data << uint16(player->GetMaxPower(powerType));
+    if (mask & GROUP_UPDATE_FLAG_LEVEL)
+        *data << uint16(player->GetLevel());
+    if (mask & GROUP_UPDATE_FLAG_ZONE)
+    {
+        *data << uint16(player->GetZoneId());
+        *data << uint16(0);                                 // WmoGroupID
+        *data << uint32(0);                                 // WmoDoodadPlacementID
+    }
+    if (mask & GROUP_UPDATE_FLAG_POSITION)
+    {
+        *data << int16(player->GetPositionX());
+        *data << int16(player->GetPositionY());
+        *data << int16(player->GetPositionZ());
+    }
+    if (mask & GROUP_UPDATE_FLAG_VEHICLE_SEAT)
+    {
+        Vehicle* vehicle = player->GetVehicle();
+        *data << int32(vehicle ? vehicle->GetVehicleInfo()->m_seatID[player->m_movementInfo.transport.seat] : 0);
+    }
+    if (mask & GROUP_UPDATE_FLAG_AURAS)
+    {
+        ByteBuffer auras;
+        *data << uint32(BuildPartyMemberAuras(player, auras));
+        data->append(auras);
+    }
 }
 
 /*this procedure handles clients CMSG_REQUEST_PARTY_MEMBER_STATS request*/
@@ -1053,8 +1136,8 @@ void WorldSession::HandleRequestRaidInfoOpcode(WorldPacket& /*recvData*/)
 
 void WorldSession::HandleOptOutOfLootOpcode(WorldPacket& recvData)
 {
-    uint32 passOnLoot;
-    recvData >> passOnLoot; // 1 always pass, 0 do not pass
+    // 3.4.3 (writer FUN_14075ef10, Lua SetOptOutOfLoot): bit PassOnLoot, flush
+    bool passOnLoot = recvData.ReadBit();
 
     if (!GetPlayer())
         return;
@@ -1064,22 +1147,13 @@ void WorldSession::HandleOptOutOfLootOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleGroupSwapSubGroupOpcode(WorldPacket& recv_data)
 {
-    std::string playerName1, playerName2;
-
-    // first = moved from, second = moved to
-    recv_data >> playerName1;
-    recv_data >> playerName2;
-
-    if (!normalizePlayerName(playerName1))
-    {
-        SendPartyResult(PARTY_OP_SWAP, playerName1, ERR_GROUP_SWAP_FAILED);
-        return;
-    }
-    if (!normalizePlayerName(playerName2))
-    {
-        SendPartyResult(PARTY_OP_SWAP, playerName1, ERR_GROUP_SWAP_FAILED);
-        return;
-    }
+    // CMSG_SWAP_SUB_GROUPS, 3.4.3 (writer FUN_140769c70, Lua SwapRaidSubgroup): bit HasPartyIndex, flush,
+    // PackedGuid128 FirstTarget, PackedGuid128 SecondTarget, [u8 PartyIndex]
+    recv_data.ReadBit();
+    recv_data.ResetBitReader();
+    ObjectGuid guid1 = Guid128::Read(recv_data);
+    ObjectGuid guid2 = Guid128::Read(recv_data);
+    recv_data.rfinish();
 
     Group* group = GetPlayer()->GetGroup();
     if (!group || !group->isRaidGroup())
@@ -1092,38 +1166,9 @@ void WorldSession::HandleGroupSwapSubGroupOpcode(WorldPacket& recv_data)
         return;
     }
 
-    //get guid, member may be offline
-    auto getGuid = [&group](std::string const& playerName)
+    if (!group->IsMember(guid1) || !group->IsMember(guid2))
     {
-        // no player, cheating?
-        if (!group->GetMemberGUID(playerName))
-        {
-            return ObjectGuid::Empty;
-        }
-
-        if (Player* player = ObjectAccessor::FindPlayerByName(playerName.c_str()))
-        {
-            return player->GetGUID();
-        }
-        else
-        {
-            if (ObjectGuid guid = sCharacterCache->GetCharacterGuidByName(playerName))
-            {
-                return guid;
-            }
-            else
-            {
-                return ObjectGuid::Empty; // no player - again, cheating?
-            }
-        }
-    };
-
-    ObjectGuid guid1 = getGuid(playerName1);
-    ObjectGuid guid2 = getGuid(playerName2);
-
-    if (!guid1 || !guid2)
-    {
-        SendPartyResult(PARTY_OP_SWAP, playerName1, ERR_GROUP_SWAP_FAILED);
+        SendPartyResult(PARTY_OP_SWAP, "", ERR_GROUP_SWAP_FAILED);
         return;
     }
 

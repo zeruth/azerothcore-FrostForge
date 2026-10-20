@@ -779,9 +779,15 @@ void WorldSession::HandleTotemDestroyed(WorldPackets::Totem::TotemDestroyed& tot
         totem->ToTotem()->UnSummon();
 }
 
-void WorldSession::HandleSelfResOpcode(WorldPacket& /*recvData*/)
+void WorldSession::HandleSelfResOpcode(WorldPacket& recvData)
 {
-    LOG_DEBUG("network", "WORLD: CMSG_SELF_RES");                  // empty opcode
+    // 3.4.3 (writer FUN_140760380, C_DeathInfo.UseSelfResurrectOption): u32 SpellID, one of the self-res spells
+    // the client was given (ActivePlayerData's SelfResSpells)
+    uint32 spellId = recvData.read<uint32>();
+    LOG_DEBUG("network", "WORLD: CMSG_SELF_RES {}", spellId);
+
+    if (spellId != _player->GetUInt32Value(PLAYER_SELF_RES_SPELL))
+        return;
 
     if (SpellInfo const* spell = sSpellMgr->GetSpellInfo(_player->GetUInt32Value(PLAYER_SELF_RES_SPELL)))
     {
@@ -797,8 +803,9 @@ void WorldSession::HandleSelfResOpcode(WorldPacket& /*recvData*/)
 
 void WorldSession::HandleSpellClick(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_140760c80): PackedGuid128 SpellClickUnitGuid, bit TryAutoDismount, flush
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.rfinish();
 
     // this will get something not in world. crash
     Creature* unit = ObjectAccessor::GetCreatureOrPetOrVehicle(*_player, guid);
@@ -815,9 +822,10 @@ void WorldSession::HandleSpellClick(WorldPacket& recvData)
 
 void WorldSession::HandleMirrorImageDataRequest(WorldPacket& recvData)
 {
+    // CMSG_GET_MIRROR_IMAGE_DATA, 3.4.3 (writer FUN_14075d620): PackedGuid128 UnitGUID, u32 DisplayID
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.read_skip<uint32>();
     LOG_DEBUG("network", "WORLD: CMSG_GET_MIRROR_IMAGE_DATA");
-    ObjectGuid guid;
-    recvData >> guid;
 
     // Get unit for which data is needed by client
     Unit* unit = ObjectAccessor::GetUnit(*_player, guid);
@@ -832,75 +840,67 @@ void WorldSession::HandleMirrorImageDataRequest(WorldPacket& recvData)
     if (!creator)
         return;
 
-    WorldPacket data(SMSG_MIRROR_IMAGE_COMPONENTED_DATA, 68);
-    data << guid;
-    data << uint32(creator->GetDisplayId());
+    Player* player = creator->ToPlayer();
+    if (!player)
+    {
+        // SMSG_MIRROR_IMAGE_CREATURE_DATA, 3.4.3 (handler FUN_141789cc0): PackedGuid128 UnitGUID, i32 DisplayID,
+        // i32 SpellVisualKitID
+        WorldPacket data(SMSG_MIRROR_IMAGE_CREATURE_DATA, 18 + 8);
+        Guid128::Write(data, guid);
+        data << int32(creator->GetDisplayId());
+        data << int32(0);
+        SendPacket(&data);
+        return;
+    }
+
+    // SMSG_MIRROR_IMAGE_COMPONENTED_DATA, 3.4.3 (inline in the spell switch, handler FUN_141789ad0): PackedGuid128
+    // UnitGUID, i32 DisplayID, u8 RaceID, u8 Gender, u8 ClassID, u32 customization count, PackedGuid128 GuildGUID,
+    // u32 item display count, the customizations {u32 option, u32 choice}, the item displays (at most 11 used)
+    static EquipmentSlots const itemSlots[] =
+    {
+        EQUIPMENT_SLOT_HEAD,
+        EQUIPMENT_SLOT_SHOULDERS,
+        EQUIPMENT_SLOT_BODY,
+        EQUIPMENT_SLOT_CHEST,
+        EQUIPMENT_SLOT_WAIST,
+        EQUIPMENT_SLOT_LEGS,
+        EQUIPMENT_SLOT_FEET,
+        EQUIPMENT_SLOT_WRISTS,
+        EQUIPMENT_SLOT_HANDS,
+        EQUIPMENT_SLOT_TABARD,
+        EQUIPMENT_SLOT_BACK,
+    };
+
+    std::vector<ChrCustomizationChoice> const& customizations = player->GetCustomizations();
+    WorldPacket data(SMSG_MIRROR_IMAGE_COMPONENTED_DATA, 18 + 7 + 4 + 18 + 4 + customizations.size() * 8 + 11 * 4);
+    Guid128::Write(data, guid);
+    data << int32(creator->GetDisplayId());
     data << uint8(creator->getRace());
     data << uint8(creator->getGender());
     data << uint8(creator->getClass());
+    data << uint32(customizations.size());
+    Guid128::WriteGuild(data, player->GetGuildId());
+    data << uint32(std::size(itemSlots));
+    for (ChrCustomizationChoice const& c : customizations)
+        data << uint32(c.ChrCustomizationOptionID) << uint32(c.ChrCustomizationChoiceID);
 
-    if (creator->IsPlayer())
+    // Display items in visible slots
+    for (EquipmentSlots slot : itemSlots)
     {
-        Player* player = creator->ToPlayer();
-        data << uint8(player->GetByteValue(PLAYER_BYTES, 0));   // skin
-        data << uint8(player->GetByteValue(PLAYER_BYTES, 1));   // face
-        data << uint8(player->GetByteValue(PLAYER_BYTES, 2));   // hair
-        data << uint8(player->GetByteValue(PLAYER_BYTES, 3));   // haircolor
-        data << uint8(player->GetByteValue(PLAYER_BYTES_2, 0)); // facialhair
-        data << uint32(player->GetGuildId());                   // unk
-
-        static EquipmentSlots const itemSlots[] =
+        if (slot == EQUIPMENT_SLOT_HEAD && player->HasPlayerFlag(PLAYER_FLAGS_HIDE_HELM))
+            data << int32(0);
+        else if (slot == EQUIPMENT_SLOT_BACK && player->HasPlayerFlag(PLAYER_FLAGS_HIDE_CLOAK))
+            data << int32(0);
+        else if (Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
         {
-            EQUIPMENT_SLOT_HEAD,
-            EQUIPMENT_SLOT_SHOULDERS,
-            EQUIPMENT_SLOT_BODY,
-            EQUIPMENT_SLOT_CHEST,
-            EQUIPMENT_SLOT_WAIST,
-            EQUIPMENT_SLOT_LEGS,
-            EQUIPMENT_SLOT_FEET,
-            EQUIPMENT_SLOT_WRISTS,
-            EQUIPMENT_SLOT_HANDS,
-            EQUIPMENT_SLOT_BACK,
-            EQUIPMENT_SLOT_TABARD,
-            EQUIPMENT_SLOT_END
-        };
+            uint32 displayInfoId = item->GetTemplate()->DisplayInfoID;
 
-        // Display items in visible slots
-        for (EquipmentSlots const* itr = &itemSlots[0]; *itr != EQUIPMENT_SLOT_END; ++itr)
-        {
-            if (*itr == EQUIPMENT_SLOT_HEAD && player->HasPlayerFlag(PLAYER_FLAGS_HIDE_HELM))
-                data << uint32(0);
-            else if (*itr == EQUIPMENT_SLOT_BACK && player->HasPlayerFlag(PLAYER_FLAGS_HIDE_CLOAK))
-                data << uint32(0);
-            else if (Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, *itr))
-            {
-                uint32 displayInfoId = item->GetTemplate()->DisplayInfoID;
+            sScriptMgr->OnGlobalMirrorImageDisplayItem(item, displayInfoId);
 
-                sScriptMgr->OnGlobalMirrorImageDisplayItem(item, displayInfoId);
-
-                data << uint32(displayInfoId);
-            }
-            else
-                data << uint32(0);
+            data << int32(displayInfoId);
         }
-    }
-    else
-    {
-        // Skip player data for creatures
-        data << uint8(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
-        data << uint32(0);
+        else
+            data << int32(0);
     }
 
     SendPacket(&data);

@@ -12062,16 +12062,21 @@ void Player::SendInstanceResetWarning(uint32 mapid, Difficulty difficulty, uint3
     else
         type = RAID_INSTANCE_WARNING_MIN_SOON;
 
-    WorldPacket data(SMSG_RAID_INSTANCE_MESSAGE, 4 + 4 + 4 + 4);
-    data << uint32(type);
+    // SMSG_RAID_INSTANCE_MESSAGE, 3.4.3 (inline in the chat switch, handler FUN_141907210): u8 Type, u32 MapID,
+    // u32 DifficultyID (Difficulty.db2: AC's raid difficulties are 3-6), bits Locked, Extended, flush. Only the
+    // welcome (4) and the expiry (5) show anything; the welcome takes the time left from the client's own
+    // lock list, so the hour and minute warnings are not sent.
+    if (type != RAID_INSTANCE_WELCOME)
+        return;
+
+    WorldPacket data(SMSG_RAID_INSTANCE_MESSAGE, 1 + 4 + 4 + 1);
+    data << uint8(type);
     data << uint32(mapid);
-    data << uint32(difficulty);                             // difficulty
-    data << uint32(time);
-    if (type == RAID_INSTANCE_WELCOME)
-    {
-        data << uint8(bind && bind->perm);                  // is locked
-        data << uint8(bind && bind->extended);              // is extended, ignored if prev field is 0
-    }
+    MapEntry const* mapEntry = sMapStore.LookupEntry(mapid);
+    data << uint32((mapEntry && mapEntry->IsRaid()) ? difficulty + 3 : difficulty + 1);
+    data.WriteBit(bind && bind->perm);
+    data.WriteBit(bind && bind->extended);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -13256,9 +13261,11 @@ void Player::SetClientControl(Unit* target, bool allowMove, bool packetOnly /*= 
 
     // A fleeing/confused target can't be controlled by the client yet, but the mover
     // must still switch so control is restored once the crowd control ends.
-    WorldPacket data(SMSG_CONTROL_UPDATE, target->GetPackGUID().size() + 1);
-    data << target->GetPackGUID();
-    data << uint8((allowMove && !target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED)) ? 1 : 0);
+    // SMSG_CONTROL_UPDATE, 3.4.3 (FUN_1406b9970, handler FUN_141789900): PackedGuid128 Guid, bit On, flush
+    WorldPacket data(SMSG_CONTROL_UPDATE, 18 + 1);
+    Guid128::Write(data, target->GetGUID());
+    data.WriteBit(allowMove && !target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED));
+    data.FlushBits();
     SendDirectMessage(&data);
 
     // We want to set the packet only
@@ -13833,21 +13840,32 @@ void Player::ConvertRune(uint8 index, RuneType newType)
 {
     SetCurrentRune(index, newType);
 
-    WorldPacket data(SMSG_CONVERT_RUNE, 2);
-    data << uint8(index);
-    data << uint8(newType);
+    // SMSG_CONVERT_RUNE, 3.4.3 (inline in the spell switch, handler FUN_141ba8d90): a RuneData block the handler
+    // does not use (u8 Start, u8 Count, u32 cooldown count, the cooldowns), then u32 Index, u32 RuneType
+    WorldPacket data(SMSG_CONVERT_RUNE, 6 + 8);
+    data << uint8(0) << uint8(0) << uint32(0);
+    data << uint32(index);
+    data << uint32(newType);
     SendDirectMessage(&data);
 }
 
 void Player::ResyncRunes(uint8 count)
 {
-    WorldPacket data(SMSG_RESYNC_RUNES, 4 + count * 2);
+    // SMSG_RESYNC_RUNES, 3.4.3 (inline in the spell switch, handler FUN_141ba8dc0 -> FUN_141ba9cc0): RuneData, u8
+    // Start and u8 Count (the ready-rune masks before and now), u32 cooldown count (the client uses the cooldowns
+    // only when it equals its rune count), per rune the part of its cooldown already passed x 255. The rune types
+    // are not in it (CONVERT_RUNE carries those).
+    uint8 readyMask = 0;
+    for (uint32 i = 0; i < count; ++i)
+        if (!GetRuneCooldown(i))
+            readyMask |= uint8(1 << i);
+
+    WorldPacket data(SMSG_RESYNC_RUNES, 6 + count);
+    data << uint8(readyMask);
+    data << uint8(readyMask);
     data << uint32(count);
     for (uint32 i = 0; i < count; ++i)
-    {
-        data << uint8(GetCurrentRune(i));                   // rune type
         data << uint8(255 - (GetRuneCooldown(i) * 51));     // passed cooldown time (0-255)
-    }
     SendDirectMessage(&data);
 }
 

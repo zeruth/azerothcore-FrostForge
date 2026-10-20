@@ -157,6 +157,7 @@ public:
     void targetObjectBuildLink();
 
     ObjectGuid itemGUID;
+    ObjectGuid lootObj;                                 // the looted object: SMSG_LOOT_RESPONSE's LootObj
     uint32 itemid;
     int32  itemRandomPropId;
     uint32 itemRandomSuffix;
@@ -289,8 +290,11 @@ public:
     void UpdatePlayerOutOfRange(Player* player);
     // ignore: GUID of player that will be ignored
     void BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRaid, int group = -1, ObjectGuid ignore = ObjectGuid::Empty);
-    void BroadcastReadyCheck(WorldPacket const* packet);
+    void BroadcastReadyCheck(ObjectGuid member, bool isReady);
     void OfflineReadyCheck();
+    void StartReadyCheck(Player* initiator);
+    void SetMemberReadyCheck(ObjectGuid member, bool isReady);
+    void EndReadyCheck();
 
     /*********************************************************/
     /***                   LOOT SYSTEM                     ***/
@@ -300,16 +304,17 @@ public:
     void SendLootStartRoll(uint32 CountDown, uint32 mapid, Roll const& r);
     void SendLootStartRollToPlayer(uint32 countDown, uint32 mapId, Player* p, bool canNeed, Roll const& r);
     void SendPendingRollsToPlayer(Player* player, Map* map);
-    void SendLootRoll(ObjectGuid SourceGuid, ObjectGuid TargetGuid, uint8 RollNumber, uint8 RollType, Roll const& r, bool autoPass = false);
-    void SendLootRollWon(ObjectGuid SourceGuid, ObjectGuid TargetGuid, uint8 RollNumber, uint8 RollType, Roll const& r);
+    void SendLootRoll(ObjectGuid TargetGuid, int32 RollNumber, uint8 RollType, Roll const& r, bool autoPass = false);
+    void SendLootRollWon(ObjectGuid TargetGuid, int32 RollNumber, uint8 RollType, Roll const& r);
     void SendLootAllPassed(Roll const& roll);
+    void SendLootRollsComplete(Roll const& roll);
     void SendLooter(Creature* creature, Player* pLooter);
     void GroupLoot(Loot* loot, WorldObject* pLootedObject);
     void NeedBeforeGreed(Loot* loot, WorldObject* pLootedObject);
     void MasterLoot(Loot* loot, WorldObject* pLootedObject);
-    Rolls::iterator GetRoll(ObjectGuid Guid);
+    Rolls::iterator GetRoll(ObjectGuid lootObj, uint8 lootListId);
     void CountTheRoll(Rolls::iterator roll);
-    bool CountRollVote(ObjectGuid playerGUID, ObjectGuid Guid, uint8 Choise);
+    bool CountRollVote(ObjectGuid playerGUID, ObjectGuid lootObj, uint8 lootListId, uint8 Choise);
     void EndRoll(Loot* loot);
     void RemovePlayerFromRolls(ObjectGuid guid);
 
@@ -365,6 +370,9 @@ protected:
     Battlefield*        m_bfGroup;
     Battleground*       m_bgGroup;
     ObjectGuid          m_targetIcons[TARGETICONCOUNT];
+    bool                m_readyCheckActive = false;     // 3.4.3: the server times the ready check out
+    uint32              m_readyCheckId = 0;
+    GuidSet             m_readyCheckAnswered;
     LootMethod          m_lootMethod;
     ItemQualities       m_lootThreshold;
     ObjectGuid          m_looterGuid;

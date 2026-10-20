@@ -505,97 +505,111 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
 
 void WorldSession::HandleLootMasterGiveOpcode(WorldPacket& recvData)
 {
-    uint8 slotid;
-    ObjectGuid lootguid, target_playerguid;
-
-    recvData >> lootguid >> slotid >> target_playerguid;
-
-    if (!_player->GetGroup() || _player->GetGroup()->GetMasterLooterGuid() != _player->GetGUID() || _player->GetGroup()->GetLootMethod() != MASTER_LOOT)
-    {
-        _player->SendLootError(lootguid, LOOT_ERROR_DIDNT_KILL);
+    // 3.4.3 (writer FUN_14075ec10, Lua GiveMasterLoot): u32 count, PackedGuid128 Target, then count x
+    // {PackedGuid128 LootObj, u8 LootListID}: one entry per AE-loot object holding that slot
+    uint32 count = recvData.read<uint32>();
+    ObjectGuid target_playerguid = Guid128::Read(recvData);
+    if (count > 64)
         return;
+    std::vector<std::pair<ObjectGuid, uint8>> entries;
+    for (uint32 i = 0; i < count; ++i)
+    {
+        ObjectGuid lootObj = Guid128::Read(recvData);
+        uint8 lootListId = recvData.read<uint8>();
+        entries.emplace_back(lootObj, lootListId);
     }
 
-    Player* target = ObjectAccessor::GetPlayer(*_player, target_playerguid);
-    if (!target)
+    auto give = [&](ObjectGuid lootguid, uint8 slotid)
     {
-        _player->SendLootError(lootguid, LOOT_ERROR_PLAYER_NOT_FOUND);
-        return;
-    }
-
-    LOG_DEBUG("network", "WorldSession::HandleLootMasterGiveOpcode (CMSG_MASTER_LOOT_ITEM, 0x02A3) Target = [{}].", target->GetName());
-
-    if (_player->GetLootGUID() != lootguid)
-    {
-        _player->SendLootError(lootguid, LOOT_ERROR_DIDNT_KILL);
-        return;
-    }
-
-    if (!_player->IsInRaidWith(target) || target->HasPlayerFlag(PLAYER_FLAGS_NO_PLAY_TIME))
-    {
-        _player->SendLootError(lootguid, LOOT_ERROR_MASTER_OTHER);
-        //LOG_DEBUG("network", "MasterLootItem: Player {} tried to give an item to ineligible player {} !", GetPlayer()->GetName(), target->GetName());
-        return;
-    }
-
-    Loot* loot = nullptr;
-
-    if (GetPlayer()->GetLootGUID().IsCreatureOrVehicle())
-    {
-        Creature* creature = GetPlayer()->GetMap()->GetCreature(lootguid);
-        if (!creature)
+        if (!_player->GetGroup() || _player->GetGroup()->GetMasterLooterGuid() != _player->GetGUID() || _player->GetGroup()->GetLootMethod() != MASTER_LOOT)
+        {
+            _player->SendLootError(lootguid, LOOT_ERROR_DIDNT_KILL);
             return;
+        }
 
-        loot = &creature->loot;
-    }
-    else if (GetPlayer()->GetLootGUID().IsGameObject())
-    {
-        GameObject* pGO = GetPlayer()->GetMap()->GetGameObject(lootguid);
-        if (!pGO)
+        Player* target = ObjectAccessor::GetPlayer(*_player, target_playerguid);
+        if (!target)
+        {
+            _player->SendLootError(lootguid, LOOT_ERROR_PLAYER_NOT_FOUND);
             return;
+        }
 
-        loot = &pGO->loot;
-    }
+        LOG_DEBUG("network", "WorldSession::HandleLootMasterGiveOpcode (CMSG_MASTER_LOOT_ITEM, 0x02A3) Target = [{}].", target->GetName());
 
-    if (!loot)
-        return;
+        if (_player->GetLootGUID() != lootguid)
+        {
+            _player->SendLootError(lootguid, LOOT_ERROR_DIDNT_KILL);
+            return;
+        }
 
-    if (slotid >= loot->items.size() + loot->quest_items.size())
-    {
-        LOG_DEBUG("loot", "MasterLootItem: Player {} might be using a hack! (slot {}, size {})", GetPlayer()->GetName(), slotid, (unsigned long)loot->items.size());
-        return;
-    }
-
-    LootItem& item = slotid >= loot->items.size() ? loot->quest_items[slotid - loot->items.size()] : loot->items[slotid];
-
-    ItemPosCountVec dest;
-    InventoryResult msg = target->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item.itemid, item.count);
-    if (!item.AllowedForPlayer(target, loot->sourceWorldObjectGUID))
-        msg = EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM;
-    if (msg != EQUIP_ERR_OK)
-    {
-        if (msg == EQUIP_ERR_CANT_CARRY_MORE_OF_THIS)
-            _player->SendLootError(lootguid, LOOT_ERROR_MASTER_UNIQUE_ITEM);
-        else if (msg == EQUIP_ERR_INVENTORY_FULL)
-            _player->SendLootError(lootguid, LOOT_ERROR_MASTER_INV_FULL);
-        else
+        if (!_player->IsInRaidWith(target) || target->HasPlayerFlag(PLAYER_FLAGS_NO_PLAY_TIME))
+        {
             _player->SendLootError(lootguid, LOOT_ERROR_MASTER_OTHER);
+            //LOG_DEBUG("network", "MasterLootItem: Player {} tried to give an item to ineligible player {} !", GetPlayer()->GetName(), target->GetName());
+            return;
+        }
 
-        return;
-    }
+        Loot* loot = nullptr;
 
-    // list of players allowed to receive this item in trade
-    AllowedLooterSet looters = item.GetAllowedLooters();
+        if (GetPlayer()->GetLootGUID().IsCreatureOrVehicle())
+        {
+            Creature* creature = GetPlayer()->GetMap()->GetCreature(lootguid);
+            if (!creature)
+                return;
 
-    // not move item from loot to target inventory
-    Item* newitem = target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, looters);
-    target->SendNewItem(newitem, uint32(item.count), false, false, true);
-    target->UpdateLootAchievements(&item, loot);
+            loot = &creature->loot;
+        }
+        else if (GetPlayer()->GetLootGUID().IsGameObject())
+        {
+            GameObject* pGO = GetPlayer()->GetMap()->GetGameObject(lootguid);
+            if (!pGO)
+                return;
 
-    // mark as looted
-    item.count = 0;
-    item.is_looted = true;
+            loot = &pGO->loot;
+        }
 
-    loot->NotifyItemRemoved(slotid);
-    --loot->unlootedCount;
+        if (!loot)
+            return;
+
+        if (slotid >= loot->items.size() + loot->quest_items.size())
+        {
+            LOG_DEBUG("loot", "MasterLootItem: Player {} might be using a hack! (slot {}, size {})", GetPlayer()->GetName(), slotid, (unsigned long)loot->items.size());
+            return;
+        }
+
+        LootItem& item = slotid >= loot->items.size() ? loot->quest_items[slotid - loot->items.size()] : loot->items[slotid];
+
+        ItemPosCountVec dest;
+        InventoryResult msg = target->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item.itemid, item.count);
+        if (!item.AllowedForPlayer(target, loot->sourceWorldObjectGUID))
+            msg = EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM;
+        if (msg != EQUIP_ERR_OK)
+        {
+            if (msg == EQUIP_ERR_CANT_CARRY_MORE_OF_THIS)
+                _player->SendLootError(lootguid, LOOT_ERROR_MASTER_UNIQUE_ITEM);
+            else if (msg == EQUIP_ERR_INVENTORY_FULL)
+                _player->SendLootError(lootguid, LOOT_ERROR_MASTER_INV_FULL);
+            else
+                _player->SendLootError(lootguid, LOOT_ERROR_MASTER_OTHER);
+
+            return;
+        }
+
+        // list of players allowed to receive this item in trade
+        AllowedLooterSet looters = item.GetAllowedLooters();
+
+        // not move item from loot to target inventory
+        Item* newitem = target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, looters);
+        target->SendNewItem(newitem, uint32(item.count), false, false, true);
+        target->UpdateLootAchievements(&item, loot);
+
+        // mark as looted
+        item.count = 0;
+        item.is_looted = true;
+
+        loot->NotifyItemRemoved(slotid);
+        --loot->unlootedCount;    };
+
+    for (auto const& [lootguid, slotid] : entries)
+        give(lootguid, slotid);
 }

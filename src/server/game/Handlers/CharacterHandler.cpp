@@ -1173,6 +1173,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     if (Group* group = pCurrChar->GetGroup())
     {
         group->SendUpdate();
+        group->SendTargetIconList(this);                    // 3.4.3 has no list request
         group->ResetMaxEnchantingLevel();
     }
 
@@ -1825,8 +1826,8 @@ void WorldSession::HandleAlterAppearance(WorldPacket& recvData)
 
 void WorldSession::HandleRemoveGlyph(WorldPacket& recvData)
 {
-    uint32 slot;
-    recvData >> slot;
+    // 3.4.3 (writer FUN_14075fca0, Lua RemoveGlyphFromSocket): u8 GlyphSlot (0-based)
+    uint32 slot = recvData.read<uint8>();
 
     if (slot >= MAX_GLYPH_SLOT_INDEX)
     {

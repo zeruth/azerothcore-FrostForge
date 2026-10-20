@@ -1143,23 +1143,18 @@ void WorldSession::HandleRequestLfgListBlacklist(WorldPacket& /*recvData*/)
     SendPacket(&data);
 }
 
-// CMSG_DF_GET_SYSTEM_INFO, 3.4.3 (writer FUN_140766880): bit Player, bit HasPartyIndex, flush, [u8].
-// -> SMSG_LFG_PLAYER_INFO (FUN_1406c3920): u32 dungeon count, the blacklist (FUN_140714470: bit HasPlayer,
-// flush, u32 count, [PackedGuid128], {u32 Slot, Reason, SubReason1, SubReason2, SoftLock}), then per
-// dungeon {u32 Slot, 15 x u32, u32 ShortageReward count, bits FirstReward, ShortageEligible, flush,
-// LfgPlayerQuestReward (FUN_1407147b0), the shortage rewards}. AC's dungeon finder is not converted
-// yet [TODO: AC's random dungeons and locks, HandleLfgPlayerLockInfoRequestOpcode], so: no dungeons,
-// nothing locked.
+// CMSG_DF_GET_SYSTEM_INFO, 3.4.3 (writer FUN_140766880): bit Player, bit HasPartyIndex, flush, [u8]. Player 1
+// (every world enter, Lua RequestLFDPlayerLockInfo) asks for SMSG_LFG_PLAYER_INFO, Player 0 (Lua
+// RequestLFDPartyLockInfo) for SMSG_LFG_PARTY_INFO.
 void WorldSession::HandleDFGetSystemInfo(WorldPacket& recvData)
 {
+    bool player = recvData.ReadBit();
     recvData.rfinish();
 
-    WorldPacket data(SMSG_LFG_PLAYER_INFO, 9);
-    data << uint32(0);                                      // dungeons
-    data.WriteBit(false);                                   // blacklist: HasPlayerGuid
-    data.FlushBits();
-    data << uint32(0);                                      // blacklist entries
-    SendPacket(&data);
+    if (player)
+        HandleLfgPlayerLockInfoRequestOpcode(recvData);
+    else
+        HandleLfgPartyLockInfoRequestOpcode(recvData);
 }
 
 void WorldSession::HandleLoadingScreenNotify(WorldPacket& recvData)
@@ -1365,8 +1360,10 @@ void WorldSession::HandleWorldTeleportOpcode(WorldPacket& recv_data)
 void WorldSession::HandleWhoisOpcode(WorldPacket& recv_data)
 {
     LOG_DEBUG("network", "Received opcode CMSG_WHO_IS");
-    std::string charname;
-    recv_data >> charname;
+    // CMSG_WHO_IS, 3.4.3 (writer FUN_14076a370): 6-bit name length, flush, the name
+    uint32 nameLength = recv_data.ReadBits(6);
+    recv_data.ResetBitReader();
+    std::string charname = recv_data.ReadString(nameLength);
 
     if (!HasPermission(rbac::RBAC_PERM_OPCODE_WHOIS))
     {
@@ -1415,8 +1412,12 @@ void WorldSession::HandleWhoisOpcode(WorldPacket& recv_data)
 
     std::string msg = charname + "'s " + "account is " + acc + ", e-mail: " + email + ", last ip: " + lastip;
 
-    WorldPacket data(SMSG_WHO_IS, msg.size() + 1);
-    data << msg;
+    // SMSG_WHO_IS, 3.4.3 (FUN_1406cdfc0, handler FUN_141572ff0): 11-bit length, flush, the text
+    std::string_view text = std::string_view(msg).substr(0, 2047);
+    WorldPacket data(SMSG_WHO_IS, 2 + text.size());
+    data.WriteBits(text.size(), 11);
+    data.FlushBits();
+    data.WriteString(text);
     SendPacket(&data);
 
     LOG_DEBUG("network", "Received whois command from player {} for character {}", GetPlayer()->GetName(), charname);
@@ -1453,8 +1454,8 @@ void WorldSession::HandleFarSightOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_FAR_SIGHT");
 
-    bool apply;
-    recvData >> apply;
+    // 3.4.3 (writer FUN_14075d500): bit Enable, flush
+    bool apply = recvData.ReadBit();
 
     if (apply)
     {
@@ -1847,8 +1848,8 @@ void WorldSession::HandleSetTaxiBenchmarkOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleQueryInspectAchievements(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    recv_data >> guid.ReadAsPacked();
+    // 3.4.3 (writer FUN_14075f4d0, Lua SetAchievementComparisonUnit): PackedGuid128 Guid
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     Player* player = ObjectAccessor::GetPlayer(*_player, guid);
     if (!player)

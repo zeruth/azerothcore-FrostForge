@@ -308,6 +308,9 @@ struct LootView;
 
 ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv);
 
+/// LootItemData, 3.4.3 (FUN_140714bb0): the item block of SMSG_LOOT_RESPONSE and the roll messages
+void WriteLootItemData(ByteBuffer& b, uint8 lootListId, LootItem const& li, uint8 uiType);
+
 struct Loot
 {
     friend ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv);

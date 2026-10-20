@@ -24,10 +24,13 @@ WorldPacket const* WorldPackets::Instance::InstanceReset::Write()
     return &_worldPacket;
 }
 
+// SMSG_INSTANCE_RESET_FAILED, 3.4.3 (FUN_1406c2a10, handler FUN_141906f50): u32 MapID, 2-bit Reason (AC's
+// InstanceResetFailureReason), flush
 WorldPacket const* WorldPackets::Instance::InstanceResetFailed::Write()
 {
-    _worldPacket << Reason;
-    _worldPacket << MapId;
+    _worldPacket << uint32(MapId);
+    _worldPacket.WriteBits(uint32(Reason), 2);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }
@@ -41,14 +44,18 @@ WorldPacket const* WorldPackets::Instance::SetDungeonDifficulty::Write()
     return &_worldPacket;
 }
 
+// CMSG_SET_DUNGEON_DIFFICULTY, 3.4.3 (writer FUN_140769130, Lua SetDungeonDifficultyID): u32 DifficultyID, a
+// Difficulty.db2 id; the inverse of SMSG_SET_DUNGEON_DIFFICULTY's (AC's 0 / 1 are 1 / 2). Anything else is
+// out of AC's range and refused by the handler.
 void WorldPackets::Instance::SetDungeonDifficultyClient::Read()
 {
-    _worldPacket >> Mode;
+    uint32 difficultyId = _worldPacket.read<uint32>();
+    Mode = difficultyId - 1;
 }
 
+// SMSG_RESET_FAILED_NOTIFY, 3.4.3 (handler FUN_141907330): empty, the client reads nothing
 WorldPacket const* WorldPackets::Instance::ResetFailedNotify::Write()
 {
-    _worldPacket << MapId;
 
     return &_worldPacket;
 }
@@ -63,12 +70,17 @@ WorldPacket const* WorldPackets::Instance::SetRaidDifficulty::Write()
     return &_worldPacket;
 }
 
+// CMSG_SET_RAID_DIFFICULTY, 3.4.3 (writer FUN_140769570, Lua SetRaidDifficultyID / SetLegacyRaidDifficultyID):
+// u32 DifficultyID (Difficulty.db2: AC's 0-3 are 3-6, the inverse of SMSG_RAID_DIFFICULTY_SET), u8 Legacy
 void WorldPackets::Instance::SetRaidDifficultyClient::Read()
 {
-    _worldPacket >> Mode;
+    uint32 difficultyId = _worldPacket.read<uint32>();
+    _worldPacket.read_skip<uint8>();
+    Mode = difficultyId - 3;
 }
 
+// CMSG_INSTANCE_LOCK_RESPONSE, 3.4.3 (writer FUN_14075e220, Lua RespondInstanceLock): bit AcceptLock, flush
 void WorldPackets::Instance::InstanceLockResponse::Read()
 {
-    _worldPacket >> Accept;
+    Accept = _worldPacket.ReadBit();
 }

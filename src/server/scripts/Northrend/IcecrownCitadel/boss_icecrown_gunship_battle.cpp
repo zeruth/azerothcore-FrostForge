@@ -23,6 +23,7 @@
 #include "GameTime.h"
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
+#include "PacketGuid128.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "Transport.h"
@@ -2269,9 +2270,11 @@ class spell_igb_overheat_aura : public AuraScript
             {
                 if (Player* player = passenger->ToPlayer())
                 {
-                    WorldPacket data(SMSG_CONTROL_UPDATE, GetUnitOwner()->GetPackGUID().size() + 1);
-                    data << GetUnitOwner()->GetPackGUID();
-                    data << uint8(value);
+                    // SMSG_CONTROL_UPDATE, 3.4.3: PackedGuid128 Guid, bit On, flush
+                    WorldPacket data(SMSG_CONTROL_UPDATE, 18 + 1);
+                    Guid128::Write(data, GetUnitOwner()->GetGUID());
+                    data.WriteBit(value != 0);
+                    data.FlushBits();
                     player->SendDirectMessage(&data);
                 }
             }

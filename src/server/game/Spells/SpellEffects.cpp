@@ -2790,7 +2790,7 @@ void Spell::EffectDispel(SpellEffIndex effIndex)
     // Ok if exist some buffs for dispel try dispel it
     uint32 failCount = 0;
     DispelChargesList success_list;
-    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + damage * 4);
+    std::vector<uint32> failedSpells;
     // dispel N = damage buffs (or while exist buffs for dispel)
     for (int32 count = 0; count < damage && !dispel_list.empty();)
     {
@@ -2827,22 +2827,26 @@ void Spell::EffectDispel(SpellEffIndex effIndex)
             }
             else
             {
-                if (!failCount)
-                {
-                    // Failed to dispell
-                    dataFail << unitCaster->GetGUID();                    // Caster GUID
-                    dataFail << unitTarget->GetGUID();                  // Victim GUID
-                    dataFail << uint32(m_spellInfo->Id);                // dispel spell id
-                }
                 ++failCount;
-                dataFail << uint32(itr->first->GetId());                // Spell Id
+                failedSpells.push_back(itr->first->GetId());
             }
             ++count;
         }
     }
 
     if (failCount)
+    {
+        // SMSG_DISPEL_FAILED, 3.4.3 (inline in the spell switch, handler FUN_141721a80): PackedGuid128 CasterGUID,
+        // PackedGuid128 VictimGUID, u32 SpellID, u32 count, the spells that resisted
+        WorldPacket dataFail(SMSG_DISPEL_FAILED, 18 + 18 + 4 + 4 + failedSpells.size() * 4);
+        Guid128::Write(dataFail, unitCaster->GetGUID());
+        Guid128::Write(dataFail, unitTarget->GetGUID());
+        dataFail << uint32(m_spellInfo->Id);
+        dataFail << uint32(failedSpells.size());
+        for (uint32 spellId : failedSpells)
+            dataFail << uint32(spellId);
         unitCaster->SendMessageToSet(&dataFail, true);
+    }
 
     // put in combat
     if (unitTarget->IsFriendlyTo(unitCaster))
@@ -6013,7 +6017,7 @@ void Spell::EffectStealBeneficialBuff(SpellEffIndex effIndex)
     // Ok if exist some buffs for dispel try dispel it
     uint32 failCount = 0;
     DispelList success_list;
-    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + damage * 4);
+    std::vector<uint32> failedSpells;
     // dispel N = damage buffs (or while exist buffs for dispel)
     for (int32 count = 0; count < damage && !steal_list.empty();)
     {
@@ -6039,22 +6043,26 @@ void Spell::EffectStealBeneficialBuff(SpellEffIndex effIndex)
             }
             else
             {
-                if (!failCount)
-                {
-                    // Failed to dispell
-                    dataFail << unitCaster->GetGUID();                    // Caster GUID
-                    dataFail << unitTarget->GetGUID();                  // Victim GUID
-                    dataFail << uint32(m_spellInfo->Id);                // dispel spell id
-                }
                 ++failCount;
-                dataFail << uint32(itr->first->GetId());                // Spell Id
+                failedSpells.push_back(itr->first->GetId());
             }
             ++count;
         }
     }
 
     if (failCount)
+    {
+        // SMSG_DISPEL_FAILED, 3.4.3 (inline in the spell switch, handler FUN_141721a80): PackedGuid128 CasterGUID,
+        // PackedGuid128 VictimGUID, u32 SpellID, u32 count, the spells that resisted
+        WorldPacket dataFail(SMSG_DISPEL_FAILED, 18 + 18 + 4 + 4 + failedSpells.size() * 4);
+        Guid128::Write(dataFail, unitCaster->GetGUID());
+        Guid128::Write(dataFail, unitTarget->GetGUID());
+        dataFail << uint32(m_spellInfo->Id);
+        dataFail << uint32(failedSpells.size());
+        for (uint32 spellId : failedSpells)
+            dataFail << uint32(spellId);
         unitCaster->SendMessageToSet(&dataFail, true);
+    }
 
     if (success_list.empty())
         return;

@@ -216,6 +216,24 @@ namespace Guid128
         Write(data, guid);
     }
 
+    /// A guild's GUID: type 28 (the client keeps a guild GUID only if its type is 0 or 28), this realm, the
+    /// guild id low [TrinityCore HighGuid::Guild]. The same GUID the update fields carry (SetGuildGuid).
+    inline void WriteGuild(ByteBuffer& data, uint32 guildId)
+    {
+        if (guildId)
+            WritePacked(data, guildId, (uint64(28) << 58) | RealmBits());
+        else
+            WritePacked(data, 0, 0);
+    }
+
+    /// A guild id from the client's guild GUID, 0 when it is not one
+    inline uint32 ReadGuild(ByteBuffer& data)
+    {
+        uint64 low, high;
+        ReadPacked(data, low, high);
+        return (high >> 58) == 28 ? uint32(low) : 0;
+    }
+
     /// The Battle.net address of this realm, region << 24 | site << 16 | realm id, as the Battle.net
     /// service advertises it (BattlenetSession.cpp RealmAddress). Packets name a player's realm by it.
     inline uint32 VirtualRealmAddress()
