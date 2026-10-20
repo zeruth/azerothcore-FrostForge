@@ -220,22 +220,32 @@ namespace WorldPackets
     }
 }
 
+// The 3.4.3 client's 15 account data types (its table at 0x142d09900, stride 0x60). Type 6 is kept
+// on the client only and never synchronized.
 enum AccountDataType
 {
-    GLOBAL_CONFIG_CACHE             = 0,                    // 0x01 g
-    PER_CHARACTER_CONFIG_CACHE      = 1,                    // 0x02 p
-    GLOBAL_BINDINGS_CACHE           = 2,                    // 0x04 g
-    PER_CHARACTER_BINDINGS_CACHE    = 3,                    // 0x08 p
-    GLOBAL_MACROS_CACHE             = 4,                    // 0x10 g
-    PER_CHARACTER_MACROS_CACHE      = 5,                    // 0x20 p
-    PER_CHARACTER_LAYOUT_CACHE      = 6,                    // 0x40 p
-    PER_CHARACTER_CHAT_CACHE        = 7,                    // 0x80 p
+    GLOBAL_CONFIG_CACHE                 = 0,                // 0x0001 g
+    PER_CHARACTER_CONFIG_CACHE          = 1,                // 0x0002 p
+    GLOBAL_BINDINGS_CACHE               = 2,                // 0x0004 g
+    PER_CHARACTER_BINDINGS_CACHE        = 3,                // 0x0008 p
+    GLOBAL_MACROS_CACHE                 = 4,                // 0x0010 g
+    PER_CHARACTER_MACROS_CACHE          = 5,                // 0x0020 p
+    PER_CHARACTER_LAYOUT_CACHE          = 6,                // 0x0040 p
+    PER_CHARACTER_CHAT_CACHE            = 7,                // 0x0080 p
+    GLOBAL_TTS_CACHE                    = 8,                // 0x0100 g
+    PER_CHARACTER_TTS_CACHE             = 9,                // 0x0200 p
+    GLOBAL_FLAGGED_CACHE                = 10,               // 0x0400 g
+    PER_CHARACTER_FLAGGED_CACHE         = 11,               // 0x0800 p
+    PER_CHARACTER_CLICK_BINDINGS_CACHE  = 12,               // 0x1000 p
+    GLOBAL_EDIT_MODE_CACHE              = 13,               // 0x2000 g
+    PER_CHARACTER_EDIT_MODE_CACHE       = 14,               // 0x4000 p
 };
 
-#define NUM_ACCOUNT_DATA_TYPES        8
+#define NUM_ACCOUNT_DATA_TYPES        15
 
-#define GLOBAL_CACHE_MASK           0x15
-#define PER_CHARACTER_CACHE_MASK    0xEA
+#define GLOBAL_CACHE_MASK           0x2515
+#define PER_CHARACTER_CACHE_MASK    0x5AEA
+#define ALL_ACCOUNT_DATA_CACHE_MASK 0x7FFF
 
 struct AccountData
 {
@@ -712,6 +722,11 @@ public:                                                 // opcodes handlers
     void SendCharCreate(ResponseCodes result, ObjectGuid const& guid = ObjectGuid::Empty);
     void SendCharDelete(ResponseCodes result);
     void SendCharLoginFailed(LoginFailureReason reason);
+    void SendLoginVerifyWorld(Player* player);
+    void SendFeatureSystemStatus();
+    void SendFeatureSystemStatusGlueScreen();
+    void SendSetTimeZoneInformation();
+    void SendAvailableHotfixes();
     void SendCharRename(ResponseCodes result, CharacterRenameInfo const* renameInfo);
     void SendCharCustomize(ResponseCodes result, CharacterCustomizeInfo const* customizeInfo);
     void SendCharFactionChange(ResponseCodes result, CharacterFactionChangeInfo const* factionChangeInfo);
@@ -1018,8 +1033,6 @@ public:                                                 // opcodes handlers
     void HandlePageTextQueryOpcode(WorldPacket& recvPacket);
 
     void HandleTutorialFlag (WorldPacket& recvData);
-    void HandleTutorialClear(WorldPacket& recvData);
-    void HandleTutorialReset(WorldPacket& recvData);
 
     //Pet
     void HandlePetAction(WorldPacket& recvData);
@@ -1036,6 +1049,19 @@ public:                                                 // opcodes handlers
     void HandleLearnPreviewTalentsPet(WorldPacket& recvPacket);
 
     void HandleSetActionBarToggles(WorldPacket& recvData);
+    void HandleRequestForcedReactions(WorldPacket& recvData);
+    void HandleRequestCemeteryList(WorldPacket& recvData);
+    void HandleViolenceLevel(WorldPacket& recvData);
+    void HandleGenerateRandomCharacterName(WorldPacket& recvData);
+    void HandleReorderCharacters(WorldPacket& recvData);
+    void HandleServerTimeOffsetRequest(WorldPacket& recvData);
+    void HandleGetUndeleteCharacterCooldownStatus(WorldPacket& recvData);
+    void HandleSocialContractRequest(WorldPacket& recvData);
+    void HandleBattlePayGetProductList(WorldPacket& recvData);
+    void HandleBattlePayGetPurchaseList(WorldPacket& recvData);
+    void HandleUpdateVasPurchaseStates(WorldPacket& recvData);
+    void HandleMoveInitActiveMoverComplete(WorldPacket& recvData);
+    void HandleLoadingScreenNotify(WorldPacket& recvData);
 
     void HandleCharRenameOpcode(WorldPacket& recvData);
     void HandleCharRenameCallBack(std::shared_ptr<CharacterRenameInfo> renameInfo, PreparedQueryResult result);

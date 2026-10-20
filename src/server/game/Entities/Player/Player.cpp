@@ -61,6 +61,7 @@
 #include "MiscPackets.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PacketGuid128.h"
 #include "OutdoorPvP.h"
 #include "OutdoorPvPMgr.h"
 #include "Pet.h"
@@ -1581,12 +1582,17 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             if (!GetSession()->PlayerLogout())
             {
                 SetCanTeleport(true);
-                WorldPacket data(SMSG_NEW_WORLD, 4 + 4 + 4 + 4 + 4);
-                data << uint32(mapid);
+                // SMSG_NEW_WORLD, 3.4.3 (handler FUN_1402354e0 reads the raw body): i32 MapID, f32 X, Y, Z, O,
+                // u32 Reason, f32 MovementOffset X, Y, Z. The client loads the map and answers
+                // CMSG_WORLD_PORT_RESPONSE for any Reason but 21 (seamless); 16 is a normal transfer.
+                WorldPacket data(SMSG_NEW_WORLD, 36);
+                data << int32(mapid);
                 if (m_transport)
                     data << m_movementInfo.transport.pos.PositionXYZOStream();
                 else
                     data << teleportStore_dest.PositionXYZOStream();
+                data << uint32(16);                         // Reason: NEW_WORLD_NORMAL
+                data << float(0.0f) << float(0.0f) << float(0.0f);  // MovementOffset
 
                 SendDirectMessage(&data);
                 SendSavedInstances();
@@ -2738,18 +2744,14 @@ bool Player::HasActivePowerType(Powers power)
         return (getPowerType() == power);
 }
 
+// SMSG_SEND_KNOWN_SPELLS, 3.4.3 (Spell switch FUN_1407461c0, handler FUN_1417149e0): bit InitialLogin,
+// flush, u32 KnownCount, u32 FavoriteCount, u32 SpellID[KnownCount], u32 SpellID[FavoriteCount].
+// It replaces the client's spell list wholesale. The cooldowns 3.3.5 sent in the same packet are
+// SMSG_SEND_SPELL_HISTORY in 3.4.3 (SendSpellHistory), and charges SMSG_SEND_SPELL_CHARGES.
 void Player::SendInitialSpells()
 {
-    uint32 curTime = GameTime::GetGameTimeMS().count();
-    uint32 infTime = GameTime::GetGameTimeMS().count() + infinityCooldownDelayCheck;
-
-    uint16 spellCount = 0;
-
-    WorldPacket data(SMSG_SEND_KNOWN_SPELLS, (1 + 2 + 4 * m_spells.size() + 2 + m_spellCooldowns.size() * (4 + 2 + 2 + 4 + 4)));
-    data << uint8(0);
-
-    std::size_t countPos = data.wpos();
-    data << uint16(spellCount);                             // spell count placeholder
+    std::vector<uint32> knownSpells;
+    knownSpells.reserve(m_spells.size());
 
     // Form spells are shown by the client from its own SpellShapeshiftForm.dbc and never sent as learned
     SpellShapeshiftFormEntry const* shapeInfo = sSpellShapeshiftFormStore.LookupEntry(GetShapeshiftForm());
@@ -2766,26 +2768,14 @@ void Player::SendInitialSpells()
             std::ranges::find(shapeInfo->stanceSpell, itr->first) != std::ranges::end(shapeInfo->stanceSpell))
             continue;
 
-        data << uint32(itr->first);
-        data << uint16(0);                                  // it's not slot id
-
-        ++spellCount;
+        knownSpells.push_back(itr->first);
     }
 
     // Added spells from glyphs too (needed by spell tooltips)
     for (uint8 i = 0; i < MAX_GLYPH_SLOT_INDEX; ++i)
-    {
         if (uint32 glyph = GetGlyph(i))
-        {
             if (GlyphPropertiesEntry const* glyphEntry = sGlyphPropertiesStore.LookupEntry(glyph))
-            {
-                data << uint32(glyphEntry->SpellId);
-                data << uint16(0); // it's not slot id
-
-                ++spellCount;
-            }
-        }
-    }
+                knownSpells.push_back(glyphEntry->SpellId);
 
     // xinef: we have to send talents, but not those on m_spells list
     for (PlayerTalentMap::iterator itr = m_talents.begin(); itr != m_talents.end(); ++itr)
@@ -2801,43 +2791,81 @@ void Player::SendInitialSpells()
         if (itr->second->inSpellBook)
             continue;
 
-        data << uint32(itr->first);
-        data << uint16(0);                                  // it's not slot id
-
-        ++spellCount;
+        knownSpells.push_back(itr->first);
     }
 
-    data.put<uint16>(countPos, spellCount);                  // write real count value
+    WorldPacket data(SMSG_SEND_KNOWN_SPELLS, 1 + 4 + 4 + 4 * knownSpells.size());
+    data.WriteBit(true);                                    // InitialLogin
+    data.FlushBits();
+    data << uint32(knownSpells.size());
+    data << uint32(0);                                      // FavoriteSpells: none kept
+    for (uint32 spellId : knownSpells)
+        data << uint32(spellId);
+    SendDirectMessage(&data);
 
-    uint16 spellCooldowns = m_spellCooldowns.size();
-    data << uint16(spellCooldowns);
+    SendSpellHistory();
+    SendSpellCharges();
+}
+
+// SMSG_SEND_SPELL_HISTORY, 3.4.3 (Spell switch, entry FUN_14071e630, handler FUN_141741860):
+// u32 Count, then per entry u32 SpellID, u32 ItemID, u32 Category, i32 RecoveryTime (ms),
+// i32 CategoryRecoveryTime (ms), f32 ModRate, bits {has unused, has unused, OnHold}, flush.
+// OnHold is a cooldown that runs until an event ends it (AC's "infinity" cooldown).
+void Player::SendSpellHistory()
+{
+    uint32 curTime = GameTime::GetGameTimeMS().count();
+    uint32 infTime = GameTime::GetGameTimeMS().count() + infinityCooldownDelayCheck;
+
+    WorldPacket data(SMSG_SEND_SPELL_HISTORY, 4 + m_spellCooldowns.size() * 25);
+    std::size_t countPos = data.wpos();
+    data << uint32(0);
+    uint32 count = 0;
     for (SpellCooldowns::const_iterator itr = m_spellCooldowns.begin(); itr != m_spellCooldowns.end(); ++itr)
     {
         if (!itr->second.needSendToClient)
             continue;
 
-        SpellInfo const* sEntry = sSpellMgr->GetSpellInfo(itr->first);
-        if (!sEntry)
+        if (!sSpellMgr->GetSpellInfo(itr->first))
             continue;
 
-        data << uint32(itr->first);
+        bool onHold = itr->second.end >= infTime;
+        uint32 cooldown = !onHold && itr->second.end > curTime ? itr->second.end - curTime : 0;
 
-        data << uint16(itr->second.itemid);                 // cast item id
-        data << uint16(itr->second.category);               // spell category
-
-        // send infinity cooldown in special format
-        if (itr->second.end >= infTime)
-        {
-            data << uint32(1);                              // cooldown
-            data << uint32(0x80000000);                     // category cooldown
-            continue;
-        }
-
-        uint32 cooldown = itr->second.end > curTime ? itr->second.end - curTime : 0;
-        data << uint32(itr->second.category ? 0 : cooldown);    // cooldown
-        data << uint32(itr->second.category ? cooldown : 0);    // category cooldown
+        data << uint32(itr->first);                         // SpellID
+        data << uint32(itr->second.itemid);                 // ItemID
+        data << uint32(itr->second.category);               // Category
+        data << int32(itr->second.category ? 0 : cooldown); // RecoveryTime
+        data << int32(itr->second.category ? cooldown : 0); // CategoryRecoveryTime
+        data << float(1.0f);                                // ModRate
+        data.WriteBit(false);
+        data.WriteBit(false);
+        data.WriteBit(onHold);                              // OnHold
+        data.FlushBits();
+        ++count;
     }
+    data.put<uint32>(countPos, count);
+    SendDirectMessage(&data);
+}
 
+// SMSG_SEND_SPELL_CHARGES, 3.4.3 (Spell switch, entry FUN_14071e540, handler FUN_1417417f0):
+// u32 Count, then {u32 Category, u32 NextRecoveryTime, f32 ChargeModRate, u8 ConsumedCharges}.
+// Wrath has no charge categories, so the list is empty.
+void Player::SendSpellCharges()
+{
+    WorldPacket data(SMSG_SEND_SPELL_CHARGES, 4);
+    data << uint32(0);
+    SendDirectMessage(&data);
+}
+
+// SMSG_ACTIVE_GLYPHS, 3.4.3 (Spell switch, handler FUN_141734ca0): u32 Count, {u32 SpellID,
+// u16 GlyphID}[Count], bit IsFullUpdate, flush. It is the client's spell -> glyph binding map; the
+// six Wrath glyph slots travel in SMSG_UPDATE_TALENT_DATA, so a full update with no bindings.
+void Player::SendActiveGlyphs()
+{
+    WorldPacket data(SMSG_ACTIVE_GLYPHS, 4 + 1);
+    data << uint32(0);
+    data.WriteBit(true);                                    // IsFullUpdate
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -3093,21 +3121,69 @@ void Player::_addTalentAurasAndSpells(uint32 spellId)
     }
 }
 
+// SMSG_LEARNED_SPELLS, 3.4.3 (Spell switch, handler FUN_141714b00): u32 Count, u32 SpecializationID,
+// bit SuppressMessaging, flush, then Count x LearnedSpellInfo (FUN_140710fe0): i32 SpellID, bits
+// IsFavorite, has field_8, has Superceded, has TraitDefinitionID, flush, then the optional i32s.
+// SMSG_UNLEARNED_SPELLS (handler FUN_141715350): u32 Count, u32 SpellID[Count], bit SuppressMessaging, flush.
 void Player::SendLearnPacket(uint32 spellId, bool learn)
 {
     if (learn)
     {
-        WorldPacket data(SMSG_LEARNED_SPELLS, 6);
-        data << uint32(spellId);
-        data << uint16(0);
+        WorldPacket data(SMSG_LEARNED_SPELLS, 4 + 4 + 1 + 5);
+        data << uint32(1);                                  // Count
+        data << uint32(0);                                  // SpecializationID
+        data.WriteBit(false);                               // SuppressMessaging
+        data.FlushBits();
+        data << int32(spellId);
+        data.WriteBits(0, 4);                               // IsFavorite, no optional fields
+        data.FlushBits();
         SendDirectMessage(&data);
     }
     else
     {
-        WorldPacket data(SMSG_UNLEARNED_SPELLS, 4);
+        WorldPacket data(SMSG_UNLEARNED_SPELLS, 4 + 4 + 1);
+        data << uint32(1);                                  // Count
         data << uint32(spellId);
+        data.WriteBit(false);                               // SuppressMessaging
+        data.FlushBits();
         SendDirectMessage(&data);
     }
+}
+
+// SMSG_SUPERCEDED_SPELLS, 3.4.3 (Spell switch, handler FUN_1417151b0): u32 Count, Count x
+// LearnedSpellInfo. Only entries carrying Superceded are acted on: the client swaps the old rank
+// (Superceded) for the new one (SpellID) in the spellbook and on the action bars.
+void Player::SendSupercededSpell(uint32 oldSpellId, uint32 newSpellId)
+{
+    WorldPacket data(SMSG_SUPERCEDED_SPELLS, 4 + 5 + 4);
+    data << uint32(1);                                      // Count
+    data << int32(newSpellId);
+    data.WriteBit(false);                                   // IsFavorite
+    data.WriteBit(false);                                   // has field_8
+    data.WriteBit(true);                                    // has Superceded
+    data.WriteBit(false);                                   // has TraitDefinitionID
+    data.FlushBits();
+    data << int32(oldSpellId);                              // Superceded
+    SendDirectMessage(&data);
+}
+
+// SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER, 3.4.3 (Spell switch, entry FUN_140706050,
+// handlers FUN_1416c2790 / FUN_1416c2830): u32 ModifierCount, then {u8 ModIndex (SpellModOp),
+// u32 DataCount, {f32 ModifierValue, u8 ClassIndex (SpellFamilyFlags bit)}[DataCount]}. The client
+// stores the value as the total for (op, bit), unchecked, in a 128 x 40 table: op < 40, bit < 128.
+// Flat is the summed value; pct is the multiplier the server applies (AC sums the percentages).
+void Player::SendSpellModifier(SpellModType type, uint8 op, uint8 classIndex, int32 total)
+{
+    if (op >= 40 || classIndex >= 128)
+        return;
+
+    WorldPacket data(type == SPELLMOD_FLAT ? SMSG_SET_FLAT_SPELL_MODIFIER : SMSG_SET_PCT_SPELL_MODIFIER, 4 + 1 + 4 + 5);
+    data << uint32(1);                                      // ModifierCount
+    data << uint8(op);                                      // ModIndex
+    data << uint32(1);                                      // DataCount
+    data << float(type == SPELLMOD_FLAT ? float(total) : 1.0f + float(total) / 100.0f);
+    data << uint8(classIndex);
+    SendDirectMessage(&data);
 }
 
 bool Player::addSpell(uint32 spellId, uint8 addSpecMask, bool updateActive, bool temporary /*= false*/, bool learnFromSkill /*= false*/)
@@ -3138,12 +3214,7 @@ bool Player::addSpell(uint32 spellId, uint8 addSpecMask, bool updateActive, bool
                         SendUnlearnSpells();
 
                     if (IsInWorld())
-                    {
-                        WorldPacket data(SMSG_SUPERCEDED_SPELLS, 4 + 4);
-                        data << uint32(nextSpellInfo->Id);
-                        data << uint32(spellInfo->Id);
-                        SendDirectMessage(&data);
-                    }
+                        SendSupercededSpell(nextSpellInfo->Id, spellInfo->Id);
                     return false;
                 }
                 else if (nextSpellInfo->GetRank() > spellInfo->GetRank())
@@ -5691,25 +5762,23 @@ void Player::SendActionButtons(uint32 state) const
 {
     LOG_DEBUG("entities.player", "Sending Action Buttons for {} spec {}", GetGUID().ToString(), m_activeSpec);
 
-    WorldPacket data(SMSG_UPDATE_ACTION_BUTTONS, 1 + (MAX_ACTION_BUTTONS * 4));
-    data << uint8(state);
-    /*
-        state can be 0, 1, 2
-        0 - Looks to be sent when initial action buttons get sent, however on Trinity we use 1 since 0 had some difficulties
-        1 - Used in any SMSG_UPDATE_ACTION_BUTTONS packet with button data on Trinity. Only used after spec swaps on retail.
-        2 - Clears the action bars client sided. This is sent during spec swap before unlearning and before sending the new buttons
-    */
-    if (state != 2)
+    // SMSG_UPDATE_ACTION_BUTTONS, 3.4.3 (handler FUN_141714600 indexes the raw body): u64 ActionButtons[180],
+    // u8 Reason; always the full 1441 bytes. The client keeps the low 32 bits of each button, packed
+    // as 3.3.5 did (action | type << 24). Reason, as the handler reads it:
+    //   0 - store the buttons as they are (login: the spellbook is not built yet)
+    //   1 - store them, clearing spell buttons whose spell is not known, and fire the slot events
+    //   2 - lock the bars (later slot changes are ignored), 3 - unlock and clear all 180 slots
+    // AC's states: 0 at login, 1 after changes, 2 "clear before a spec swap" = the client's 3.
+    WorldPacket data(SMSG_UPDATE_ACTION_BUTTONS, 180 * 8 + 1);
+    for (uint8 button = 0; button < 180; ++button)
     {
-        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
-        {
-            ActionButtonList::const_iterator itr = m_actionButtons.find(button);
-            if (itr != m_actionButtons.end() && itr->second.uState != ACTIONBUTTON_DELETED)
-                data << uint32(itr->second.packedData);
-            else
-                data << uint32(0);
-        }
+        ActionButtonList::const_iterator itr = button < MAX_ACTION_BUTTONS ? m_actionButtons.find(button) : m_actionButtons.end();
+        if (state != 2 && itr != m_actionButtons.end() && itr->second.uState != ACTIONBUTTON_DELETED)
+            data << uint64(itr->second.packedData);
+        else
+            data << uint64(0);
     }
+    data << uint8(state == 2 ? 3 : state);
 
     SendDirectMessage(&data);
     LOG_DEBUG("entities.player", "Action Buttons for {} spec {} Sent", GetGUID().ToString(), m_activeSpec);
@@ -5830,6 +5899,12 @@ void Player::SendMessageToSet(WorldPacket const* data, Player const* skipped_rcv
 
 void Player::SendDirectMessage(WorldPacket const* data) const
 {
+    // A Player that is not the session's own is a character being created at the character screen:
+    // what it would send while learning its starting spells and skills (proficiencies, talents) is
+    // world state the 3.4.3 glue screen has no use for.
+    if (m_session->GetPlayer() != this)
+        return;
+
     m_session->SendPacket(data);
 }
 
@@ -10063,7 +10138,6 @@ template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, f
 void Player::AddSpellMod(SpellModifier* mod, bool apply)
 {
     LOG_DEBUG("spells.aura", "Player::AddSpellMod {}", mod->spellId);
-    uint16 Opcode = (mod->type == SPELLMOD_FLAT) ? SMSG_SET_FLAT_SPELL_MODIFIER : SMSG_SET_PCT_SPELL_MODIFIER;
 
     int i = 0;
     flag96 _mask = 0;
@@ -10082,11 +10156,7 @@ void Player::AddSpellMod(SpellModifier* mod, bool apply)
                     val += (*itr)->value;
             }
             val += apply ? mod->value : -(mod->value);
-            WorldPacket data(Opcode, (1 + 1 + 4));
-            data << uint8(eff);
-            data << uint8(mod->op);
-            data << int32(val);
-            SendDirectMessage(&data);
+            SendSpellModifier(mod->type, uint8(mod->op), uint8(eff), val);
         }
     }
 
@@ -10240,8 +10310,9 @@ void Player::SetSpellModTakingSpell(Spell* spell, bool apply)
 // send Proficiency
 void Player::SendProficiency(ItemClass itemClass, uint32 itemSubclassMask)
 {
-    WorldPacket data(SMSG_SET_PROFICIENCY, 1 + 4);
-    data << uint8(itemClass) << uint32(itemSubclassMask);
+    // SMSG_SET_PROFICIENCY, 3.4.3 (handler FUN_141737670 reads the raw body): u32 mask, u8 item class
+    WorldPacket data(SMSG_SET_PROFICIENCY, 4 + 1);
+    data << uint32(itemSubclassMask) << uint8(itemClass);
     SendDirectMessage(&data);
 }
 
@@ -11746,19 +11817,48 @@ void Player::SendInitialPacketsBeforeAddToMap()
 
     SendTalentsInfoData(false);
 
-    SendInitialSpells();
+    SendInitialSpells();                                    // SMSG_SEND_KNOWN_SPELLS, _SPELL_HISTORY, _SPELL_CHARGES
     SendUnlearnSpells();
+    SendActiveGlyphs();
 
     SendInitialActionButtons();
     m_reputationMgr->SendInitialReputations();
     m_achievementMgr->SendAllAchievementData();
 
+    SendCurrencies();                                       // SMSG_SETUP_CURRENCY
     SendEquipmentSetList();
 
-    data.Initialize(SMSG_LOGIN_SET_TIME_SPEED, 4 + 4 + 4);
-    data.AppendPackedTime(GameTime::GetGameTime().count());
-    data << float(0.01666667f);                             // game speed
-    data << uint32(0);                                      // added in 3.1.2
+    // SMSG_LOGIN_SET_TIME_SPEED, 3.4.3 (handler FUN_1416587c0 reads the raw body): u32 ServerTime and
+    // u32 GameTime (packed time), f32 NewSpeed; the two holiday offsets after them are not read.
+    data.Initialize(SMSG_LOGIN_SET_TIME_SPEED, 4 + 4 + 4 + 4 + 4);
+    data.AppendPackedTime(GameTime::GetGameTime().count()); // ServerTime
+    data.AppendPackedTime(GameTime::GetGameTime().count()); // GameTime
+    data << float(0.01666667f);                             // NewSpeed
+    data << uint32(0);                                      // ServerTimeHolidayOffset
+    data << uint32(0);                                      // GameTimeHolidayOffset
+    SendDirectMessage(&data);
+
+    // SMSG_WORLD_SERVER_INFO, 3.4.3 (parser FUN_1406ce0c0, handler FUN_141929280): u32 DifficultyID,
+    // bits IsTournamentRealm, XRealmPvpAlert, HasRestrictedAccountMaxLevel, HasRestrictedAccountMaxMoney,
+    // HasInstanceGroupSize, flush, then the present values (u32, u64, u32). Five bits: the client has
+    // no BlockExitingLoadingScreen bit.
+    data.Initialize(SMSG_WORLD_SERVER_INFO, 4 + 1 + 4);
+    data << uint32(GetMap() ? GetMap()->GetDifficulty() : 0);
+    MapDifficulty const* mapDifficulty = GetMap() ? GetMapDifficultyData(GetMap()->GetId(), GetMap()->GetDifficulty()) : nullptr;
+    data.WriteBit(false);                                   // IsTournamentRealm
+    data.WriteBit(false);                                   // XRealmPvpAlert
+    data.WriteBit(false);                                   // RestrictedAccountMaxLevel
+    data.WriteBit(false);                                   // RestrictedAccountMaxMoney
+    data.WriteBit(mapDifficulty && mapDifficulty->maxPlayers);  // InstanceGroupSize
+    data.FlushBits();
+    if (mapDifficulty && mapDifficulty->maxPlayers)
+        data << uint32(mapDifficulty->maxPlayers);
+    SendDirectMessage(&data);
+
+    // SMSG_INITIAL_SETUP, 3.4.3 (handler FUN_141735910): u8 ServerExpansionLevel, u8 ServerExpansionTier
+    data.Initialize(SMSG_INITIAL_SETUP, 2);
+    data << uint8(sWorld->getIntConfig(CONFIG_EXPANSION));
+    data << uint8(0);
     SendDirectMessage(&data);
 
     GetReputationMgr().SendForceReactions();                // SMSG_SET_FORCED_REACTIONS
@@ -14812,14 +14912,101 @@ void Player::BuildPetTalentsInfoData(WorldPacket* data)
     }
 }
 
+// SMSG_UPDATE_TALENT_DATA, 3.4.3 (parser FUN_140709e20 "JamClassicTalentInfoUpdate", handler
+// FUN_141738730 -> FUN_141be8030 player / FUN_141be7d80 pet):
+//     u32 UnspentTalentPoints, u8 ActiveGroup, u32 GroupCount,
+//     per group: u8 NumTalents, u32 TalentCount, u8 NumGlyphs, u32 GlyphCount, u8 (stored at +0x8c,
+//                0xFF when unset), {u32 TalentID, u8 Rank}[TalentCount], u16 GlyphID[GlyphCount],
+//     bit IsPetTalents, flush.
+// The handler loops on the u8 counts and sizes the arrays from the u32 ones, so both are written
+// equal. Rank is 0-based (Talent.SpellRank index), at most 5 groups, the first 6 glyphs are kept.
+// The 3.3.5 builders (BuildPlayerTalentsInfoData/BuildPetTalentsInfoData) stay for SMSG_INSPECT_RESULT.
 void Player::SendTalentsInfoData(bool pet)
 {
-    WorldPacket data(SMSG_UPDATE_TALENT_DATA, 50);
-    data << uint8(pet ? 1 : 0);
+    struct TalentGroup
+    {
+        std::vector<std::pair<uint32, uint8>> Talents;
+        std::vector<uint16> Glyphs;
+    };
+
+    uint32 unspent = 0;
+    uint8 activeGroup = 0;
+    std::vector<TalentGroup> groups;
+
     if (pet)
-        BuildPetTalentsInfoData(&data);
+    {
+        Pet* petUnit = GetPet();
+        CreatureTemplate const* ci = petUnit ? petUnit->GetCreatureTemplate() : nullptr;
+        CreatureFamilyEntry const* petFamily = ci ? sCreatureFamilyStore.LookupEntry(ci->family) : nullptr;
+        if (petUnit)
+            unspent = petUnit->GetFreeTalentPoints();
+
+        TalentGroup& group = groups.emplace_back();
+        if (petFamily && petFamily->petTalentType >= 0)
+        {
+            for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+            {
+                TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentId);
+                if (!talentInfo)
+                    continue;
+
+                TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+                if (!talentTabInfo || !((1 << petFamily->petTalentType) & talentTabInfo->petTalentMask))
+                    continue;
+
+                for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+                {
+                    if (talentInfo->RankID[rank] && petUnit->HasSpell(talentInfo->RankID[rank]))
+                    {
+                        group.Talents.emplace_back(talentInfo->TalentID, uint8(rank));
+                        break;
+                    }
+                }
+            }
+        }
+    }
     else
-        BuildPlayerTalentsInfoData(&data);
+    {
+        unspent = GetFreeTalentPoints();
+        activeGroup = m_activeSpec;
+
+        if (m_specsCount > MAX_TALENT_SPECS)
+            m_specsCount = MAX_TALENT_SPECS;
+
+        for (uint32 specIdx = 0; specIdx < m_specsCount; ++specIdx)
+        {
+            TalentGroup& group = groups.emplace_back();
+            for (auto const& [spellId, talent] : GetTalentMap())
+                if (TalentSpellPos const* talentPos = GetTalentSpellPos(spellId))
+                    if (talent->State != PLAYERSPELL_REMOVED && talent->IsInSpec(specIdx)) // pussywizard
+                        group.Talents.emplace_back(talentPos->talent_id, uint8(talentPos->rank));
+
+            for (uint8 i = 0; i < MAX_GLYPH_SLOT_INDEX; ++i)
+                group.Glyphs.push_back(uint16(m_Glyphs[specIdx][i]));  // GlyphProperties
+        }
+    }
+
+    WorldPacket data(SMSG_UPDATE_TALENT_DATA, 64);
+    data << uint32(unspent);
+    data << uint8(activeGroup);
+    data << uint32(groups.size());
+    for (TalentGroup& group : groups)
+    {
+        if (group.Talents.size() > 255)
+            group.Talents.resize(255);
+
+        data << uint8(group.Talents.size());
+        data << uint32(group.Talents.size());
+        data << uint8(group.Glyphs.size());
+        data << uint32(group.Glyphs.size());
+        data << uint8(0xFF);                                // unknown, the client's own default
+        for (auto const& [talentId, rank] : group.Talents)
+            data << uint32(talentId) << uint8(rank);
+        for (uint16 glyph : group.Glyphs)
+            data << uint16(glyph);
+    }
+    data.WriteBit(pet);                                     // IsPetTalents
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -14866,6 +15053,12 @@ void Player::BuildEnchantmentsInfoData(WorldPacket* data)
     data->put<uint32>(slotUsedMaskPos, slotUsedMask);
 }
 
+// SMSG_LOAD_EQUIPMENT_SET, 3.4.3 (parser FUN_1406c3e70, set FUN_1407123f0, handler FUN_141a7eb20):
+// u32 Count, then per set i32 Type, u64 Guid, u32 SetID, u32 IgnoreMask, 19 x {PackedGuid128 Piece,
+// i32 Appearance}, i32 Enchants[2], i32 SecondaryShoulderApparanceID, i32 SecondaryShoulderSlot,
+// i32 SecondaryWeaponAppearanceID, i32 SecondaryWeaponSlot, bit HasAssignedSpecIndex, 8 bits name
+// length, 9 bits icon length, flush, [i32 AssignedSpecIndex], name, icon (no NULs).
+// The pieces are item GUIDs (Guid128::WriteItem); an ignored slot is an empty GUID with its IgnoreMask bit.
 void Player::SendEquipmentSetList()
 {
     uint32 count = 0;
@@ -14877,22 +15070,47 @@ void Player::SendEquipmentSetList()
         if (itr->second.state == EQUIPMENT_SET_DELETED)
             continue;
 
-        data.appendPackGUID(itr->second.Guid);
-        data << uint32(itr->first);
-        data << itr->second.Name;
-        data << itr->second.IconName;
+        std::string const& name = itr->second.Name.size() < 256 ? itr->second.Name : std::string();
+        std::string const& icon = itr->second.IconName.size() < 512 ? itr->second.IconName : std::string();
+
+        data << int32(0);                                   // Type: equipment
+        data << uint64(itr->second.Guid);
+        data << uint32(itr->first);                         // SetID
+        data << uint32(itr->second.IgnoreMask);
         for (uint32 i = 0; i < EQUIPMENT_SLOT_END; ++i)
         {
-            // ignored slots stored in IgnoreMask, client wants "1" as raw GUID, so no HighGuid::Item
             if (itr->second.IgnoreMask & (1 << i))
-                data.appendPackGUID(uint64(1));
-            else // xinef: send proper data (do not append 0 with high guid)
-                data.appendPackGUID(itr->second.Items[i] ? itr->second.Items[i].GetRawValue() : uint64(0));
+                Guid128::WritePacked(data, 0, 0);
+            else
+                Guid128::WriteItem(data, itr->second.Items[i]);  // Pieces[i]
+            data << int32(0);                               // Appearances[i]: transmog, none in Wrath
         }
+        data << int32(0) << int32(0);                       // Enchants
+        data << int32(0) << int32(-1);                      // SecondaryShoulderApparanceID, SecondaryShoulderSlot
+        data << int32(0) << int32(-1);                      // SecondaryWeaponAppearanceID, SecondaryWeaponSlot
+        data.WriteBit(false);                               // HasAssignedSpecIndex
+        data.WriteBits(name.size(), 8);
+        data.WriteBits(icon.size(), 9);
+        data.FlushBits();
+        if (!name.empty())
+            data.append(name.data(), name.size());
+        if (!icon.empty())
+            data.append(icon.data(), icon.size());
 
         ++count;                                            // client have limit but it checked at loading and set
     }
     data.put<uint32>(count_pos, count);
+    SendDirectMessage(&data);
+}
+
+// SMSG_SETUP_CURRENCY, 3.4.3 (record parser FUN_140705170): u32 Count, then per currency i32 Type,
+// i32 Quantity, 7 "has" bits (WeeklyQuantity, MaxWeeklyQuantity, TrackedQuantity, MaxQuantity,
+// TotalEarned, NextRechargeTime, RechargeCycleStartTime), 5 bits Flags, flush, then the present
+// values (u32 x5, u64 x2). Wrath keeps its currencies as items, so the list is empty.
+void Player::SendCurrencies() const
+{
+    WorldPacket data(SMSG_SETUP_CURRENCY, 4);
+    data << uint32(0);
     SendDirectMessage(&data);
 }
 

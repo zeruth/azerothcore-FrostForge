@@ -175,13 +175,16 @@ void ReputationMgr::SendForceReactions()
     _player->SendDirectMessage(&data);
 }
 
+// SMSG_SET_FACTION_STANDING, 3.4.3 (parser FUN_1406ca750, handler FUN_1419f1350): f32
+// BonusFromAchievementSystem, u32 Count, {i32 Index, i32 Standing}[Count], bit ShowVisual, flush.
+// Standing is absolute; the client works out the change for the chat message itself.
 void ReputationMgr::SendState(FactionState const* faction)
 {
     uint32 count = 1;
 
     WorldPacket data(SMSG_SET_FACTION_STANDING, 17);
     data << float(0);
-    data << uint8(_sendFactionIncreased);
+    bool const showVisual = _sendFactionIncreased;
     _sendFactionIncreased = false; // Reset
 
     std::size_t p_count = data.wpos();
@@ -205,40 +208,37 @@ void ReputationMgr::SendState(FactionState const* faction)
     }
 
     data.put<uint32>(p_count, count);
+    data.WriteBit(showVisual);                              // ShowVisual
+    data.FlushBits();
     _player->SendDirectMessage(&data);
 }
 
+// SMSG_INITIALIZE_FACTIONS, 3.4.3 (parser FUN_1406c24d0, handler FUN_1419f1240): exactly 443 entries
+// by reputation list index, no count on the wire: {u16 FactionFlags, i32 Standing}[443], then 443
+// bits FactionHasBonus, flush. The handler answers with CMSG_REQUEST_FORCED_REACTIONS.
 void ReputationMgr::SendInitialReputations()
 {
-    WorldPacket data(SMSG_INITIALIZE_FACTIONS, (4 + 128 * 5));
-    data << uint32 (0x00000080);
+    constexpr RepListID FACTION_COUNT = 443;
 
-    RepListID a = 0;
+    WorldPacket data(SMSG_INITIALIZE_FACTIONS, FACTION_COUNT * 6 + (FACTION_COUNT + 7) / 8);
 
-    for (FactionStateList::iterator itr = _factions.begin(); itr != _factions.end(); ++itr)
+    for (RepListID a = 0; a < FACTION_COUNT; ++a)
     {
-        // fill in absent fields
-        for (; a != itr->first; a++)
+        FactionStateList::iterator itr = _factions.find(a);
+        if (itr == _factions.end())
         {
-            data << uint8  (0x00);
-            data << uint32 (0x00000000);
+            data << uint16(0) << int32(0);
+            continue;
         }
 
-        // fill in encountered data
-        data << uint8  (itr->second.Flags);
-        data << uint32 (itr->second.Standing);
-
+        data << uint16(itr->second.Flags);
+        data << int32(itr->second.Standing);
         itr->second.needSend = false;
-
-        ++a;
     }
 
-    // fill in absent fields
-    for (; a != 128; a++)
-    {
-        data << uint8  (0x00);
-        data << uint32 (0x00000000);
-    }
+    for (RepListID a = 0; a < FACTION_COUNT; ++a)
+        data.WriteBit(false);                               // FactionHasBonus
+    data.FlushBits();
 
     _player->SendDirectMessage(&data);
 }
@@ -254,7 +254,9 @@ void ReputationMgr::SendVisible(FactionState const* faction) const
     if (_player->GetSession()->PlayerLoading())
         return;
 
-    // make faction visible in reputation list at client
+    // make faction visible in reputation list at client (3.4.3: u32 FactionIndex, handler FUN_1419f18f0, not bounds checked)
+    if (faction->ReputationListID >= 443)
+        return;
     WorldPacket data(SMSG_SET_FACTION_VISIBLE, 4);
     data << faction->ReputationListID;
     _player->SendDirectMessage(&data);

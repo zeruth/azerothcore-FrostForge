@@ -38,6 +38,7 @@
 #include "MiscPackets.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PacketGuid128.h"
 #include "Opcodes.h"
 #include "OutdoorPvPMgr.h"
 #include "PacketUtilities.h"
@@ -1017,15 +1018,18 @@ void WorldSession::SetAccountData(AccountDataType type, time_t tm, std::string c
     m_accountData[type].Data = data;
 }
 
+// SMSG_ACCOUNT_DATA_TIMES, 3.4.3 (parser FUN_1406b5720, handler FUN_14156efd0): PackedGuid128
+// PlayerGuid, i64 ServerTime, i64 AccountTimes[15]. The client takes it only once it has entered the
+// world as PlayerGuid, so it is sent at login, for every type (types outside the mask go as 0). For
+// each type whose time is non-zero and differs from its local cache, and whose sync CVar is on, the
+// client asks for the data with CMSG_REQUEST_ACCOUNT_DATA.
 void WorldSession::SendAccountDataTimes(uint32 mask)
 {
-    WorldPacket data(SMSG_ACCOUNT_DATA_TIMES, 4 + 1 + 4 + 8 * 4); // changed in WotLK
-    data << uint32(GameTime::GetGameTime().count());                             // unix time of something
-    data << uint8(1);
-    data << uint32(mask);                                   // type mask
+    WorldPacket data(SMSG_ACCOUNT_DATA_TIMES, 18 + 8 + 8 * NUM_ACCOUNT_DATA_TYPES);
+    Guid128::WritePlayer(data, _player ? _player->GetGUID() : ObjectGuid::Empty);
+    data << int64(GameTime::GetGameTime().count());         // ServerTime
     for (uint32 i = 0; i < NUM_ACCOUNT_DATA_TYPES; ++i)
-        if (mask & (1 << i))
-            data << uint32(GetAccountData(AccountDataType(i))->Time);// also unix time
+        data << int64((mask & (1 << i)) ? GetAccountData(AccountDataType(i))->Time : 0);
     SendPacket(&data);
 }
 
@@ -1044,6 +1048,8 @@ void WorldSession::LoadTutorialsData(PreparedQueryResult result)
     m_TutorialsChanged = false;
 }
 
+// SMSG_TUTORIAL_FLAGS, 3.4.3 (parser FUN_1406b7570, handler FUN_14196f920 copies exactly 32 bytes):
+// u32 TutorialData[8]
 void WorldSession::SendTutorialsData()
 {
     WorldPacket data(SMSG_TUTORIAL_FLAGS, 4 * MAX_ACCOUNT_TUTORIAL_VALUES);
@@ -1417,6 +1423,11 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
         if (!m_inQueue)
         {
             SendAuthResponse(AUTH_OK, true);
+            // the glue screen's feature status must come before the character list: the client
+            // keeps "create character" disabled until it has seen it (FUN_14168ecb0)
+            SendFeatureSystemStatusGlueScreen();
+            SendSetTimeZoneInformation();
+            SendAvailableHotfixes();
         }
         else
         {

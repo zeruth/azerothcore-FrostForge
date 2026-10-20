@@ -39,6 +39,7 @@
 #include "Map.h"
 #include "MapMgr.h"
 #include "ObjectMgr.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "RaceMgr.h"
@@ -2404,19 +2405,28 @@ void AchievementMgr::SendAllAchievementData() const
     GetPlayer()->SendDirectMessage(&data);
 }
 
+// SMSG_RESPOND_INSPECT_ACHIEVEMENTS shares the parser of SMSG_ALL_ACHIEVEMENT_DATA (FUN_1407082f0);
+// the inspected player's GUID in front is not read off the client yet, so the opcode stays unconverted.
 void AchievementMgr::SendRespondInspectAchievements(Player* player) const
 {
-    WorldPacket data(SMSG_RESPOND_INSPECT_ACHIEVEMENTS, 9 + _completedAchievements.size() * 8 + 4 + _criteriaProgress.size() * 38 + 4);
-    data << GetPlayer()->GetPackGUID();
+    WorldPacket data(SMSG_RESPOND_INSPECT_ACHIEVEMENTS, 18 + 8 + _completedAchievements.size() * 30 + _criteriaProgress.size() * 60);
+    Guid128::WritePlayer(data, GetPlayer()->GetGUID());
     BuildAllDataPacket(&data);
     player->SendDirectMessage(&data);
 }
 
 /**
- * used by SMSG_RESPOND_INSPECT_ACHIEVEMENT and SMSG_ALL_ACHIEVEMENT_DATA
+ * The body of SMSG_ALL_ACHIEVEMENT_DATA, 3.4.3 (parser FUN_1407082f0, handler FUN_1419ca8d0):
+ *     u32 EarnedCount, u32 ProgressCount,
+ *     EarnedAchievement[EarnedCount]: u32 Id, u32 Date (packed time, FUN_14155f320), PackedGuid128 Owner,
+ *                                     u32 VirtualRealmAddress, u32 NativeRealmAddress
+ *     CriteriaProgress[ProgressCount] (FUN_1407117f0): u32 Id, u64 Quantity, PackedGuid128 Player,
+ *                                     u32 unused, u32 Flags, u32 Date (packed), u64 TimeFromStart,
+ *                                     u64 TimeFromCreate, bit HasRafAcceptanceID, flush [u64]
  */
 void AchievementMgr::BuildAllDataPacket(WorldPacket* data) const
 {
+    std::vector<CompletedAchievementMap::const_iterator> earned;
     for (CompletedAchievementMap::const_iterator iter = _completedAchievements.begin(); iter != _completedAchievements.end(); ++iter)
     {
         // Skip hidden achievements
@@ -2424,29 +2434,42 @@ void AchievementMgr::BuildAllDataPacket(WorldPacket* data) const
         if (!achievement || achievement->flags & ACHIEVEMENT_FLAG_HIDDEN)
             continue;
 
-        *data << uint32(iter->first);
-        data->AppendPackedTime(iter->second.date);
+        earned.push_back(iter);
     }
 
-    *data << int32(-1);
+    *data << uint32(earned.size());
+    *data << uint32(_criteriaProgress.size());
+
+    uint32 const realmAddress = Guid128::VirtualRealmAddress();
+    for (CompletedAchievementMap::const_iterator iter : earned)
+    {
+        *data << uint32(iter->first);
+        data->AppendPackedTime(iter->second.date);
+        Guid128::WritePlayer(*data, GetPlayer()->GetGUID());
+        *data << uint32(realmAddress);                      // VirtualRealmAddress
+        *data << uint32(realmAddress);                      // NativeRealmAddress
+    }
+
     time_t now = GameTime::GetGameTime().count();
 
     for (CriteriaProgressMap::const_iterator iter = _criteriaProgress.begin(); iter != _criteriaProgress.end(); ++iter)
     {
         *data << uint32(iter->first);
-        data->appendPackGUID(iter->second.counter);
-        *data << GetPlayer()->GetPackGUID();
-        *data << uint32(0); /// @todo: This should be 1 if it is a failed timed criteria
+        *data << uint64(iter->second.counter);              // Quantity
+        Guid128::WritePlayer(*data, GetPlayer()->GetGUID());
+        *data << uint32(0);
+        *data << uint32(0);                                 /// @todo Flags: 1 for a failed timed criteria
         data->AppendPackedTime(iter->second.date);
-        *data << uint32(now - iter->second.date);
+        *data << uint64(now - iter->second.date);           // TimeFromStart
 
         if (sAchievementMgr->IsAverageCriteria(sAchievementCriteriaStore.LookupEntry(iter->first)))
-            *data << uint32(now - GetPlayer()->GetCreationTime().count());    // for average achievements
+            *data << uint64(now - GetPlayer()->GetCreationTime().count());    // for average achievements
         else
-            *data << uint32(now - iter->second.date);
-    }
+            *data << uint64(now - iter->second.date);       // TimeFromCreate
 
-    *data << int32(-1);
+        data->WriteBit(false);                              // HasRafAcceptanceID
+        data->FlushBits();
+    }
 }
 
 bool AchievementMgr::HasAchieved(uint32 achievementId) const

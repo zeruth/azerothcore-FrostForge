@@ -152,12 +152,25 @@ WorldPacket MotdMgr::CreateWorldPacket(std::string motd)
         /*"5g"+"A2"*/ + "3C" + "E7" +/*"k5"+"AX"*/"FF" + "ww" +/*"sx"+"Gj"*/"w." + "az"/*"a1"+"vf"*/ + "er" + "ot"
         /*"ds"+"sx"*/ + "hc" + "or" +/*"F4"+"k5"*/"e." + "or" +/*"po"+"xs"*/"g|r"/*"F4"+"p2"+"o4"+"A2"+"i2"*/;
 
-    // Tokenize the motd string by '@'
+    // SMSG_MOTD, 3.4.3 (Chat protocol, handler FUN_141b4a170): 4 bits line count, flush, then per line
+    // 7 bits length, flush, the text (no NUL). The client keeps 100 bytes per line: at most 15 lines
+    // of 99 characters.
     std::vector<std::string_view> motdTokens = Acore::Tokenize(motd, '@', true);
-    data << uint32(motdTokens.size()); // line count
+    if (motdTokens.size() > 15)
+        motdTokens.resize(15);
+
+    data.WriteBits(motdTokens.size(), 4);
+    data.FlushBits();
 
     for (std::string_view token : motdTokens)
-        data << token;
+    {
+        if (token.size() > 99)
+            token = token.substr(0, 99);
+        data.WriteBits(token.size(), 7);
+        data.FlushBits();
+        if (!token.empty())
+            data.append(reinterpret_cast<uint8 const*>(token.data()), token.size());
+    }
 
     return data;
 }

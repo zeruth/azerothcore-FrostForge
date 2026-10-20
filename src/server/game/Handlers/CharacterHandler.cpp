@@ -46,6 +46,8 @@
 #include "PlayerDump.h"
 #include "QueryHolder.h"
 #include "RaceMgr.h"
+#include "DBCStores.h"
+#include "PacketGuid128.h"
 #include "Realm.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
@@ -221,67 +223,6 @@ bool LoginQueryHolder::Initialize()
 
 namespace
 {
-    // A 128-bit GUID as the 3.4.3 client packs it (FUN_141550b20): a mask of the low half's
-    // non-zero bytes, one of the high half's, then those bytes.
-    void WritePackedGuid128(WorldPacket& data, uint64 low, uint64 high)
-    {
-        uint8 lowMask = 0, highMask = 0;
-        for (uint8 i = 0; i < 8; ++i)
-        {
-            if ((low >> (8 * i)) & 0xFF)
-                lowMask |= uint8(1 << i);
-            if ((high >> (8 * i)) & 0xFF)
-                highMask |= uint8(1 << i);
-        }
-
-        data << uint8(lowMask) << uint8(highMask);
-        for (uint8 i = 0; i < 8; ++i)
-            if (lowMask & (1 << i))
-                data << uint8(low >> (8 * i));
-        for (uint8 i = 0; i < 8; ++i)
-            if (highMask & (1 << i))
-                data << uint8(high >> (8 * i));
-    }
-
-    // The reverse (FUN_141550bf0 writes it): two masks, then the non-zero bytes they name.
-    void ReadPackedGuid128(WorldPacket& data, uint64& low, uint64& high)
-    {
-        uint8 lowMask = data.read<uint8>();
-        uint8 highMask = data.read<uint8>();
-        low = high = 0;
-        for (uint8 i = 0; i < 8; ++i)
-            if (lowMask & (1 << i))
-                low |= uint64(data.read<uint8>()) << (8 * i);
-        for (uint8 i = 0; i < 8; ++i)
-            if (highMask & (1 << i))
-                high |= uint64(data.read<uint8>()) << (8 * i);
-    }
-
-    // A player's 128-bit GUID: HighGuid Player (2) in the top 6 bits and the realm id under it,
-    // the character counter in the low half.
-    uint64 PlayerGuidHigh()
-    {
-        return (uint64(2) << 58) | (uint64(realm.Id.Realm & 0x1FFF) << 42);
-    }
-
-    void WritePlayerGuid128(WorldPacket& data, ObjectGuid const& guid)
-    {
-        if (guid.IsEmpty())
-            WritePackedGuid128(data, 0, 0);
-        else
-            WritePackedGuid128(data, guid.GetCounter(), PlayerGuidHigh());
-    }
-
-    // A character GUID from the client: HighGuid Player, this realm, a 32-bit counter. Empty otherwise.
-    ObjectGuid ReadPlayerGuid128(WorldPacket& data)
-    {
-        uint64 low, high;
-        ReadPackedGuid128(data, low, high);
-        if (high != PlayerGuidHigh() || !low || low > std::numeric_limits<ObjectGuid::LowType>::max())
-            return ObjectGuid::Empty;
-        return ObjectGuid::Create<HighGuid::Player>(ObjectGuid::LowType(low));
-    }
-
     // At most this many ChrCustomizationChoices in a create request; a 3.4.3 model has well under it.
     constexpr uint32 MAX_CHARACTER_CUSTOMIZATIONS = 64;
 
@@ -348,7 +289,7 @@ namespace
             }
         }
 
-        WritePackedGuid128(data, guidLow, PlayerGuidHigh());
+        Guid128::WritePacked(data, guidLow, Guid128::PlayerHigh());
         data << uint64(0);                                      // GuildClubMemberID
         data << uint8(listPosition);
         data << uint8(race);
@@ -361,7 +302,7 @@ namespace
         data << fields[13].Get<float>();
         data << fields[14].Get<float>();
         data << fields[15].Get<float>();
-        WritePackedGuid128(data, 0, 0);                         // GuildGuid: the 3.4.3 guild GUID comes with guilds
+        Guid128::WritePacked(data, 0, 0);                       // GuildGuid: the 3.4.3 guild GUID comes with guilds
         data << uint32(charFlags);
         data << uint32(customizeFlags);
         data << uint32(0);                                      // Flags3
@@ -912,7 +853,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 // CMSG_CHAR_DELETE, 3.4.3 (writer FUN_140765a70): PackedGuid128 Guid
 void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid = ReadPlayerGuid128(recvData);
+    ObjectGuid guid = Guid128::ReadPlayer(recvData);
 
     // Initiating
     uint32 initAccountId = GetAccountId();
@@ -993,8 +934,9 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
         return;
     }
 
-    ObjectGuid playerGuid;
-    recvData >> playerGuid;
+    // CMSG_PLAYER_LOGIN, 3.4.3 (writer FUN_140768810, sender FUN_141567d40): PackedGuid128 Guid, f32 FarClip
+    ObjectGuid playerGuid = Guid128::ReadPlayer(recvData);
+    recvData.read_skip<float>();                            // FarClip: the client's view distance, not used
 
     // The ownership check is delegated to the gateway in cluster mode, but a
     // non-player GUID is invalid regardless of who authenticated the session.
@@ -1121,22 +1063,14 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     pCurrChar->GetMotionMaster()->Initialize();
     pCurrChar->SendDungeonDifficulty(false);
 
-    WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
-    data << pCurrChar->GetMapId();
-    data << pCurrChar->GetPositionX();
-    data << pCurrChar->GetPositionY();
-    data << pCurrChar->GetPositionZ();
-    data << pCurrChar->GetOrientation();
-    SendPacket(&data);
+    SendLoginVerifyWorld(pCurrChar);
 
     // load player specific part before send times
     LoadAccountData(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_DATA), PER_CHARACTER_CACHE_MASK);
-    SendAccountDataTimes(PER_CHARACTER_CACHE_MASK);
+    SendAccountDataTimes(ALL_ACCOUNT_DATA_CACHE_MASK);
+    SendSetTimeZoneInformation();
 
-    data.Initialize(SMSG_FEATURE_SYSTEM_STATUS, 2);         // added in 2.2.0
-    data << uint8(2);                                       // 2 - COMPLAINT_ENABLED_WITH_AUTO_IGNORE
-    data << uint8(0);                                       // enable(1)/disable(0) voice chat interface in client
-    SendPacket(&data);
+    SendFeatureSystemStatus();
 
     // Send MOTD
     {
@@ -1449,20 +1383,11 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
 
     pCurrChar->SendDungeonDifficulty(false);
 
-    WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
-    data << pCurrChar->GetMapId();
-    data << pCurrChar->GetPositionX();
-    data << pCurrChar->GetPositionY();
-    data << pCurrChar->GetPositionZ();
-    data << pCurrChar->GetOrientation();
-    SendPacket(&data);
+    SendLoginVerifyWorld(pCurrChar);
 
-    SendAccountDataTimes(PER_CHARACTER_CACHE_MASK);
+    SendAccountDataTimes(ALL_ACCOUNT_DATA_CACHE_MASK);
 
-    data.Initialize(SMSG_FEATURE_SYSTEM_STATUS, 2);         // added in 2.2.0
-    data << uint8(2);                                       // unknown value
-    data << uint8(0);                                       // enable(1)/disable(0) voice chat interface in client
-    SendPacket(&data);
+    SendFeatureSystemStatus();
 
     // Send MOTD
     {
@@ -1507,9 +1432,8 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
     pCurrChar->SetInGameTime(GameTime::GetGameTimeMS().count());
 
     // Xinef: we need to resend all spell mods
-    for (uint16 Opcode = SMSG_SET_FLAT_SPELL_MODIFIER; Opcode <= SMSG_SET_PCT_SPELL_MODIFIER; ++Opcode) // PCT = FLAT+1
+    for (SpellModType modType : { SPELLMOD_FLAT, SPELLMOD_PCT })
     {
-        uint32 modType = (Opcode == SMSG_SET_FLAT_SPELL_MODIFIER) ? SPELLMOD_FLAT : SPELLMOD_PCT;
         for (uint32 opType = SPELLMOD_DAMAGE; opType < MAX_SPELLMOD; ++opType)
         {
             int32 i = 0;
@@ -1532,11 +1456,7 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
                 if (val == 0)
                     continue;
 
-                WorldPacket data(Opcode, (1 + 1 + 4));
-                data << uint8(eff);
-                data << uint8(opType);
-                data << int32(val);
-                SendPacket(&data);
+                pCurrChar->SendSpellModifier(modType, uint8(opType), uint8(eff), val);
             }
         }
     }
@@ -1593,32 +1513,41 @@ void WorldSession::HandleSetFactionCheat(WorldPacket& /*recvData*/)
     GetPlayer()->GetReputationMgr().SendStates();
 }
 
+// CMSG_TUTORIAL, 3.4.3 (writer FUN_140769d60): 2 bits Action, flush, [u32 TutorialBit] when Action is 0.
+// Action 0 sets one flag, 1 sets them all (Lua ClearTutorials), 2 clears them all (ResetTutorials);
+// 3.3.5 had a separate opcode for each.
 void WorldSession::HandleTutorialFlag(WorldPacket& recvData)
 {
-    uint32 data;
-    recvData >> data;
+    uint32 action = recvData.ReadBits(2);
+    switch (action)
+    {
+        case 0:
+        {
+            uint32 data;
+            recvData >> data;
 
-    uint8 index = uint8(data / 32);
-    if (index >= MAX_ACCOUNT_TUTORIAL_VALUES)
-        return;
+            uint8 index = uint8(data / 32);
+            if (index >= MAX_ACCOUNT_TUTORIAL_VALUES)
+                return;
 
-    uint32 value = (data % 32);
+            uint32 value = (data % 32);
 
-    uint32 flag = GetTutorialInt(index);
-    flag |= (1 << value);
-    SetTutorialInt(index, flag);
-}
-
-void WorldSession::HandleTutorialClear(WorldPacket& /*recvData*/)
-{
-    for (uint8 i = 0; i < MAX_ACCOUNT_TUTORIAL_VALUES; ++i)
-        SetTutorialInt(i, 0xFFFFFFFF);
-}
-
-void WorldSession::HandleTutorialReset(WorldPacket& /*recvData*/)
-{
-    for (uint8 i = 0; i < MAX_ACCOUNT_TUTORIAL_VALUES; ++i)
-        SetTutorialInt(i, 0x00000000);
+            uint32 flag = GetTutorialInt(index);
+            flag |= (1 << value);
+            SetTutorialInt(index, flag);
+            break;
+        }
+        case 1:
+            for (uint8 i = 0; i < MAX_ACCOUNT_TUTORIAL_VALUES; ++i)
+                SetTutorialInt(i, 0xFFFFFFFF);
+            break;
+        case 2:
+            for (uint8 i = 0; i < MAX_ACCOUNT_TUTORIAL_VALUES; ++i)
+                SetTutorialInt(i, 0x00000000);
+            break;
+        default:
+            break;
+    }
 }
 
 void WorldSession::HandleSetWatchedFactionOpcode(WorldPacket& recvData)
@@ -2902,7 +2831,7 @@ void WorldSession::SendCharCreate(ResponseCodes result, ObjectGuid const& guid /
 {
     WorldPacket data(SMSG_CREATE_CHAR, 1 + 18);
     data << uint8(result);
-    WritePlayerGuid128(data, guid);
+    Guid128::WritePlayer(data, guid);
     SendPacket(&data);
 }
 
@@ -2914,6 +2843,149 @@ void WorldSession::SendCharDelete(ResponseCodes result)
     SendPacket(&data);
 }
 
+// SMSG_FEATURE_SYSTEM_STATUS, 3.4.3 (parser FUN_1406bf560 -> FUN_1406fad90, handler FUN_14173fa50):
+//     u8 ComplaintStatus, u32 CfgRealmID, i32 CfgRealmRecID, u32 RAF MaxRecruits, MaxRecruitMonths,
+//     MaxRecruitmentUses, DaysInCycle, u32, u32 TokenPollTimeSeconds, u32 KioskSessionMinutes,
+//     i64 TokenBalanceAmount, u32 BpayStoreProductDeliveryDelay, u32 ClubsPresenceUpdateTimer,
+//     u32 HiddenUIClubsPresenceUpdateTimer, i32 ActiveSeason, u32 GameRuleValues count,
+//     i16 MaxPlayerNameQueriesPerPacket, i16 PlayerNameQueryTelemetryInterval, u32 PlayerNameQueryInterval,
+//     GameRules {i32, i32}, 44 flag bits, flush, QuickJoinConfig (bit ToastsDisabled, flush, 22 f32),
+//     [SessionAlert i32 x3], [u32 n, n bytes], Squelch (bit IsSquelched, flush, PackedGuid128 x2),
+//     [EuropaTicketConfig].
+// The bit TrinityCore calls unused in 4.4 (the 37th) gates a byte blob the client relocates and
+// runs (FUN_141739c70): it stays 0. No Europa ticket config, so the ticket and complaint UI is off.
+void WorldSession::SendFeatureSystemStatus()
+{
+    WorldPacket data(SMSG_FEATURE_SYSTEM_STATUS, 200);
+    data << uint8(0);                                       // ComplaintStatus: disabled
+    data << uint32(realm.Id.Realm);                         // CfgRealmID
+    data << int32(0);                                       // CfgRealmRecID
+    data << uint32(0) << uint32(0) << uint32(0) << uint32(0) << uint32(0);  // RAF
+    data << uint32(300);                                    // TokenPollTimeSeconds
+    data << uint32(0);                                      // KioskSessionMinutes
+    data << int64(0);                                       // TokenBalanceAmount
+    data << uint32(0);                                      // BpayStoreProductDeliveryDelay
+    data << uint32(0);                                      // ClubsPresenceUpdateTimer
+    data << uint32(0);                                      // HiddenUIClubsPresenceUpdateTimer
+    data << int32(0);                                       // ActiveSeason
+    data << uint32(0);                                      // GameRuleValues
+    data << int16(50);                                      // MaxPlayerNameQueriesPerPacket
+    data << int16(600);                                     // PlayerNameQueryTelemetryInterval
+    data << uint32(10);                                     // PlayerNameQueryInterval
+
+    data.WriteBit(false);                                   // VoiceEnabled
+    data.WriteBit(false);                                   // EuropaTicketSystemStatus
+    data.WriteBit(false);                                   // BpayStoreEnabled
+    data.WriteBit(false);                                   // BpayStoreAvailable
+    data.WriteBit(false);                                   // BpayStoreDisabledByParentalControls
+    data.WriteBit(false);                                   // ItemRestorationButtonEnabled
+    data.WriteBit(false);                                   // BrowserEnabled
+    data.WriteBit(false);                                   // SessionAlert
+    data.WriteBit(false);                                   // RAF Enabled
+    data.WriteBit(false);                                   // RAF RecruitingEnabled
+    data.WriteBit(false);                                   // CharUndeleteEnabled
+    data.WriteBit(false);                                   // RestrictedAccount
+    data.WriteBit(false);                                   // CommerceSystemEnabled
+    data.WriteBit(true);                                    // TutorialsEnabled
+    data.WriteBit(false);                                   // Unk67
+    data.WriteBit(false);                                   // WillKickFromWorld
+    data.WriteBit(false);                                   // KioskModeEnabled
+    data.WriteBit(false);                                   // CompetitiveModeEnabled
+    data.WriteBit(false);                                   // TokenBalanceEnabled
+    data.WriteBit(false);                                   // WarModeFeatureEnabled
+    data.WriteBit(false);                                   // ClubsEnabled
+    data.WriteBit(false);                                   // ClubsBattleNetClubTypeAllowed
+    data.WriteBit(false);                                   // ClubsCharacterClubTypeAllowed
+    data.WriteBit(false);                                   // ClubsPresenceUpdateEnabled
+    data.WriteBit(false);                                   // VoiceChatDisabledByParentalControl
+    data.WriteBit(false);                                   // VoiceChatMutedByParentalControl
+    data.WriteBit(false);                                   // QuestSessionEnabled
+    data.WriteBit(false);                                   // IsMuted
+    data.WriteBit(false);                                   // ClubFinderEnabled
+    data.WriteBit(false);                                   // Unknown901CheckoutRelated
+    data.WriteBit(false);                                   // TextToSpeechFeatureEnabled
+    data.WriteBit(false);                                   // ChatDisabledByDefault
+    data.WriteBit(false);                                   // ChatDisabledByPlayer
+    data.WriteBit(false);                                   // LFGListCustomRequiresAuthenticator
+    data.WriteBit(false);                                   // AddonsDisabled
+    data.WriteBit(false);                                   // WarGamesEnabled
+    data.WriteBit(false);                                   // the blob (see above)
+    data.WriteBit(false);
+    data.WriteBit(false);                                   // ContentTrackingEnabled
+    data.WriteBit(false);                                   // IsSellAllJunkEnabled
+    data.WriteBit(true);                                    // IsGroupFinderEnabled
+    data.WriteBit(true);                                    // IsLFDEnabled
+    data.WriteBit(true);                                    // IsLFREnabled
+    data.WriteBit(false);                                   // IsPremadeGroupEnabled
+    data.FlushBits();
+
+    // QuickJoinConfig (FUN_14070f9f0)
+    data.WriteBit(true);                                    // ToastsDisabled
+    data.FlushBits();
+    for (int i = 0; i < 22; ++i)
+        data << float(0.0f);
+
+    // SquelchInfo
+    data.WriteBit(false);                                   // IsSquelched
+    data.FlushBits();
+    Guid128::WritePacked(data, 0, 0);                       // BnetAccountGuid
+    Guid128::WritePacked(data, 0, 0);                       // GuildGuid
+    SendPacket(&data);
+}
+
+// CMSG_GENERATE_RANDOM_CHARACTER_NAME, 3.4.3 (writer FUN_140766ee0, Lua
+// C_CharacterCreation.RequestRandomName): u8 Race, u8 Sex.
+// SMSG_GENERATE_RANDOM_CHARACTER_NAME_RESULT (Client switch, handler FUN_141681df0): bit Success,
+// 6 bits name length, flush, name (no NUL). The names are NameGen.db2's.
+void WorldSession::HandleGenerateRandomCharacterName(WorldPacket& recvData)
+{
+    uint8 race = recvData.read<uint8>();
+    uint8 sex = recvData.read<uint8>();
+
+    std::string const* name = Player::IsValidGender(sex) && sChrRacesStore.LookupEntry(race) ? GetRandomCharacterName(race, sex) : nullptr;
+    bool const success = name && name->size() < 64;
+
+    WorldPacket data(SMSG_GENERATE_RANDOM_CHARACTER_NAME_RESULT, 1 + 64);
+    data.WriteBit(success);
+    data.WriteBits(success ? name->size() : 0, 6);
+    data.FlushBits();
+    if (success)
+        data.append(name->data(), name->size());
+    SendPacket(&data);
+}
+
+// CMSG_REORDER_CHARACTERS, 3.4.3 (writer FUN_140768b70, Lua SaveCharacterOrder): 9 bits count, flush,
+// {PackedGuid128 PlayerGUID, u8 NewPosition}[count]. The client reorders its list itself and waits for
+// no answer; the order is not stored (the character list orders by GUID).
+void WorldSession::HandleReorderCharacters(WorldPacket& recvData)
+{
+    uint32 count = recvData.ReadBits(9);
+    for (uint32 i = 0; i < count; ++i)
+    {
+        Guid128::Skip(recvData);
+        recvData.read_skip<uint8>();
+    }
+}
+
+// SMSG_LOGIN_VERIFY_WORLD, 3.4.3 (handler FUN_140233a20 reads the raw body): i32 MapID, f32 X, Y, Z,
+// Orientation, u32 Reason. The client has already loaded the map the character list named before it
+// sent CMSG_PLAYER_LOGIN; a different MapID here makes it unload and load the new one (LoadNewWorld
+// FUN_140234a80), and SMSG_UPDATE_OBJECT is dropped unless its map matches.
+void WorldSession::SendLoginVerifyWorld(Player* player)
+{
+    WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 24);
+    data << int32(player->GetMapId());
+    data << player->GetPositionX();
+    data << player->GetPositionY();
+    data << player->GetPositionZ();
+    data << player->GetOrientation();
+    data << uint32(0);                                      // Reason
+    SendPacket(&data);
+}
+
+// SMSG_CHARACTER_LOGIN_FAILED, 3.4.3 (handler FUN_14156c4f0 switches on body byte 0): u8 Code, the
+// LoginFailureReason numbering (1 NoWorld ... 7 LockedByBilling; anything unknown shows
+// CHAR_LOGIN_FAILED). The client tears the world down and goes back to the character list.
 void WorldSession::SendCharLoginFailed(LoginFailureReason reason)
 {
     WorldPacket data(SMSG_CHARACTER_LOGIN_FAILED, 1);

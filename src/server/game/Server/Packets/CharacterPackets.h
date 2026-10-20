@@ -44,12 +44,15 @@ namespace WorldPackets
             bool ShowHelm = false;
         };
 
+        // 3.4.3 (writer FUN_14075e780): bit IdleLogout, flush
         class LogoutRequest final : public ClientPacket
         {
         public:
             LogoutRequest(WorldPacket&& packet) : ClientPacket(std::move(packet)) { }
 
-            void Read() override { }
+            void Read() override { IdleLogout = _worldPacket.ReadBit(); }
+
+            bool IdleLogout = false;
         };
 
         class LogoutResponse final : public ServerPacket

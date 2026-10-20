@@ -29,8 +29,10 @@ void WorldPackets::Character::ShowingHelm::Read()
 
 WorldPacket const* WorldPackets::Character::LogoutResponse::Write()
 {
-    _worldPacket << uint32(LogoutResult);
-    _worldPacket << uint8(Instant);
+    // 3.4.3 (parser FUN_1406b89a0, handler FUN_14156ca30): i32 LogoutResult, bit Instant, flush
+    _worldPacket << int32(LogoutResult);
+    _worldPacket.WriteBit(Instant);
+    _worldPacket.FlushBits();
     return &_worldPacket;
 }
 

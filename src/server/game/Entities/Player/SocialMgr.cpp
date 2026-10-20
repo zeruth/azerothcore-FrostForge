@@ -19,6 +19,7 @@
 #include "AccountMgr.h"
 #include "DatabaseEnv.h"
 #include "ObjectMgr.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "Util.h"
@@ -122,6 +123,11 @@ void PlayerSocial::SetFriendNote(ObjectGuid const& friendGuid, std::string note)
     m_playerSocialMap[friendGuid].Note = note;
 }
 
+// SMSG_CONTACT_LIST, 3.4.3 (parser FUN_1406bc760 -> FUN_1406f9b20, handler FUN_141571630):
+// u32 Flags, u8 Count, then per contact PackedGuid128 Guid, PackedGuid128 WowAccountGuid,
+// u32 VirtualRealmAddr, u32 NativeRealmAddr, u32 TypeFlags, u8 Status, u32 AreaID, u32 Level,
+// u32 ClassID, 10 bits Notes length, bit Mobile, flush, Notes (no NUL). Flags 0x1 resets the
+// friends list (100 kept) and 0x2 the ignore list (50 kept) before filling them.
 void PlayerSocial::SendSocialList(Player* player, uint32 flags)
 {
     if (!player)
@@ -131,10 +137,11 @@ void PlayerSocial::SendSocialList(Player* player, uint32 flags)
     uint32 ignoredCount = 0;
     uint32 totalCount = 0;
 
-    WorldPacket data(SMSG_CONTACT_LIST, (4 + 4 + m_playerSocialMap.size() * 25)); // just can guess size
+    WorldPacket data(SMSG_CONTACT_LIST, (4 + 1 + m_playerSocialMap.size() * 48)); // just can guess size
     data << uint32(flags);                                                        // 0x1 = Friendlist update. 0x2 = Ignorelist update. 0x4 = Mutelist update.
     std::size_t countPos = data.wpos();
-    data << uint32(0);                                                           // contacts count placeholder
+    data << uint8(0);                                                            // contacts count placeholder
+    uint32 const realmAddress = Guid128::VirtualRealmAddress();
 
     for (auto& itr : m_playerSocialMap)
     {
@@ -153,26 +160,32 @@ void PlayerSocial::SendSocialList(Player* player, uint32 flags)
             if (++ignoredCount > SOCIALMGR_IGNORE_LIMIT)
                 continue;
 
+        if (totalCount == 255)
+            break;
         ++totalCount;
 
         sSocialMgr->GetFriendInfo(player, itr.first, friendInfo);
 
-        data << itr.first;                                    // player guid
-        data << uint32(contactFlags);                         // player flag (0x1 = Friend, 0x2 = Ignored, 0x4 = Muted)
-        data << friendInfo.Note;                              // string note
-        if (contactFlags & SOCIAL_FLAG_FRIEND)                // if IsFriend()
-        {
-            data << uint8(friendInfo.Status);                 // online/offline/etc?
-            if (friendInfo.Status)                            // if online
-            {
-                data << uint32(friendInfo.Area);              // player area
-                data << uint32(friendInfo.Level);             // player level
-                data << uint32(friendInfo.Class);             // player class
-            }
-        }
+        std::string const& note = friendInfo.Note.size() < 1024 ? friendInfo.Note : std::string();
+        bool const online = (contactFlags & SOCIAL_FLAG_FRIEND) && friendInfo.Status;
+
+        Guid128::WritePlayer(data, itr.first);                // Guid
+        Guid128::WritePacked(data, 0, 0);                     // WowAccountGuid: not sent [Battle.net friends]
+        data << uint32(realmAddress);                         // VirtualRealmAddr
+        data << uint32(realmAddress);                         // NativeRealmAddr
+        data << uint32(contactFlags);                         // TypeFlags (0x1 = Friend, 0x2 = Ignored, 0x4 = Muted)
+        data << uint8((contactFlags & SOCIAL_FLAG_FRIEND) ? friendInfo.Status : 0);
+        data << uint32(online ? friendInfo.Area : 0);
+        data << uint32(online ? friendInfo.Level : 0);
+        data << uint32(online ? friendInfo.Class : 0);
+        data.WriteBits(note.size(), 10);
+        data.WriteBit(false);                                 // Mobile
+        data.FlushBits();
+        if (!note.empty())
+            data.append(note.data(), note.size());
     }
 
-    data.put<uint32>(countPos, totalCount);
+    data.put<uint8>(countPos, uint8(totalCount));
     player->SendDirectMessage(&data);
     LOG_DEBUG("network", "WORLD: Sent SMSG_CONTACT_LIST");
 }

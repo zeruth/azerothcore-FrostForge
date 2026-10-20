@@ -27,7 +27,8 @@ WorldPacket const* WorldPackets::WorldState::InitWorldStates::Write()
     _worldPacket << int32(ZoneID);
     _worldPacket << int32(AreaID);
 
-    _worldPacket << uint16(Worldstates.size());
+    // 3.4.3 (parser FUN_1406c2390, handler FUN_141b1a030): u32 Count
+    _worldPacket << uint32(Worldstates.size());
     for (WorldStateInfo const& wsi : Worldstates)
     {
         _worldPacket << int32(wsi.VariableID);
@@ -39,8 +40,11 @@ WorldPacket const* WorldPackets::WorldState::InitWorldStates::Write()
 
 WorldPacket const* WorldPackets::WorldState::UpdateWorldState::Write()
 {
+    // 3.4.3 (parser FUN_1406c7bb0, handler FUN_141b1a150): u32 VariableID, i32 Value, bit Hidden, flush
     _worldPacket << int32(VariableID);
     _worldPacket << int32(Value);
+    _worldPacket.WriteBit(false);                           // Hidden
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }

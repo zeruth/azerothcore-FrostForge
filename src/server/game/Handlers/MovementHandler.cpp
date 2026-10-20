@@ -37,6 +37,7 @@
 #include "UpdateData.h"
 #include "Vehicle.h"
 #include "WaypointMovementGenerator.h"
+#include "PacketGuid128.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -777,19 +778,31 @@ void WorldSession::HandleForceSpeedChangeAck(WorldPacket& recvData)
     }
 }
 
+// CMSG_SET_ACTIVE_MOVER, 3.4.3 (writer FUN_140763ba0, sent by FUN_1417b1b50): PackedGuid128 ActiveMover.
+// The client sends it when SMSG_MOVE_SET_ACTIVE_MOVER names another unit, or when it takes control
+// of a charmed unit or vehicle; at login it takes its mover from the active player's create instead.
+// Only player movers can be checked until other objects have 3.4.3 GUIDs.
 void WorldSession::HandleSetActiveMoverOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_SET_ACTIVE_MOVER");
 
-    ObjectGuid guid;
-    recvData >> guid;
+    uint64 low, high;
+    Guid128::ReadPacked(recvData, low, high);
 
-    if (GetPlayer()->IsInWorld() && _player->m_mover && _player->m_mover->IsInWorld())
+    if (GetPlayer()->IsInWorld() && _player->m_mover && _player->m_mover->IsInWorld() && _player->m_mover->IsPlayer())
     {
-        if (_player->m_mover->GetGUID() != guid)
-            LOG_ERROR("network.opcode", "HandleSetActiveMoverOpcode: incorrect mover guid: mover is {} and should be {}",
-                guid.ToString(), _player->m_mover->GetGUID().ToString());
+        ObjectGuid const& mover = _player->m_mover->GetGUID();
+        if (high != Guid128::PlayerHigh() || low != mover.GetCounter())
+            LOG_ERROR("network.opcode", "HandleSetActiveMoverOpcode: incorrect mover guid: mover is {:016X}{:016X} and should be {}",
+                high, low, mover.ToString());
     }
+}
+
+// CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE, 3.4.3 (writer FUN_140762e90): u32 Ticks. Sent once the client
+// has made the active player (or the unit it controls) its mover; nothing to answer.
+void WorldSession::HandleMoveInitActiveMoverComplete(WorldPacket& recvData)
+{
+    recvData.read_skip<uint32>();
 }
 
 void WorldSession::HandleMoveNotActiveMover(WorldPacket& recvData)

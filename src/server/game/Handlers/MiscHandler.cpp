@@ -44,6 +44,8 @@
 #include "OutdoorPvP.h"
 #include "Pet.h"
 #include "Player.h"
+#include "PacketGuid128.h"
+#include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "Spell.h"
@@ -807,10 +809,24 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recv_data)
         player->TeleportTo(at->target_mapId, at->target_X, at->target_Y, at->target_Z, at->target_Orientation, TELE_TO_NOT_LEAVE_TRANSPORT);
 }
 
+// CMSG_UPDATE_ACCOUNT_DATA, 3.4.3 (writer FUN_140769e80): PackedGuid128 PlayerGuid, i64 Time,
+// u32 Size (uncompressed), 4 bits DataType, flush, u32 CompressedSize, zlib data. The GUID is the
+// character being played even for the account-wide types. No answer.
 void WorldSession::HandleUpdateAccountData(WorldPacket& recv_data)
 {
-    uint32 type, timestamp, decompressedSize;
-    recv_data >> type >> timestamp >> decompressedSize;
+    Guid128::Skip(recv_data);
+    int64 time = recv_data.read<int64>();
+    uint32 decompressedSize = recv_data.read<uint32>();
+    uint32 type = recv_data.ReadBits(4);
+    uint32 compressedSize = recv_data.read<uint32>();
+    uint32 timestamp = uint32(time);
+
+    if (compressedSize > recv_data.size() - recv_data.rpos())
+    {
+        recv_data.rfinish();
+        LOG_ERROR("network.opcode", "UAD: compressed size {} past the packet end", compressedSize);
+        return;
+    }
 
     LOG_DEBUG("network", "UAD: type {}, time {}, decompressedSize {}", type, timestamp, decompressedSize);
 
@@ -843,17 +859,23 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recv_data)
 
     recv_data.rfinish();                       // uncompress read (recv_data.size() - recv_data.rpos())
 
-    std::string adata;
-    dest >> adata;
+    std::string adata(reinterpret_cast<char const*>(dest.contents()), realSize);
+    if (std::size_t nul = adata.find('\0'); nul != std::string::npos)
+        adata.resize(nul);
 
     // the 3.4.3 client has no SMSG_UPDATE_ACCOUNT_DATA_COMPLETE
     SetAccountData(AccountDataType(type), timestamp, adata);
 }
 
+// CMSG_REQUEST_ACCOUNT_DATA, 3.4.3 (writer FUN_140768c20, sent from the SMSG_ACCOUNT_DATA_TIMES handler):
+// PackedGuid128 PlayerGuid, 4 bits DataType, flush.
+// SMSG_UPDATE_ACCOUNT_DATA (parser FUN_1406ccbc0, handler FUN_14156f190): PackedGuid128 Player, i64 Time,
+// u32 Size (uncompressed), 4 bits DataType, flush, u32 CompressedSize, zlib data. The client takes it
+// only for a type it asked for, and for a per-character type only with its own GUID.
 void WorldSession::HandleRequestAccountData(WorldPacket& recv_data)
 {
-    uint32 type;
-    recv_data >> type;
+    Guid128::Skip(recv_data);
+    uint32 type = recv_data.ReadBits(4);
 
     LOG_DEBUG("network", "RAD: type {}", type);
 
@@ -877,20 +899,25 @@ void WorldSession::HandleRequestAccountData(WorldPacket& recv_data)
 
     dest.resize(destSize);
 
-    WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA, 8 + 4 + 4 + 4 + destSize);
-    data << (_player ? _player->GetGUID() : ObjectGuid::Empty); // player guid
-    data << uint32(type);                                       // type (0-7)
-    data << uint32(adata->Time);                                // unix time
-    data << uint32(size);                                       // decompressed length
-    data.append(dest);                                          // compressed data
+    WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA, 18 + 8 + 4 + 1 + 4 + destSize);
+    Guid128::WritePlayer(data, _player ? _player->GetGUID() : ObjectGuid::Empty);
+    data << int64(adata->Time);                                 // Time
+    data << uint32(size);                                       // Size (uncompressed)
+    data.WriteBits(type, 4);                                    // DataType
+    data.FlushBits();
+    data << uint32(size ? destSize : 0);                        // CompressedSize
+    if (size)
+        data.append(dest);                                      // compressed data
     SendPacket(&data);
 }
 
+// CMSG_SET_ACTION_BUTTON, 3.4.3 (writer FUN_1407604d0): u32 Action (packed as in
+// SMSG_UPDATE_ACTION_BUTTONS, 0 = clear), u8 Index (< 180)
 void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recv_data)
 {
-    uint8 button;
     uint32 packetData;
-    recv_data >> button >> packetData;
+    uint8 button;
+    recv_data >> packetData >> button;
 
     uint32 action = ACTION_BUTTON_ACTION(packetData);
     uint8  type   = ACTION_BUTTON_TYPE(packetData);
@@ -939,6 +966,7 @@ void WorldSession::HandleNextCinematicCamera(WorldPacket& /*recv_data*/)
     GetPlayer()->GetCinematicMgr().StartCinematicCamera();
 }
 
+// CMSG_SET_ACTION_BAR_TOGGLES, 3.4.3 (writer FUN_140760490): u8 Mask
 void WorldSession::HandleSetActionBarToggles(WorldPacket& recv_data)
 {
     uint8 ActionBar;
@@ -953,6 +981,105 @@ void WorldSession::HandleSetActionBarToggles(WorldPacket& recv_data)
     }
 
     GetPlayer()->SetByteValue(PLAYER_FIELD_BYTES, 2, ActionBar);
+}
+
+// CMSG_REQUEST_FORCED_REACTIONS, 3.4.3 (writer FUN_14075fe70, empty): the client asks for them
+// each time it rebuilds its reputation list, starting with SMSG_INITIALIZE_FACTIONS.
+void WorldSession::HandleRequestForcedReactions(WorldPacket& /*recvData*/)
+{
+    GetPlayer()->GetReputationMgr().SendForceReactions();
+}
+
+// CMSG_REQUEST_CEMETERY_LIST, 3.4.3 (writer FUN_14075fe30, empty) ->
+// SMSG_REQUEST_CEMETERY_LIST_RESPONSE (handler FUN_141736c00): bit IsGossipTriggered, flush,
+// u32 Count, u32 CemeteryID[Count]. It feeds the preferred-graveyard choice, which Wrath does not
+// have, so the list is empty.
+void WorldSession::HandleRequestCemeteryList(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_REQUEST_CEMETERY_LIST_RESPONSE, 1 + 4);
+    data.WriteBit(false);                                   // IsGossipTriggered
+    data.FlushBits();
+    data << uint32(0);
+    SendPacket(&data);
+}
+
+// CMSG_VIOLENCE_LEVEL, 3.4.3 (writer FUN_140763d50): u8 ViolenceLevel, the client's gore setting.
+// Nothing on the server depends on it.
+void WorldSession::HandleViolenceLevel(WorldPacket& recvData)
+{
+    recvData.read_skip<uint8>();
+}
+
+// CMSG_LOADING_SCREEN_NOTIFY, 3.4.3 (writer FUN_140768110): u32 MapID, bit Showing, flush. Showing = 1
+// when a loading screen comes up (EnterWorld, SMSG_TRANSFER_PENDING), 0 when it goes away, which at
+// login happens once SMSG_UPDATE_OBJECT has created the active player. Informational.
+// CMSG_SERVER_TIME_OFFSET_REQUEST, 3.4.3 (writer 0x140768f20, empty; sent every 90 s or so once
+// SMSG_AUTH_RESPONSE succeeded) -> SMSG_SERVER_TIME_OFFSET (handler FUN_1414f81d0): i64 Time, unix seconds.
+void WorldSession::HandleServerTimeOffsetRequest(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_SERVER_TIME_OFFSET, 8);
+    data << int64(GameTime::GetGameTime().count());
+    SendPacket(&data);
+}
+
+// CMSG_GET_UNDELETE_CHARACTER_COOLDOWN_STATUS, 3.4.3 (writer FUN_140767130, empty) ->
+// SMSG_UNDELETE_COOLDOWN_STATUS_RESPONSE (parser FUN_1406cc9b0, handler FUN_14167b170): bit OnCooldown,
+// flush, u32 MaxCooldown, u32 CurrentCooldown. Undelete is not offered (the glue feature status has
+// CharUndeleteEnabled off), so: no cooldown.
+void WorldSession::HandleGetUndeleteCharacterCooldownStatus(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_UNDELETE_COOLDOWN_STATUS_RESPONSE, 9);
+    data.WriteBit(false);                                   // OnCooldown
+    data.FlushBits();
+    data << uint32(0);                                      // MaxCooldown
+    data << uint32(0);                                      // CurrentCooldown
+    SendPacket(&data);
+}
+
+// CMSG_SOCIAL_CONTRACT_REQUEST, 3.4.3 (empty, Lua C_SocialContractGlue.GetShouldShowSocialContract) ->
+// SMSG_SOCIAL_CONTRACT_REQUEST_RESPONSE (parser FUN_1406bcba0, handler FUN_1419ee980): bit ShouldShow, flush.
+void WorldSession::HandleSocialContractRequest(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_SOCIAL_CONTRACT_REQUEST_RESPONSE, 1);
+    data.WriteBit(false);                                   // ShouldShow
+    data.FlushBits();
+    SendPacket(&data);
+}
+
+// CMSG_BATTLE_PAY_GET_PRODUCT_LIST, 3.4.3 (empty) -> SMSG_BATTLE_PAY_GET_PRODUCT_LIST_RESPONSE (parser
+// FUN_1406f84c0): u32 Result, u32 CurrencyID, u32 ProductInfos, u32 Products, u32 ProductGroups, u32 Shops,
+// then the arrays. There is no shop: an empty list.
+void WorldSession::HandleBattlePayGetProductList(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_BATTLE_PAY_GET_PRODUCT_LIST_RESPONSE, 24);
+    data << uint32(0) << uint32(0) << uint32(0) << uint32(0) << uint32(0) << uint32(0);
+    SendPacket(&data);
+}
+
+// CMSG_BATTLE_PAY_GET_PURCHASE_LIST, 3.4.3 (empty) -> SMSG_BATTLE_PAY_GET_PURCHASE_LIST_RESPONSE (parser
+// FUN_1406b8f90): u32 Result, u32 Count, purchases. None.
+void WorldSession::HandleBattlePayGetPurchaseList(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_BATTLE_PAY_GET_PURCHASE_LIST_RESPONSE, 8);
+    data << uint32(0) << uint32(0);
+    SendPacket(&data);
+}
+
+// CMSG_UPDATE_VAS_PURCHASE_STATES, 3.4.3 (empty) -> SMSG_ENUM_VAS_PURCHASE_STATES_RESPONSE (parser
+// FUN_1406bf210): 6 bits count, flush, entries. None.
+void WorldSession::HandleUpdateVasPurchaseStates(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_ENUM_VAS_PURCHASE_STATES_RESPONSE, 1);
+    data.WriteBits(0, 6);
+    data.FlushBits();
+    SendPacket(&data);
+}
+
+void WorldSession::HandleLoadingScreenNotify(WorldPacket& recvData)
+{
+    uint32 mapId = recvData.read<uint32>();
+    bool showing = recvData.ReadBit();
+    LOG_DEBUG("network", "CMSG_LOADING_SCREEN_NOTIFY: map {} {}", mapId, showing ? "shown" : "hidden");
 }
 
 void WorldSession::HandlePlayedTime(WorldPackets::Character::PlayedTimeClient& packet)
@@ -1590,10 +1717,25 @@ void WorldSession::HandleReadyForAccountDataTimes(WorldPacket& /*recv_data*/)
     SendAccountDataTimes(GLOBAL_CACHE_MASK);
 }
 
-void WorldSession::SendSetPhaseShift(uint32 PhaseShift)
+// SMSG_PHASE_SHIFT_CHANGE, 3.4.3 (parser FUN_1407022e0, phase data FUN_14071d4e0, handler FUN_141677460):
+// PackedGuid128 Client, u32 PhaseShiftFlags, u32 PhaseCount, PackedGuid128 PersonalGUID,
+// {u16 PhaseFlags, u16 Id}[PhaseCount], then three byte-counted u16 arrays: VisibleMapIDs,
+// PreloadMapIDs, UiMapPhaseIDs.
+// AC's phases are a 3.3.5 bit mask the 3.4.3 client cannot use (its phases are Phase.db2 ids), so
+// the client is told it is unphased; the server keeps filtering visibility by the mask itself.
+void WorldSession::SendSetPhaseShift(uint32 /*phaseShift*/)
 {
-    WorldPacket data(SMSG_PHASE_SHIFT_CHANGE, 4);
-    data << uint32(PhaseShift);
+    if (!_player)
+        return;
+
+    WorldPacket data(SMSG_PHASE_SHIFT_CHANGE, 2 + 16 + 4 + 4 + 2 + 12);
+    Guid128::WritePlayer(data, _player->GetGUID());         // Client
+    data << uint32(0x08);                                   // PhaseShiftFlags: Unphased
+    data << uint32(0);                                      // PhaseCount
+    Guid128::WritePacked(data, 0, 0);                       // PersonalGUID
+    data << uint32(0);                                      // VisibleMapIDs (bytes)
+    data << uint32(0);                                      // PreloadMapIDs (bytes)
+    data << uint32(0);                                      // UiMapPhaseIDs (bytes)
     SendPacket(&data);
 }
 

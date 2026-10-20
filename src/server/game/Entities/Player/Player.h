@@ -1767,7 +1767,13 @@ public:
 
     void SendProficiency(ItemClass itemClass, uint32 itemSubclassMask);
     void SendInitialSpells();
+    void SendSpellHistory();
+    void SendSpellCharges();
+    void SendActiveGlyphs();
+    void SendCurrencies() const;
     void SendLearnPacket(uint32 spellId, bool learn);
+    void SendSupercededSpell(uint32 oldSpellId, uint32 newSpellId);
+    void SendSpellModifier(SpellModType type, uint8 op, uint8 classIndex, int32 total);
     bool addSpell(uint32 spellId, uint8 addSpecMask, bool updateActive, bool temporary = false, bool learnFromSkill = false);
     bool _addSpell(uint32 spellId, uint8 addSpecMask, bool temporary, bool learnFromSkill = false,
         bool sendPacket = true);
@@ -1915,7 +1921,7 @@ public:
     ActionButton* addActionButton(uint8 button, uint32 action, uint8 type);
     void removeActionButton(uint8 button);
     ActionButton const* GetActionButton(uint8 button);
-    void SendInitialActionButtons() const { SendActionButtons(1); }
+    void SendInitialActionButtons() const { SendActionButtons(0); }
     void SendActionButtons(uint32 state) const;
     bool IsActionButtonDataValid(uint8 button, uint32 action, uint8 type);
 

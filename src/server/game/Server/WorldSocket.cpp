@@ -474,6 +474,10 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             // empty (FUN_14076a5d0); may come right after CMSG_AUTH_SESSION. The socket keeps no-delay.
             LogOpcodeText(opcode, sessionGuard);
             return ReadDataHandlerResult::Ok;
+        case CMSG_KEEP_ALIVE:
+            // empty (FUN_1407675d0); sent while a loading screen is up ("Loading Screen Ping SEND")
+            LogOpcodeText(opcode, sessionGuard);
+            return ReadDataHandlerResult::Ok;
         case CMSG_QUEUED_MESSAGES_END:
             // u32 Timestamp; nothing is queued across connections here
             LogOpcodeText(opcode, sessionGuard);
