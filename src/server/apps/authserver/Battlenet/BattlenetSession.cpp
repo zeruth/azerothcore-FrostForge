@@ -307,6 +307,8 @@ namespace Battlenet
 
     void Session::HandleRequest(bgs::protocol::Header const& header, uint8 const* body, std::size_t size)
     {
+        LOG_DEBUG("server.battlenet", "{} call service {:08X} method {} token {} ({} bytes)", _remote,
+            header.service_hash(), header.method_id(), header.token(), size);
         // The client runs bindless (ConnectRequest.use_bindless_rpc): the service is named by hash.
         switch (header.service_hash())
         {
