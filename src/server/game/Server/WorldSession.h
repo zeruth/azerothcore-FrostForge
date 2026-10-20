@@ -30,6 +30,7 @@
 #include "DatabaseEnv.h"
 #include "Duration.h"
 #include "GossipDef.h"
+#include "Optional.h"
 #include "Packet.h"
 #include "QueryHolder.h"
 #include "SharedDefines.h"
@@ -37,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include <vector>
 
 class Creature;
 class GameObject;
@@ -347,6 +349,15 @@ public:
     bool Process(WorldPacket* packet) override;
 };
 
+/// One appearance choice of a 3.4.3 character (JamChrCustomizationChoice): a ChrCustomizationOption
+/// and the ChrCustomizationChoice picked for it. Characters store these natively
+/// (character_customizations), in place of 3.3.5's skin/face/hair bytes.
+struct ChrCustomizationChoice
+{
+    uint32 ChrCustomizationOptionID = 0;
+    uint32 ChrCustomizationChoiceID = 0;
+};
+
 // Proxy structure to contain data passed to callback function,
 // only to prevent bloating the parameter list
 class CharacterCreateInfo
@@ -373,6 +384,12 @@ protected:
     uint8 HairColor = 0;
     uint8 FacialHair = 0;
     uint8 OutfitId = 0;
+
+    /// 3.4.3 CMSG_CREATE_CHARACTER (writer FUN_140754ce0); Skin..FacialHair above stay 0 (D5)
+    std::vector<ChrCustomizationChoice> Customizations;
+    Optional<uint32> TemplateSet;
+    bool IsTrialBoost = false;
+    bool UseNPE = false;
 
     /// Server side data
     uint8 CharCount = 0;
@@ -685,14 +702,14 @@ public:                                                 // opcodes handlers
     void HandleCharDeleteOpcode(WorldPacket& recvPacket);
     void HandleCharCreateOpcode(WorldPacket& recvPacket);
     void HandlePlayerLoginOpcode(WorldPacket& recvPacket);
-    void HandleCharEnum(PreparedQueryResult result);
+    void HandleCharEnum(PreparedQueryResult result, PreparedQueryResult customizations);
     void HandlePlayerLoginFromDB(LoginQueryHolder const& holder);
     void HandlePlayerLoginToCharInWorld(Player* pCurrChar);
     void HandlePlayerLoginToCharOutOfWorld(Player* pCurrChar);
     void HandleCharFactionOrRaceChange(WorldPacket& recvData);
     void HandleCharFactionOrRaceChangeCallback(std::shared_ptr<CharacterFactionChangeInfo> factionChangeInfo, PreparedQueryResult result);
 
-    void SendCharCreate(ResponseCodes result);
+    void SendCharCreate(ResponseCodes result, ObjectGuid const& guid = ObjectGuid::Empty);
     void SendCharDelete(ResponseCodes result);
     void SendCharLoginFailed(LoginFailureReason reason);
     void SendCharRename(ResponseCodes result, CharacterRenameInfo const* renameInfo);

@@ -534,8 +534,8 @@ void OpcodeTable::Initialize()
     /*0x26FE*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_26FE_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x26FF*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_26FF_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x2700*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SET_FACTION_AT_WAR,                                         STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x2701*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CREATE_CHAR,                                                STATUS_NEVER,      LAYOUT_335);
-    /*0x2702*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DELETE_CHAR,                                                STATUS_NEVER,      LAYOUT_335);
+    /*0x2701*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CREATE_CHAR,                                                STATUS_NEVER,      LAYOUT_343);
+    /*0x2702*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DELETE_CHAR,                                                STATUS_NEVER,      LAYOUT_343);
     /*0x2703*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_TRANSFER_ABORTED,                                           STATUS_NEVER,      LAYOUT_335);
     /*0x2704*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PET_GUIDS,                                                  STATUS_NEVER,      LAYOUT_335);
     /*0x2705*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CHARACTER_LOGIN_FAILED,                                     STATUS_NEVER,      LAYOUT_335);
@@ -1914,7 +1914,7 @@ void OpcodeTable::Initialize()
     /*0x3634*/ DEFINE_HANDLER(CMSG_COLLECTION_ITEM_SET_FAVORITE,                               STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3635*/ DEFINE_HANDLER(CMSG_DO_READY_CHECK,                                             STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleRaidReadyCheckOpcode,               LAYOUT_335);
     /*0x3636*/ DEFINE_HANDLER(CMSG_READY_CHECK_RESPONSE,                                       STATUS_NEVER,      PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
-    /*0x3645*/ DEFINE_HANDLER(CMSG_CREATE_CHARACTER,                                           STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleCharCreateOpcode,                   LAYOUT_335);
+    /*0x3645*/ DEFINE_HANDLER(CMSG_CREATE_CHARACTER,                                           STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleCharCreateOpcode,                   LAYOUT_343);
     /*0x3647*/ DEFINE_HANDLER(CMSG_SUPPORT_TICKET_SUBMIT_COMPLAINT,                            STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3648*/ DEFINE_HANDLER(CMSG_SUPPORT_TICKET_SUBMIT_BUG,                                  STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleBugOpcode,                          LAYOUT_335);
     /*0x3649*/ DEFINE_HANDLER(CMSG_SUPPORT_TICKET_SUBMIT_SUGGESTION,                           STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
@@ -1976,7 +1976,7 @@ void OpcodeTable::Initialize()
     /*0x3694*/ DEFINE_HANDLER(CMSG_REQUEST_ACCOUNT_DATA,                                       STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleRequestAccountData,                 LAYOUT_335);
     /*0x3695*/ DEFINE_HANDLER(CMSG_UPDATE_ACCOUNT_DATA,                                        STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleUpdateAccountData,                  LAYOUT_335);
     /*0x369C*/ DEFINE_HANDLER(CMSG_SERVER_TIME_OFFSET_REQUEST,                                 STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
-    /*0x369D*/ DEFINE_HANDLER(CMSG_CHAR_DELETE,                                                STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleCharDeleteOpcode,                   LAYOUT_335);
+    /*0x369D*/ DEFINE_HANDLER(CMSG_CHAR_DELETE,                                                STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleCharDeleteOpcode,                   LAYOUT_343);
     /*0x36A1*/ DEFINE_HANDLER(CMSG_LOW_LEVEL_RAID1,                                            STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x36A3*/ DEFINE_HANDLER(CMSG_INSPECT_PVP,                                                STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x36A4*/ DEFINE_HANDLER(CMSG_QUERY_ARENA_TEAM,                                           STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleArenaTeamQueryOpcode,               LAYOUT_335);

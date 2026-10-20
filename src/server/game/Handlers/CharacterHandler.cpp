@@ -62,6 +62,9 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
+#include <algorithm>
+#include <limits>
+#include <unordered_map>
 
 LoginQueryHolder::LoginQueryHolder(uint32 accountId, ObjectGuid guid)
     : _accountId(accountId), _guid(guid) { }
@@ -240,12 +243,49 @@ namespace
                 data << uint8(high >> (8 * i));
     }
 
+    // The reverse (FUN_141550bf0 writes it): two masks, then the non-zero bytes they name.
+    void ReadPackedGuid128(WorldPacket& data, uint64& low, uint64& high)
+    {
+        uint8 lowMask = data.read<uint8>();
+        uint8 highMask = data.read<uint8>();
+        low = high = 0;
+        for (uint8 i = 0; i < 8; ++i)
+            if (lowMask & (1 << i))
+                low |= uint64(data.read<uint8>()) << (8 * i);
+        for (uint8 i = 0; i < 8; ++i)
+            if (highMask & (1 << i))
+                high |= uint64(data.read<uint8>()) << (8 * i);
+    }
+
     // A player's 128-bit GUID: HighGuid Player (2) in the top 6 bits and the realm id under it,
     // the character counter in the low half.
     uint64 PlayerGuidHigh()
     {
         return (uint64(2) << 58) | (uint64(realm.Id.Realm & 0x1FFF) << 42);
     }
+
+    void WritePlayerGuid128(WorldPacket& data, ObjectGuid const& guid)
+    {
+        if (guid.IsEmpty())
+            WritePackedGuid128(data, 0, 0);
+        else
+            WritePackedGuid128(data, guid.GetCounter(), PlayerGuidHigh());
+    }
+
+    // A character GUID from the client: HighGuid Player, this realm, a 32-bit counter. Empty otherwise.
+    ObjectGuid ReadPlayerGuid128(WorldPacket& data)
+    {
+        uint64 low, high;
+        ReadPackedGuid128(data, low, high);
+        if (high != PlayerGuidHigh() || !low || low > std::numeric_limits<ObjectGuid::LowType>::max())
+            return ObjectGuid::Empty;
+        return ObjectGuid::Create<HighGuid::Player>(ObjectGuid::LowType(low));
+    }
+
+    // At most this many ChrCustomizationChoices in a create request; a 3.4.3 model has well under it.
+    constexpr uint32 MAX_CHARACTER_CUSTOMIZATIONS = 64;
+
+    using CustomizationsByGuid = std::unordered_map<ObjectGuid::LowType, std::vector<ChrCustomizationChoice>>;
 
     constexpr uint32 VISUAL_ITEM_SLOTS = 34;
 
@@ -254,9 +294,9 @@ namespace
     //    guid, name, race, class, gender, skin, face, hairStyle, hairColor, facialStyle, level, zone, map, x, y, z,
     //    16       17           18        19     20       21     22              23              24
     //    guildid, playerFlags, at_login, entry, modelid, level, equipmentCache, banned guid,    extra_flags
-    // Customizations are not sent: 3.4.3 stores ChrCustomizationChoice ids, which come with the
-    // 3.4.3 character schema (D5), not from the 3.3.5 skin/face/hair bytes.
-    bool WriteCharacterInfo(WorldPacket& data, Field* fields, uint8 listPosition)
+    // The customizations are the character's ChrCustomizationChoice rows (character_customizations, D5);
+    // the 3.3.5 skin/face/hair columns are not read.
+    bool WriteCharacterInfo(WorldPacket& data, Field* fields, uint8 listPosition, std::vector<ChrCustomizationChoice> const* customizations)
     {
         uint32 guidLow = fields[0].Get<uint32>();
         std::string name = fields[1].Get<std::string>();
@@ -314,7 +354,7 @@ namespace
         data << uint8(race);
         data << uint8(playerClass);
         data << uint8(gender);
-        data << uint32(0);                                      // Customizations
+        data << uint32(customizations ? customizations->size() : 0);
         data << uint8(fields[10].Get<uint8>());                 // level
         data << uint32(zone);
         data << uint32(fields[12].Get<uint16>());               // map
@@ -346,6 +386,15 @@ namespace
         data << uint32(0);                                      // MailSenders
         data << uint32(0);                                      // MailSenderTypes
         data << uint32(0);                                      // OverrideSelectScreenFileDataID
+        if (customizations)
+        {
+            for (ChrCustomizationChoice const& choice : *customizations)
+            {
+                data << uint32(choice.ChrCustomizationOptionID);
+                data << uint32(choice.ChrCustomizationChoiceID);
+            }
+        }
+                                                                // MailSenderTypes: none
 
         data.WriteBits(name.size(), 6);
         data.WriteBit((atLoginFlags & AT_LOGIN_FIRST) != 0);    // FirstLogin
@@ -362,8 +411,21 @@ namespace
 
 // SMSG_ENUM_CHARACTERS_RESULT, 3.4.3 (parser FUN_1406faac0): the client drops the list unless
 // Success is set (FUN_1416943f0).
-void WorldSession::HandleCharEnum(PreparedQueryResult result)
+void WorldSession::HandleCharEnum(PreparedQueryResult result, PreparedQueryResult customizationsResult)
 {
+    CustomizationsByGuid customizations;
+    if (customizationsResult)
+    {
+        do
+        {
+            Field* fields = customizationsResult->Fetch();
+            ChrCustomizationChoice choice;
+            choice.ChrCustomizationOptionID = fields[1].Get<uint32>();
+            choice.ChrCustomizationChoiceID = fields[2].Get<uint32>();
+            customizations[fields[0].Get<uint32>()].push_back(choice);
+        } while (customizationsResult->NextRow());
+    }
+
     WorldPacket data(SMSG_ENUM_CHARACTERS_RESULT, 1000);
 
     data.WriteBit(true);                                        // Success
@@ -390,7 +452,8 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result)
         {
             ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>((*result)[0].Get<uint32>());
             LOG_DEBUG("network.opcode", "Loading char {} from account {}.", guid.ToString(), GetAccountId());
-            if (WriteCharacterInfo(data, result->Fetch(), uint8(num)))
+            auto choices = customizations.find(guid.GetCounter());
+            if (WriteCharacterInfo(data, result->Fetch(), uint8(num), choices != customizations.end() ? &choices->second : nullptr))
             {
                 _legitCharacters.insert(guid);
                 ++num;
@@ -417,23 +480,91 @@ void WorldSession::HandleCharEnumOpcode(WorldPacket& /*recvData*/)
     stmt->SetData(0, PET_SAVE_AS_CURRENT);
     stmt->SetData(1, GetAccountId());
 
-    _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt).WithPreparedCallback(std::bind(&WorldSession::HandleCharEnum, this, std::placeholders::_1)));
+    // the characters, then their ChrCustomizationChoice rows
+    std::shared_ptr<PreparedQueryResult> characters = std::make_shared<PreparedQueryResult>();
+    _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
+        .WithChainingPreparedCallback([this, characters](QueryCallback& queryCallback, PreparedQueryResult result)
+        {
+            *characters = std::move(result);
+            CharacterDatabasePreparedStatement* customizationsStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ENUM_CUSTOMIZATIONS);
+            customizationsStmt->SetData(0, GetAccountId());
+            queryCallback.SetNextQuery(CharacterDatabase.AsyncQuery(customizationsStmt));
+        })
+        .WithPreparedCallback([this, characters](PreparedQueryResult customizations)
+        {
+            HandleCharEnum(*characters, std::move(customizations));
+        }));
 }
 
+// CMSG_CREATE_CHARACTER, 3.4.3 (writer FUN_140754ce0, char-create.ANALYSIS.md 1):
+//   bits: 6 NameLength, HasTemplateSet, IsTrialBoost, UseNPE; flush
+//   u8 RaceID, u8 ClassID, u8 SexID, u32 CustomizationsCount, Name (no NUL), [u32 TemplateSetID],
+//   CustomizationsCount x { u32 ChrCustomizationOptionID, u32 ChrCustomizationChoiceID }
 void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 {
     std::shared_ptr<CharacterCreateInfo> createInfo = std::make_shared<CharacterCreateInfo>();
 
-    recvData >> createInfo->Name
-             >> createInfo->Race
+    recvData.ResetBitReader();
+    uint32 nameLength = recvData.ReadBits(6);
+    bool hasTemplateSet = recvData.ReadBit();
+    createInfo->IsTrialBoost = recvData.ReadBit();
+    createInfo->UseNPE = recvData.ReadBit();
+
+    uint32 customizationsCount;
+    recvData >> createInfo->Race
              >> createInfo->Class
              >> createInfo->Gender
-             >> createInfo->Skin
-             >> createInfo->Face
-             >> createInfo->HairStyle
-             >> createInfo->HairColor
-             >> createInfo->FacialHair
-             >> createInfo->OutfitId;
+             >> customizationsCount;
+
+    createInfo->Name.resize(nameLength);
+    if (nameLength)
+        recvData.read(reinterpret_cast<uint8*>(createInfo->Name.data()), nameLength);
+
+    if (hasTemplateSet)
+        createInfo->TemplateSet = recvData.read<uint32>();
+
+    if (customizationsCount > MAX_CHARACTER_CUSTOMIZATIONS)
+    {
+        recvData.rfinish();
+        SendCharCreate(CHAR_CREATE_FAILED);
+        LOG_ERROR("network.opcode", "Account:[{}] tried to create a character with {} customizations", GetAccountId(), customizationsCount);
+        return;
+    }
+
+    createInfo->Customizations.resize(customizationsCount);
+    for (ChrCustomizationChoice& choice : createInfo->Customizations)
+        recvData >> choice.ChrCustomizationOptionID >> choice.ChrCustomizationChoiceID;
+
+    // one choice per option
+    {
+        std::vector<ChrCustomizationChoice>& choices = createInfo->Customizations;
+        std::sort(choices.begin(), choices.end(), [](ChrCustomizationChoice const& a, ChrCustomizationChoice const& b)
+        {
+            return a.ChrCustomizationOptionID < b.ChrCustomizationOptionID;
+        });
+        if (std::adjacent_find(choices.begin(), choices.end(), [](ChrCustomizationChoice const& a, ChrCustomizationChoice const& b)
+            {
+                return a.ChrCustomizationOptionID == b.ChrCustomizationOptionID;
+            }) != choices.end())
+        {
+            SendCharCreate(CHAR_CREATE_FAILED);
+            LOG_ERROR("network.opcode", "Account:[{}] tried to create a character with the same customization option twice", GetAccountId());
+            return;
+        }
+    }
+
+    // TODO: check every choice against the 3.4.3 tables once the server loads them: the option must
+    // belong to the ChrModel of (race, sex) (ChrRaceXChrModel, ChrCustomizationOption), the choice to the
+    // option (ChrCustomizationChoice), and any ChrCustomizationReq must be met.
+
+    // AUTH_RESPONSE offers no character templates and no trial boosts
+    if (createInfo->TemplateSet || createInfo->IsTrialBoost)
+    {
+        SendCharCreate(CHAR_CREATE_FAILED);
+        LOG_ERROR("network.opcode", "Account:[{}] tried to create a character from template set {} (trial boost {}), none is offered",
+            GetAccountId(), createInfo->TemplateSet.value_or(0), createInfo->IsTrialBoost);
+        return;
+    }
 
     if (!HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK))
     {
@@ -522,7 +653,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
     uint32 heroic_free_slots = sWorld->getIntConfig(CONFIG_HEROIC_CHARACTERS_PER_REALM);
     if (heroic_free_slots == 0 && !HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT) && createInfo->Class == CLASS_DEATH_KNIGHT)
     {
-        SendCharCreate(CHAR_CREATE_UNIQUE_CLASS_LIMIT);
+        SendCharCreate(CHAR_CREATE_DEATHKNIGHT_DUPLICATE);
         return;
     }
 
@@ -531,7 +662,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
     if (!HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT) && createInfo->Class == CLASS_DEATH_KNIGHT
         && req_level_for_heroic > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) && !HasAccountFlag(ACCOUNT_FLAG_DEATH_KNIGHT_OK))
     {
-        SendCharCreate(CHAR_CREATE_LEVEL_REQUIREMENT);
+        SendCharCreate(CHAR_CREATE_DEATHKNIGHT_LEVEL_REQUIREMENT);
         return;
     }
 
@@ -620,7 +751,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
                         if (freeDeathKnightSlots == 0)
                         {
-                            SendCharCreate(CHAR_CREATE_UNIQUE_CLASS_LIMIT);
+                            SendCharCreate(CHAR_CREATE_DEATHKNIGHT_DUPLICATE);
                             return;
                         }
                     }
@@ -671,7 +802,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
                             if (freeDeathKnightSlots == 0)
                             {
-                                SendCharCreate(CHAR_CREATE_UNIQUE_CLASS_LIMIT);
+                                SendCharCreate(CHAR_CREATE_DEATHKNIGHT_DUPLICATE);
                                 return;
                             }
                         }
@@ -693,7 +824,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
                 if (!hasHeroicReqLevel)
                 {
-                    SendCharCreate(CHAR_CREATE_LEVEL_REQUIREMENT);
+                    SendCharCreate(CHAR_CREATE_DEATHKNIGHT_LEVEL_REQUIREMENT);
                     return;
                 }
             }
@@ -733,6 +864,14 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
             // Player created, save it now
             newChar->SaveToDB(characterTransaction, true, false);
+            for (ChrCustomizationChoice const& choice : createInfo->Customizations)
+            {
+                CharacterDatabasePreparedStatement* customizationStmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_CUSTOMIZATION);
+                customizationStmt->SetData(0, newChar->GetGUID().GetCounter());
+                customizationStmt->SetData(1, choice.ChrCustomizationOptionID);
+                customizationStmt->SetData(2, choice.ChrCustomizationChoiceID);
+                characterTransaction->Append(customizationStmt);
+            }
             createInfo->CharCount++;
 
             LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_REP_REALM_CHARACTERS);
@@ -750,7 +889,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
                     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->getGender(), newChar->getRace(), newChar->getClass(), newChar->GetLevel());
-                    SendCharCreate(CHAR_CREATE_SUCCESS);
+                    SendCharCreate(CHAR_CREATE_SUCCESS, newChar->GetGUID());
                 }
                 else
                     SendCharCreate(CHAR_CREATE_ERROR);
@@ -770,18 +909,25 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
     }));
 }
 
+// CMSG_CHAR_DELETE, 3.4.3 (writer FUN_140765a70): PackedGuid128 Guid
 void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    ObjectGuid guid = ReadPlayerGuid128(recvData);
 
     // Initiating
     uint32 initAccountId = GetAccountId();
+
+    if (guid.IsEmpty())
+    {
+        SendCharDelete(CHAR_DELETE_FAILED);
+        return;
+    }
 
     // can't delete loaded character
     if (ObjectAccessor::FindConnectedPlayer(guid) || sWorldSessionMgr->FindOfflineSessionForCharacterGUID(guid.GetCounter()))
     {
         sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
+        SendCharDelete(CHAR_DELETE_FAILED);
         return;
     }
 
@@ -816,6 +962,7 @@ void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
     if (accountId != initAccountId)
     {
         sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
+        SendCharDelete(CHAR_DELETE_FAILED);
         return;
     }
 
@@ -2749,13 +2896,17 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
     SendCharFactionChange(RESPONSE_SUCCESS, factionChangeInfo.get());
 }
 
-void WorldSession::SendCharCreate(ResponseCodes result)
+// SMSG_CREATE_CHAR, 3.4.3 (parser FUN_1406bb280): u8 Code, PackedGuid128 Guid. The handler
+// (FUN_14156c410) takes 24 = CHAR_CREATE_SUCCESS as success and shows the name of any other code.
+void WorldSession::SendCharCreate(ResponseCodes result, ObjectGuid const& guid /*= ObjectGuid::Empty*/)
 {
-    WorldPacket data(SMSG_CREATE_CHAR, 1);
+    WorldPacket data(SMSG_CREATE_CHAR, 1 + 18);
     data << uint8(result);
+    WritePlayerGuid128(data, guid);
     SendPacket(&data);
 }
 
+// SMSG_DELETE_CHAR, 3.4.3: u8 Code (the handler FUN_14156c480 reads body byte 0; 63 = CHAR_DELETE_SUCCESS)
 void WorldSession::SendCharDelete(ResponseCodes result)
 {
     WorldPacket data(SMSG_DELETE_CHAR, 1);
