@@ -16,6 +16,7 @@
  */
 
 #include "CombatPackets.h"
+#include "PacketGuid128.h"
 
 void WorldPackets::Combat::SetSheathed::Read()
 {
@@ -24,11 +25,11 @@ void WorldPackets::Combat::SetSheathed::Read()
 
 WorldPacket const* WorldPackets::Combat::SAttackStop::Write()
 {
-    // Packed in place because ObjectGuid::WriteAsPacked() returns a PackedGuid by value, and each one
-    // heap-allocates its buffer. Use it again once TC's non-owning PackedGuidWriter is ported.
-    _worldPacket.appendPackGUID(Attacker.GetRawValue());
-    _worldPacket.appendPackGUID(Victim.GetRawValue());
-    _worldPacket << uint32(NowDead);
+    // 3.4.3: PackedGuid128 Attacker, PackedGuid128 Victim, bit NowDead, flush
+    Guid128::Write(_worldPacket, Attacker);
+    Guid128::Write(_worldPacket, Victim);
+    _worldPacket.WriteBit(NowDead);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }

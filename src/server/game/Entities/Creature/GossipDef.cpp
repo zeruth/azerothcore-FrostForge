@@ -20,6 +20,7 @@
 #include "Object.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "ScriptMgr.h"
@@ -377,9 +378,10 @@ void PlayerMenu::SendQuestGiverQuestList(QEmote const& eEmote, std::string const
 
 void PlayerMenu::SendQuestGiverStatus(uint8 questStatus, ObjectGuid npcGUID) const
 {
-    WorldPacket data(SMSG_QUEST_GIVER_STATUS, 9);
-    data << npcGUID;
-    data << uint8(questStatus);
+    // SMSG_QUEST_GIVER_STATUS, 3.4.3: PackedGuid128 QuestGiver, u64 Status
+    WorldPacket data(SMSG_QUEST_GIVER_STATUS, 26);
+    Guid128::Write(data, npcGUID);
+    data << uint64(ClientQuestGiverStatus(questStatus));
 
     _session->SendPacket(&data);
     LOG_DEBUG("network", "WORLD: Sent SMSG_QUEST_GIVER_STATUS NPC {}, status={}", npcGUID.ToString(), questStatus);

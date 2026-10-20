@@ -2484,9 +2484,10 @@ Unit* Creature::SelectNearestTargetInAttackDistance(float dist) const
 
 void Creature::SendAIReaction(AiReaction reactionType)
 {
-    WorldPacket data(SMSG_AI_REACTION, 12);
+    // SMSG_AI_REACTION, 3.4.3: PackedGuid128 UnitGUID, u32 Reaction
+    WorldPacket data(SMSG_AI_REACTION, 22);
 
-    data << GetGUID();
+    Guid128::Write(data, GetGUID());
     data << uint32(reactionType);
 
     ((WorldObject*)this)->SendMessageToSet(&data, true);

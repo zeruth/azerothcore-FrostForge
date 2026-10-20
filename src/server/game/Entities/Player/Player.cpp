@@ -2358,20 +2358,16 @@ void Player::RemoveFromGroup(Group* group, ObjectGuid guid, RemoveMethod method 
 
 void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool recruitAFriend, float /*group_rate*/)
 {
-    WorldPacket data(SMSG_LOG_XP_GAIN, 22); // guess size?
-    data << (victim ? victim->GetGUID() : ObjectGuid::Empty);   // guid
-    data << uint32(GivenXP + BonusXP);                          // given experience
-    data << uint8(victim ? 0 : 1);                              // 00-kill_xp type, 01-non_kill_xp type
-
-    if (victim)
-    {
-        data << uint32(GivenXP);                            // experience without bonus
-
-        // should use group_rate here but can't figure out how
-        data << float(1);                                   // 1 - none 0 - 100% group bonus output
-    }
-
-    data << uint8(recruitAFriend ? 1 : 0);                  // does the GivenXP include a RaF bonus?
+    // SMSG_LOG_XP_GAIN, 3.4.3: PackedGuid128 Victim, i32 Original (with
+    // bonuses), u8 Reason (0 kill, 1 other), i32 Amount (without), f32 GroupBonus; the refer-a-friend
+    // byte is gone
+    (void)recruitAFriend;
+    WorldPacket data(SMSG_LOG_XP_GAIN, 30);
+    Guid128::Write(data, victim ? victim->GetGUID() : ObjectGuid::Empty);
+    data << uint32(GivenXP + BonusXP);
+    data << uint8(victim ? 0 : 1);
+    data << uint32(victim ? GivenXP : GivenXP + BonusXP);
+    data << float(1.0f);                                        // TODO: the group bonus
     SendDirectMessage(&data);
 }
 
@@ -7977,8 +7973,8 @@ void Player::SendQuestGiverStatusMultiple()
 
             questStatus = GetQuestDialogStatus(questgiver);
 
-            data << questgiver->GetGUID();
-            data << uint8(questStatus);
+            Guid128::Write(data, questgiver->GetGUID());
+            data << uint64(ClientQuestGiverStatus(questStatus));
             ++count;
         }
         else if (worldObject->IsGameObject())
@@ -7989,8 +7985,8 @@ void Player::SendQuestGiverStatusMultiple()
 
             questStatus = GetQuestDialogStatus(questgiver);
 
-            data << questgiver->GetGUID();
-            data << uint8(questStatus);
+            Guid128::Write(data, questgiver->GetGUID());
+            data << uint64(ClientQuestGiverStatus(questStatus));
             ++count;
         }
     });

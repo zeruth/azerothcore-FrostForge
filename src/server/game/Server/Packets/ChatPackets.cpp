@@ -16,11 +16,16 @@
  */
 
 #include "ChatPackets.h"
+#include "PacketGuid128.h"
 
 WorldPacket const* WorldPackets::Chat::Emote::Write()
 {
-    _worldPacket << EmoteID;
-    _worldPacket << Guid;
+    // 3.4.3: PackedGuid128 Guid, u32 EmoteID, u32 SpellVisualKitIDs count,
+    // u32 SequenceVariation, the kit ids
+    Guid128::Write(_worldPacket, Guid);
+    _worldPacket << uint32(EmoteID);
+    _worldPacket << uint32(0);
+    _worldPacket << uint32(0);
 
     return &_worldPacket;
 }

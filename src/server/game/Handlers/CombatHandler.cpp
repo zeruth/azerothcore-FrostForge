@@ -20,6 +20,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "Vehicle.h"
 #include "WorldPacket.h"
@@ -27,8 +28,8 @@
 
 void WorldSession::HandleAttackSwingOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3: PackedGuid128 Victim
+    ObjectGuid guid = Guid128::Read(recvData);
 
     LOG_DEBUG("network", "WORLD: Recvd CMSG_ATTACK_SWING: {}", guid.ToString());
 

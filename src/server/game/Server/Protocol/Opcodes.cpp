@@ -441,9 +441,9 @@ void OpcodeTable::Initialize()
     /*0x26A1*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PET_DISMISS_SOUND,                                          STATUS_NEVER,      LAYOUT_335);
     /*0x26A2*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GM_TICKET_SYSTEM_STATUS,                                    STATUS_NEVER,      LAYOUT_335);
     /*0x26A3*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GM_TICKET_CASE_STATUS,                                      STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x26A4*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SET_DUNGEON_DIFFICULTY,                                     STATUS_UNHANDLED,  LAYOUT_335);
+    /*0x26A4*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SET_DUNGEON_DIFFICULTY,                                     STATUS_UNHANDLED,  LAYOUT_343);
     /*0x26A5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_WHO_IS,                                                     STATUS_NEVER,      LAYOUT_335);
-    /*0x26A6*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_WEATHER,                                                    STATUS_NEVER,      LAYOUT_335);
+    /*0x26A6*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_WEATHER,                                                    STATUS_NEVER,      LAYOUT_343);
     /*0x26A7*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_START_LIGHTNING_STORM,                                      STATUS_UNHANDLED,  LAYOUT_335);
     /*0x26A8*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_END_LIGHTNING_STORM,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x26A9*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UPDATE_INSTANCE_OWNERSHIP,                                  STATUS_NEVER,      LAYOUT_335);
@@ -458,7 +458,7 @@ void OpcodeTable::Initialize()
     /*0x26B2*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_EQUIPMENT_SET_ID,                                           STATUS_NEVER,      LAYOUT_335);
     /*0x26B3*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PET_TAME_FAILURE,                                           STATUS_NEVER,      LAYOUT_335);
     /*0x26B4*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_26B4_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x26B5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_AI_REACTION,                                                STATUS_NEVER,      LAYOUT_335);
+    /*0x26B5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_AI_REACTION,                                                STATUS_NEVER,      LAYOUT_343);
     /*0x26B6*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_OFFER_PETITION_ERROR,                                       STATUS_NEVER,      LAYOUT_335);
     /*0x26B7*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RESET_FAILED_NOTIFY,                                        STATUS_NEVER,      LAYOUT_335);
     /*0x26B8*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ADD_RUNE_POWER,                                             STATUS_NEVER,      LAYOUT_335);
@@ -487,7 +487,7 @@ void OpcodeTable::Initialize()
     /*0x26CF*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_FISH_NOT_HOOKED,                                            STATUS_NEVER,      LAYOUT_335);
     /*0x26D0*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_FISH_ESCAPED,                                               STATUS_NEVER,      LAYOUT_335);
     /*0x26D1*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_HEALTH_UPDATE,                                              STATUS_NEVER,      LAYOUT_335);
-    /*0x26D2*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_POWER_UPDATE,                                               STATUS_NEVER,      LAYOUT_335);
+    /*0x26D2*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_POWER_UPDATE,                                               STATUS_NEVER,      LAYOUT_343);
     /*0x26D3*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DEATH_RELEASE_LOC,                                          STATUS_NEVER,      LAYOUT_335);
     /*0x26D4*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_FORCED_DEATH_UPDATE,                                        STATUS_NEVER,      LAYOUT_335);
     /*0x26D5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PLAYED_TIME,                                                STATUS_NEVER,      LAYOUT_335);
@@ -506,7 +506,7 @@ void OpcodeTable::Initialize()
     /*0x26E2*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CHAR_CUSTOMIZE_FAILURE,                                     STATUS_UNHANDLED,  LAYOUT_335);
     /*0x26E3*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CHAR_CUSTOMIZE_SUCCESS,                                     STATUS_NEVER,      LAYOUT_335);
     /*0x26E4*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_TIME_RESPONSE,                                        STATUS_NEVER,      LAYOUT_335);
-    /*0x26E5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_LOG_XP_GAIN,                                                STATUS_NEVER,      LAYOUT_335);
+    /*0x26E5*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_LOG_XP_GAIN,                                                STATUS_NEVER,      LAYOUT_343);
     /*0x26E6*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA,                       STATUS_NEVER,      LAYOUT_335);
     /*0x26E7*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CRITERIA_DELETED,                                           STATUS_NEVER,      LAYOUT_335);
     /*0x26E8*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ACHIEVEMENT_DELETED,                                        STATUS_NEVER,      LAYOUT_335);
@@ -561,7 +561,7 @@ void OpcodeTable::Initialize()
     /*0x2719*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PAGE_TEXT,                                                  STATUS_NEVER,      LAYOUT_335);
     /*0x271A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GAME_OBJECT_UI_LINK,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x271B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_271B_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x271C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_STAND_STATE_UPDATE,                                         STATUS_NEVER,      LAYOUT_335);
+    /*0x271C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_STAND_STATE_UPDATE,                                         STATUS_NEVER,      LAYOUT_343);
     /*0x271D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SET_FORCED_REACTIONS,                                       STATUS_NEVER,      LAYOUT_343);
     /*0x271E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GAME_OBJECT_RESET_STATE,                                    STATUS_UNHANDLED,  LAYOUT_335);
     /*0x271F*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_271F_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
@@ -706,7 +706,7 @@ void OpcodeTable::Initialize()
     /*0x27AA*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SCENARIO_VACATE,                                            STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27AB*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_27AB_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27AC*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CHAR_FACTION_CHANGE_RESULT,                                 STATUS_NEVER,      LAYOUT_335);
-    /*0x27AD*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RAID_DIFFICULTY_SET,                                        STATUS_UNHANDLED,  LAYOUT_335);
+    /*0x27AD*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RAID_DIFFICULTY_SET,                                        STATUS_UNHANDLED,  LAYOUT_343);
     /*0x27AE*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_XP_GAIN_ENABLED,                                            STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27AF*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RAID_GROUP_ONLY,                                            STATUS_NEVER,      LAYOUT_335);
     /*0x27B0*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_INSTANCE_ENCOUNTER_ENGAGE_UNIT,                             STATUS_UNHANDLED,  LAYOUT_335);
@@ -734,8 +734,8 @@ void OpcodeTable::Initialize()
     /*0x27C6*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_27C6_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27C7*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_27C7_CLIENT,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27C8*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ITEM_COOLDOWN,                                              STATUS_NEVER,      LAYOUT_335);
-    /*0x27C9*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_EMOTE,                                                      STATUS_NEVER,      LAYOUT_335);
-    /*0x27CA*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_TRIGGER_CINEMATIC,                                          STATUS_NEVER,      LAYOUT_335);
+    /*0x27C9*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_EMOTE,                                                      STATUS_NEVER,      LAYOUT_343);
+    /*0x27CA*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_TRIGGER_CINEMATIC,                                          STATUS_NEVER,      LAYOUT_343);
     /*0x27CB*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UPDATE_OBJECT,                                              STATUS_NEVER,      LAYOUT_343);
     /*0x27CC*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_REALM_LOOKUP_INFO,                                          STATUS_UNHANDLED,  LAYOUT_335);
     /*0x27CD*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNDELETE_CHARACTER_RESPONSE,                                STATUS_UNHANDLED,  LAYOUT_335);
@@ -986,7 +986,7 @@ void OpcodeTable::Initialize()
     /*0x2919*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_PET_NAME_RESPONSE,                                    STATUS_NEVER,      LAYOUT_335);
     /*0x291A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_BATTLE_PET_NAME_RESPONSE,                             STATUS_UNHANDLED,  LAYOUT_335);
     /*0x291B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_PETITION_RESPONSE,                                    STATUS_NEVER,      LAYOUT_335);
-    /*0x291C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CACHE_VERSION,                                              STATUS_NEVER,      LAYOUT_335);
+    /*0x291C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CACHE_VERSION,                                              STATUS_NEVER,      LAYOUT_343);
     /*0x291D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CACHE_INFO,                                                 STATUS_UNHANDLED,  LAYOUT_335);
     /*0x291E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_ITEM_TEXT_RESPONSE,                                   STATUS_NEVER,      LAYOUT_335);
     /*0x291F*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_TREASURE_PICKER_RESPONSE,                                   STATUS_UNHANDLED,  LAYOUT_335);
@@ -1018,8 +1018,8 @@ void OpcodeTable::Initialize()
     /*0x293A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_REQUEST_SCHEDULED_PVP_INFO_RESPONSE,                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x293B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_293B_CLIENTCOMBAT,                                  STATUS_UNHANDLED,  LAYOUT_335);
     /*0x293C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_BREAK_TARGET,                                               STATUS_NEVER,      LAYOUT_335);
-    /*0x293D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_START,                                               STATUS_NEVER,      LAYOUT_335);
-    /*0x293E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_STOP,                                                STATUS_NEVER,      LAYOUT_335);
+    /*0x293D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_START,                                               STATUS_NEVER,      LAYOUT_343);
+    /*0x293E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_STOP,                                                STATUS_NEVER,      LAYOUT_343);
     /*0x293F*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_COMBAT_EVENT_FAILED,                                        STATUS_NEVER,      LAYOUT_335);
     /*0x2940*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DUEL_REQUESTED,                                             STATUS_NEVER,      LAYOUT_335);
     /*0x2941*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DUEL_ARRANGED,                                              STATUS_UNHANDLED,  LAYOUT_335);
@@ -1032,7 +1032,7 @@ void OpcodeTable::Initialize()
     /*0x2948*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CLEAR_TARGET,                                               STATUS_NEVER,      LAYOUT_335);
     /*0x2949*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RESET_RANGED_COMBAT_TIMER,                                  STATUS_NEVER,      LAYOUT_335);
     /*0x294A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PVP_CREDIT,                                                 STATUS_NEVER,      LAYOUT_335);
-    /*0x294B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CANCEL_COMBAT,                                              STATUS_NEVER,      LAYOUT_335);
+    /*0x294B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CANCEL_COMBAT,                                              STATUS_NEVER,      LAYOUT_343);
     /*0x294C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_SWING_ERROR,                                         STATUS_NEVER,      LAYOUT_335);
     /*0x294D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ATTACK_SWING_LANDED_LOG,                                    STATUS_UNHANDLED,  LAYOUT_335);
     /*0x294E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_BATTLEGROUND_POINTS,                                        STATUS_UNHANDLED,  LAYOUT_335);
@@ -1243,7 +1243,7 @@ void OpcodeTable::Initialize()
     /*0x2A8E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_UPDATE_ADD_PVP_CREDIT,                                STATUS_NEVER,      LAYOUT_335);
     /*0x2A8F*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_CONFIRM_ACCEPT,                                       STATUS_NEVER,      LAYOUT_335);
     /*0x2A90*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_PUSH_RESULT,                                          STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x2A91*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_STATUS_MULTIPLE,                                STATUS_NEVER,      LAYOUT_335);
+    /*0x2A91*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_STATUS_MULTIPLE,                                STATUS_NEVER,      LAYOUT_343);
     /*0x2A92*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_QUEST_DETAILS,                                  STATUS_NEVER,      LAYOUT_335);
     /*0x2A93*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_REQUEST_ITEMS,                                  STATUS_NEVER,      LAYOUT_335);
     /*0x2A94*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE,                           STATUS_NEVER,      LAYOUT_335);
@@ -1253,7 +1253,7 @@ void OpcodeTable::Initialize()
     /*0x2A98*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GOSSIP_MESSAGE,                                             STATUS_NEVER,      LAYOUT_335);
     /*0x2A99*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_GOSSIP_QUEST_UPDATE,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x2A9A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE,                             STATUS_NEVER,      LAYOUT_335);
-    /*0x2A9B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_STATUS,                                         STATUS_NEVER,      LAYOUT_335);
+    /*0x2A9B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_GIVER_STATUS,                                         STATUS_NEVER,      LAYOUT_343);
     /*0x2A9C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_FORCE_REMOVED,                                        STATUS_UNHANDLED,  LAYOUT_335);
     /*0x2A9D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUEST_POI_QUERY_RESPONSE,                                   STATUS_NEVER,      LAYOUT_335);
     /*0x2A9E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DISPLAY_QUEST_POPUP,                                        STATUS_UNHANDLED,  LAYOUT_335);
@@ -1611,7 +1611,7 @@ void OpcodeTable::Initialize()
     /*0x3184*/ DEFINE_HANDLER(CMSG_OBJECT_UPDATE_RESCUED,                                      STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3187*/ DEFINE_HANDLER(CMSG_VIOLENCE_LEVEL,                                             STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleViolenceLevel,                      LAYOUT_343);
     /*0x3189*/ DEFINE_HANDLER(CMSG_USED_FOLLOW,                                                STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
-    /*0x318C*/ DEFINE_HANDLER(CMSG_STAND_STATE_CHANGE,                                         STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleStandStateChangeOpcode,             LAYOUT_335);
+    /*0x318C*/ DEFINE_HANDLER(CMSG_STAND_STATE_CHANGE,                                         STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleStandStateChangeOpcode,             LAYOUT_343);
     /*0x318D*/ DEFINE_HANDLER(CMSG_MISSILE_TRAJECTORY_COLLISION,                               STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x318E*/ DEFINE_HANDLER(CMSG_SAVE_CUF_PROFILES,                                          STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3196*/ DEFINE_HANDLER(CMSG_REQUEST_PVP_REWARDS,                                        STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
@@ -1653,8 +1653,8 @@ void OpcodeTable::Initialize()
     /*0x323C*/ DEFINE_HANDLER(CMSG_EJECT_PASSENGER,                                            STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleEjectPassenger,                     LAYOUT_335);
     /*0x3241*/ DEFINE_HANDLER(CMSG_USE_CRITTER_ITEM,                                           STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3247*/ DEFINE_HANDLER(CMSG_CHECK_IS_ADVENTURE_MAP_POI_VALID,                           STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
-    /*0x3255*/ DEFINE_HANDLER(CMSG_ATTACK_SWING,                                               STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleAttackSwingOpcode,                  LAYOUT_335);
-    /*0x3256*/ DEFINE_HANDLER(CMSG_ATTACK_STOP,                                                STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleAttackStopOpcode,                   LAYOUT_335);
+    /*0x3255*/ DEFINE_HANDLER(CMSG_ATTACK_SWING,                                               STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleAttackSwingOpcode,                  LAYOUT_343);
+    /*0x3256*/ DEFINE_HANDLER(CMSG_ATTACK_STOP,                                                STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleAttackStopOpcode,                   LAYOUT_343);
     /*0x326A*/ DEFINE_HANDLER(CMSG_CANCEL_CHANNELLING,                                         STATUS_LOGGEDIN,   PROCESS_INPLACE,        &WorldSession::HandleCancelChanneling,                   LAYOUT_335);
     /*0x326F*/ DEFINE_HANDLER(CMSG_CANCEL_GROWTH_AURA,                                         STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleCancelGrowthAuraOpcode,             LAYOUT_335);
     /*0x3270*/ DEFINE_HANDLER(CMSG_QUERY_CREATURE,                                             STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleCreatureQueryOpcode,                LAYOUT_335);
@@ -1732,8 +1732,8 @@ void OpcodeTable::Initialize()
     /*0x3499*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_COMPLETE_QUEST,                                 STATUS_LOGGEDIN,   PROCESS_INPLACE,        &WorldSession::HandleQuestgiverCompleteQuest,            LAYOUT_335);
     /*0x349A*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_CHOOSE_REWARD,                                  STATUS_LOGGEDIN,   PROCESS_INPLACE,        &WorldSession::HandleQuestgiverChooseRewardOpcode,       LAYOUT_335);
     /*0x349B*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_REQUEST_REWARD,                                 STATUS_LOGGEDIN,   PROCESS_INPLACE,        &WorldSession::HandleQuestgiverRequestRewardOpcode,      LAYOUT_335);
-    /*0x349C*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_STATUS_QUERY,                                   STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleQuestgiverStatusQueryOpcode,        LAYOUT_335);
-    /*0x349D*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_STATUS_MULTIPLE_QUERY,                          STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleQuestgiverStatusMultipleQuery,      LAYOUT_335);
+    /*0x349C*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_STATUS_QUERY,                                   STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleQuestgiverStatusQueryOpcode,        LAYOUT_343);
+    /*0x349D*/ DEFINE_HANDLER(CMSG_QUEST_GIVER_STATUS_MULTIPLE_QUERY,                          STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleQuestgiverStatusMultipleQuery,      LAYOUT_343);
     /*0x349E*/ DEFINE_HANDLER(CMSG_QUEST_CONFIRM_ACCEPT,                                       STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleQuestConfirmAccept,                 LAYOUT_335);
     /*0x349F*/ DEFINE_HANDLER(CMSG_PUSH_QUEST_TO_PARTY,                                        STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandlePushQuestToParty,                   LAYOUT_335);
     /*0x34A0*/ DEFINE_HANDLER(CMSG_QUEST_PUSH_RESULT,                                          STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleQuestPushResult,                    LAYOUT_335);
@@ -1822,7 +1822,7 @@ void OpcodeTable::Initialize()
     /*0x3522*/ DEFINE_HANDLER(CMSG_BATTLEMASTER_JOIN_SKIRMISH,                                 STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x3525*/ DEFINE_HANDLER(CMSG_BATTLEFIELD_PORT,                                           STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleBattleFieldPortOpcode,              LAYOUT_335);
     /*0x3526*/ DEFINE_HANDLER(CMSG_REPOP_REQUEST,                                              STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleRepopRequestOpcode,                 LAYOUT_335);
-    /*0x3528*/ DEFINE_HANDLER(CMSG_SET_SELECTION,                                              STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleSetSelectionOpcode,                 LAYOUT_335);
+    /*0x3528*/ DEFINE_HANDLER(CMSG_SET_SELECTION,                                              STATUS_LOGGEDIN,   PROCESS_THREADSAFE,     &WorldSession::HandleSetSelectionOpcode,                 LAYOUT_343);
     /*0x3529*/ DEFINE_HANDLER(CMSG_INSPECT,                                                    STATUS_LOGGEDIN,   PROCESS_INPLACE,        &WorldSession::HandleInspectOpcode,                      LAYOUT_335);
     /*0x352A*/ DEFINE_HANDLER(CMSG_REQUEST_CROWD_CONTROL_SPELL,                                STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);
     /*0x352B*/ DEFINE_HANDLER(CMSG_BLACK_MARKET_OPEN,                                          STATUS_UNHANDLED,  PROCESS_INPLACE,        &WorldSession::Handle_NULL,                              LAYOUT_335);

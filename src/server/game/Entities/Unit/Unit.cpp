@@ -3260,9 +3260,10 @@ float Unit::CalculateLevelPenalty(SpellInfo const* spellProto) const
 
 void Unit::SendMeleeAttackStart(Unit* victim, Player* sendTo)
 {
-    WorldPacket data(SMSG_ATTACK_START, 8 + 8);
-    data << GetGUID();
-    data << victim->GetGUID();
+    // SMSG_ATTACK_START, 3.4.3: PackedGuid128 Attacker, PackedGuid128 Victim
+    WorldPacket data(SMSG_ATTACK_START, 18 + 18);
+    Guid128::Write(data, GetGUID());
+    Guid128::Write(data, victim->GetGUID());
     if (sendTo)
         sendTo->SendDirectMessage(&data);
     else
@@ -12074,10 +12075,13 @@ void Unit::SetPower(Powers power, uint32 val, bool withPowerUpdate /*= true*/, b
 
     if (withPowerUpdate)
     {
-        WorldPacket data(SMSG_POWER_UPDATE, 8 + 1 + 4);
-        data << GetPackGUID();
+        // SMSG_POWER_UPDATE, 3.4.3: PackedGuid128 Guid, u32 Count,
+        // {i32 Power, u8 PowerType}; the power types keep their 3.3.5 numbers
+        WorldPacket data(SMSG_POWER_UPDATE, 18 + 4 + 5);
+        Guid128::Write(data, GetGUID());
+        data << uint32(1);
+        data << int32(val);
         data << uint8(power);
-        data << uint32(val);
         SendMessageToSet(&data, IsPlayer());
     }
 
@@ -12643,8 +12647,8 @@ void Unit::SendPetAIReaction(ObjectGuid guid) const
     if (!owner || !owner->IsPlayer())
         return;
 
-    WorldPacket data(SMSG_AI_REACTION, 8 + 4);
-    data << guid;
+    WorldPacket data(SMSG_AI_REACTION, 18 + 4);
+    Guid128::Write(data, guid);
     data << uint32(AI_REACTION_HOSTILE);
     owner->ToPlayer()->SendDirectMessage(&data);
 }
@@ -12757,7 +12761,9 @@ void Unit::SetStandState(uint8 state)
 
     if (IsPlayer())
     {
-        WorldPacket data(SMSG_STAND_STATE_UPDATE, 1);
+        // SMSG_STAND_STATE_UPDATE, 3.4.3: u32 AnimKitID, u8 State
+        WorldPacket data(SMSG_STAND_STATE_UPDATE, 5);
+        data << uint32(0);
         data << (uint8)state;
         ToPlayer()->SendDirectMessage(&data);
     }

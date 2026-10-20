@@ -125,6 +125,28 @@ enum QuestGiverStatus : uint32
     DIALOG_STATUS_SCRIPTED_NO_STATUS       = 0x1000,
 };
 
+/// AC's quest giver status as the 3.4.3 client's: a u64 whose highest set bit picks the icon
+/// (the client takes the highest of bits 31..0 and indexes the table at 0x1427f9840, where bits 11/12, 14/15,
+/// 17/18, 20/21 share an icon: the "reward complete" pairs with and without a minimap POI). The bits
+/// are TrinityCore's Shadowlands-era QuestGiverStatus, which that table fits [names inferred].
+inline uint64 ClientQuestGiverStatus(uint32 status)
+{
+    switch (status)
+    {
+        case DIALOG_STATUS_UNAVAILABLE:             return 0x0002;  // Future
+        case DIALOG_STATUS_LOW_LEVEL_AVAILABLE:     return 0x0004;  // Trivial
+        case DIALOG_STATUS_LOW_LEVEL_REWARD_REP:    return 0x0008;  // TrivialRepeatableTurnin
+        case DIALOG_STATUS_LOW_LEVEL_AVAILABLE_REP: return 0x0010;  // TrivialDailyQuest
+        case DIALOG_STATUS_INCOMPLETE:              return 0x0020;  // Reward (in progress)
+        case DIALOG_STATUS_REWARD_REP:              return 0x0100;  // RepeatableTurnin
+        case DIALOG_STATUS_AVAILABLE_REP:           return 0x0200;  // DailyQuest
+        case DIALOG_STATUS_AVAILABLE:               return 0x0400;  // Quest
+        case DIALOG_STATUS_REWARD2:                 return 0x0800;  // RewardCompleteNoPOI
+        case DIALOG_STATUS_REWARD:                  return 0x1000;  // RewardCompletePOI
+        default:                                    return 0;
+    }
+}
+
 enum QuestFlags
 {
     // Flags used at server and sent to client

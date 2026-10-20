@@ -32,11 +32,11 @@ WorldPacket const* WorldPackets::Instance::InstanceResetFailed::Write()
     return &_worldPacket;
 }
 
+// SMSG_SET_DUNGEON_DIFFICULTY, 3.4.3: i32 DifficultyID, a
+// Difficulty.db2 id: AC's 5-man normal / heroic (0 / 1) are 1 / 2.
 WorldPacket const* WorldPackets::Instance::SetDungeonDifficulty::Write()
 {
-    _worldPacket << Difficulty;
-    _worldPacket << Unk;
-    _worldPacket << IsInGroup;
+    _worldPacket << int32(Difficulty + 1);
 
     return &_worldPacket;
 }
@@ -53,11 +53,12 @@ WorldPacket const* WorldPackets::Instance::ResetFailedNotify::Write()
     return &_worldPacket;
 }
 
+// SMSG_RAID_DIFFICULTY_SET, 3.4.3: i32 DifficultyID, u8 Legacy
+// (which of the two raid difficulty slots); AC's 10/25 normal/heroic (0-3) are Difficulty.db2's 3-6.
 WorldPacket const* WorldPackets::Instance::SetRaidDifficulty::Write()
 {
-    _worldPacket << Difficulty;
-    _worldPacket << Unk;
-    _worldPacket << IsInGroup;
+    _worldPacket << int32(Difficulty + 3);
+    _worldPacket << uint8(0);
 
     return &_worldPacket;
 }

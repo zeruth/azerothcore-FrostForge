@@ -535,8 +535,8 @@ void WorldSession::HandleZoneUpdateOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleSetSelectionOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    recv_data >> guid;
+    // 3.4.3: PackedGuid128 Selection
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     _player->SetSelection(guid);
 

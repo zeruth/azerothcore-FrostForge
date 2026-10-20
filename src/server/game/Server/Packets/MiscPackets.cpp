@@ -24,9 +24,11 @@ WorldPackets::Misc::Weather::Weather(WeatherState weatherID, float intensity /*=
 
 WorldPacket const* WorldPackets::Misc::Weather::Write()
 {
+    // 3.4.3: u32 WeatherID, f32 Intensity, bit Abrupt, flush
     _worldPacket << uint32(WeatherID);
     _worldPacket << float(Intensity);
-    _worldPacket << uint8(Abrupt);
+    _worldPacket.WriteBit(Abrupt);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }
