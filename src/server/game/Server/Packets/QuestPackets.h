@@ -143,7 +143,7 @@ namespace WorldPackets
         class QuestPushResultClient final : public ClientPacket
         {
         public:
-            QuestPushResultClient(WorldPacket&& packet) : ClientPacket(SMSG_QUEST_PUSH_RESULT, std::move(packet)) {}
+            QuestPushResultClient(WorldPacket&& packet) : ClientPacket(CMSG_QUEST_PUSH_RESULT, std::move(packet)) {}
 
             void Read() override;
 

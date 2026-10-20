@@ -609,6 +609,25 @@ public:
 
     void ResetBitReader() { _readBitpos = 8; }
 
+    /// A string whose length the 3.4.3 client takes from a bit field sent before it: its bytes, no NUL.
+    void WriteString(std::string_view value)
+    {
+        if (!value.empty())
+            append(reinterpret_cast<uint8 const*>(value.data()), value.size());
+    }
+
+    /// The counterpart of WriteString: `length` raw bytes, no NUL.
+    std::string ReadString(uint32 length)
+    {
+        if (!length)
+            return {};
+        if (_rpos + length > size())
+            throw ByteBufferPositionException(false, _rpos, size(), length);
+        std::string value(reinterpret_cast<char const*>(&_storage[_rpos]), length);
+        _rpos += length;
+        return value;
+    }
+
 protected:
     std::size_t _rpos{0}, _wpos{0};
     std::vector<uint8> _storage;

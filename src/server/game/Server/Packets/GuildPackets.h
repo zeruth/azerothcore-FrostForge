@@ -180,7 +180,7 @@ namespace WorldPackets
         class GuildEventLogQuery final : public ClientPacket
         {
         public:
-            GuildEventLogQuery(WorldPacket&& packet) : ClientPacket(SMSG_GUILD_EVENT_LOG_QUERY_RESULTS, std::move(packet)) { }
+            GuildEventLogQuery(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_EVENT_LOG_QUERY, std::move(packet)) { }
 
             void Read() override { }
         };
@@ -198,7 +198,7 @@ namespace WorldPackets
         class GuildPermissionsQuery final : public ClientPacket
         {
         public:
-            GuildPermissionsQuery(WorldPacket&& packet) : ClientPacket(SMSG_GUILD_PERMISSIONS_QUERY_RESULTS, std::move(packet)) { }
+            GuildPermissionsQuery(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_PERMISSIONS_QUERY, std::move(packet)) { }
 
             void Read() override { }
         };
@@ -384,7 +384,7 @@ namespace WorldPackets
         class GuildBankRemainingWithdrawMoneyQuery final : public ClientPacket
         {
         public:
-            GuildBankRemainingWithdrawMoneyQuery(WorldPacket&& packet) : ClientPacket(SMSG_GUILD_BANK_REMAINING_WITHDRAW_MONEY, std::move(packet)) { }
+            GuildBankRemainingWithdrawMoneyQuery(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_BANK_REMAINING_WITHDRAW_MONEY_QUERY, std::move(packet)) { }
 
             void Read() override { }
         };
@@ -458,7 +458,7 @@ namespace WorldPackets
         class GuildBankLogQuery final : public ClientPacket
         {
         public:
-            GuildBankLogQuery(WorldPacket&& packet) : ClientPacket(SMSG_GUILD_BANK_LOG_QUERY_RESULTS, std::move(packet)) { }
+            GuildBankLogQuery(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_BANK_LOG_QUERY, std::move(packet)) { }
 
             void Read() override;
 
@@ -490,7 +490,7 @@ namespace WorldPackets
         class GuildBankTextQuery final : public ClientPacket
         {
         public:
-            GuildBankTextQuery(WorldPacket&& packet) : ClientPacket(SMSG_GUILD_BANK_TEXT_QUERY_RESULT, std::move(packet)) { }
+            GuildBankTextQuery(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_BANK_TEXT_QUERY, std::move(packet)) { }
 
             void Read() override;
 
@@ -532,7 +532,7 @@ namespace WorldPackets
         class SaveGuildEmblem final : public ClientPacket
         {
         public:
-            SaveGuildEmblem(WorldPacket&& packet) : ClientPacket(SMSG_PLAYER_SAVE_GUILD_EMBLEM, std::move(packet)) { }
+            SaveGuildEmblem(WorldPacket&& packet) : ClientPacket(CMSG_SAVE_GUILD_EMBLEM, std::move(packet)) { }
 
             void Read() override;
 

@@ -96,7 +96,7 @@ namespace WorldPackets
         class MinimapPingClient final : public ClientPacket
         {
         public:
-            MinimapPingClient(WorldPacket&& packet) : ClientPacket(SMSG_MINIMAP_PING, std::move(packet)) {}
+            MinimapPingClient(WorldPacket&& packet) : ClientPacket(CMSG_MINIMAP_PING, std::move(packet)) {}
 
             void Read() override;
 
@@ -119,7 +119,7 @@ namespace WorldPackets
         class RandomRollClient final : public ClientPacket
         {
         public:
-            RandomRollClient(WorldPacket&& packet) : ClientPacket(SMSG_RANDOM_ROLL, std::move(packet)) { }
+            RandomRollClient(WorldPacket&& packet) : ClientPacket(CMSG_RANDOM_ROLL, std::move(packet)) { }
 
             void Read() override;
 

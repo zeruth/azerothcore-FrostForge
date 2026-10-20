@@ -1075,6 +1075,92 @@ void WorldSession::HandleUpdateVasPurchaseStates(WorldPacket& /*recvData*/)
     SendPacket(&data);
 }
 
+// CMSG_DB_QUERY_BULK, 3.4.3 (writer FUN_140766750): u32 TableHash, 13-bit count, flush, u32 RecordID per
+// record. The client asks for the records its own DB2 files lack (an item id that is not in its
+// Item/ItemSparse, ...) -> one SMSG_DB_REPLY each (cache switch FUN_140721aa0 case 0x290E): u32 TableHash,
+// u32 RecordID, u32 Timestamp, 3-bit Status, flush, u32 size, the record. Status is the client's
+// VALIDATION_RESULT_* (0 NotSet, 1 Valid, 2 Delete, 3 Invalid, 4 NotPublic). This server has no hotfix
+// records yet [TODO: serve AC's *_dbc overrides as records], so every record is Invalid: the client
+// stops asking and keeps what it has.
+void WorldSession::HandleDBQueryBulk(WorldPacket& recvData)
+{
+    uint32 tableHash = recvData.read<uint32>();
+    uint32 count = recvData.ReadBits(13);
+    for (uint32 i = 0; i < count; ++i)
+    {
+        uint32 recordId = recvData.read<uint32>();
+
+        WorldPacket data(SMSG_DB_REPLY, 4 + 4 + 4 + 1 + 4);
+        data << uint32(tableHash);
+        data << uint32(recordId);
+        data << uint32(GameTime::GetGameTime().count());
+        data.WriteBits(3, 3);                               // VALIDATION_RESULT_INVALID
+        data.FlushBits();
+        data << uint32(0);
+        SendPacket(&data);
+    }
+}
+
+// CMSG_HOTFIX_REQUEST, 3.4.3 (writer FUN_140767420): u32 ClientBuild, u32 DataBuild, u32 count, u32
+// hotfix ids. Sent for the ids SMSG_AVAILABLE_HOTFIXES announced; this server announces none, but an
+// answer closes the client's hotfix phase either way -> SMSG_HOTFIX_CONNECT (case 0x2911): u32 record
+// count, {u32 x5, 3-bit status, flush} (FUN_1406ff150), u32 size, the record data. Empty.
+void WorldSession::HandleHotfixRequest(WorldPacket& recvData)
+{
+    recvData.read_skip<uint32>();                           // ClientBuild
+    recvData.read_skip<uint32>();                           // DataBuild
+    recvData.rfinish();                                     // the ids
+
+    WorldPacket data(SMSG_HOTFIX_CONNECT, 8);
+    data << uint32(0);
+    data << uint32(0);
+    SendPacket(&data);
+}
+
+// CMSG_UPDATE_CLIENT_SETTINGS, 3.4.3 (writer FUN_140769f20): f32 FarClip. Sent on entering the world and
+// when the view distance changes; nothing on the server depends on it.
+void WorldSession::HandleUpdateClientSettings(WorldPacket& recvData)
+{
+    recvData.read_skip<float>();
+}
+
+// Requests the client makes on entering the world (GameUI enter-world, login-sequence.ANALYSIS.md 5)
+// for systems Wrath has no use for, or that answer only when there is something to say: the countdown
+// timer (u32 type), the conquest formula (empty), the premade-group finder status (empty), the battle
+// pet journal and its lock (empty). Read and dropped.
+void WorldSession::HandleIgnoredWorldRequest(WorldPacket& recvData)
+{
+    recvData.rfinish();
+}
+
+// CMSG_REQUEST_LFG_LIST_BLACKLIST, 3.4.3 (empty) -> SMSG_LFG_LIST_UPDATE_BLACKLIST (FUN_140713ca0): u32 count,
+// {u32 ActivityID, u32 Reason}. The premade-group finder is not offered: an empty list.
+void WorldSession::HandleRequestLfgListBlacklist(WorldPacket& /*recvData*/)
+{
+    WorldPacket data(SMSG_LFG_LIST_UPDATE_BLACKLIST, 4);
+    data << uint32(0);
+    SendPacket(&data);
+}
+
+// CMSG_DF_GET_SYSTEM_INFO, 3.4.3 (writer FUN_140766880): bit Player, bit HasPartyIndex, flush, [u8].
+// -> SMSG_LFG_PLAYER_INFO (FUN_1406c3920): u32 dungeon count, the blacklist (FUN_140714470: bit HasPlayer,
+// flush, u32 count, [PackedGuid128], {u32 Slot, Reason, SubReason1, SubReason2, SoftLock}), then per
+// dungeon {u32 Slot, 15 x u32, u32 ShortageReward count, bits FirstReward, ShortageEligible, flush,
+// LfgPlayerQuestReward (FUN_1407147b0), the shortage rewards}. AC's dungeon finder is not converted
+// yet [TODO: AC's random dungeons and locks, HandleLfgPlayerLockInfoRequestOpcode], so: no dungeons,
+// nothing locked.
+void WorldSession::HandleDFGetSystemInfo(WorldPacket& recvData)
+{
+    recvData.rfinish();
+
+    WorldPacket data(SMSG_LFG_PLAYER_INFO, 9);
+    data << uint32(0);                                      // dungeons
+    data.WriteBit(false);                                   // blacklist: HasPlayerGuid
+    data.FlushBits();
+    data << uint32(0);                                      // blacklist entries
+    SendPacket(&data);
+}
+
 void WorldSession::HandleLoadingScreenNotify(WorldPacket& recvData)
 {
     uint32 mapId = recvData.read<uint32>();

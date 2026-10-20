@@ -29,6 +29,7 @@
 #include "MailMgr.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
@@ -914,11 +915,13 @@ void WorldSession::HandleQueryNextMailTime(WorldPacket& /*recvData*/)
             if (sentSenders.count(mail->sender))
                 continue;
 
-            data << (mail->messageType == MAIL_NORMAL ? ObjectGuid::Create<HighGuid::Player>(mail->sender) : ObjectGuid::Empty);  // player guid
-            data << uint32(mail->messageType != MAIL_NORMAL ? mail->sender : 0);  // non-player entries
-            data << uint32(mail->messageType);
-            data << uint32(mail->stationery);
+            // 3.4.3 (FUN_1406c4cc0): PackedGuid128 SenderGuid, f32 TimeLeft, i32 AltSenderID,
+            // i8 AltSenderType, i32 StationeryID
+            Guid128::Write(data, mail->messageType == MAIL_NORMAL ? ObjectGuid::Create<HighGuid::Player>(mail->sender) : ObjectGuid::Empty);
             data << float(mail->deliver_time - now);
+            data << int32(mail->messageType != MAIL_NORMAL ? mail->sender : 0);  // non-player entries
+            data << int8(mail->messageType);
+            data << int32(mail->stationery);
 
             sentSenders.insert(mail->sender);
             ++count;

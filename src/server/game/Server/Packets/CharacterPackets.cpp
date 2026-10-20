@@ -38,14 +38,17 @@ WorldPacket const* WorldPackets::Character::LogoutResponse::Write()
 
 void WorldPackets::Character::PlayedTimeClient::Read()
 {
-    _worldPacket >> TriggerScriptEvent;
+    // 3.4.3: bit TriggerScriptEvent, flush (writer FUN_14075ff50)
+    TriggerScriptEvent = _worldPacket.ReadBit();
 }
 
 WorldPacket const* WorldPackets::Character::PlayedTime::Write()
 {
+    // 3.4.3: u32 TotalTime, u32 LevelTime, bit TriggerScriptEvent, flush (FUN_1406c7bb0)
     _worldPacket << uint32(TotalTime);
     _worldPacket << uint32(LevelTime);
-    _worldPacket << uint8(TriggerScriptEvent);
+    _worldPacket.WriteBit(TriggerScriptEvent);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }

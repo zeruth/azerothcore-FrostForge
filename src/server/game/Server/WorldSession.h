@@ -1062,6 +1062,12 @@ public:                                                 // opcodes handlers
     void HandleUpdateVasPurchaseStates(WorldPacket& recvData);
     void HandleMoveInitActiveMoverComplete(WorldPacket& recvData);
     void HandleLoadingScreenNotify(WorldPacket& recvData);
+    void HandleDBQueryBulk(WorldPacket& recvData);
+    void HandleHotfixRequest(WorldPacket& recvData);
+    void HandleUpdateClientSettings(WorldPacket& recvData);
+    void HandleIgnoredWorldRequest(WorldPacket& recvData);
+    void HandleRequestLfgListBlacklist(WorldPacket& recvData);
+    void HandleDFGetSystemInfo(WorldPacket& recvData);
 
     void HandleCharRenameOpcode(WorldPacket& recvData);
     void HandleCharRenameCallBack(std::shared_ptr<CharacterRenameInfo> renameInfo, PreparedQueryResult result);

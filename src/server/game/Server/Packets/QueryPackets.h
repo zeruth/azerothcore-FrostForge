@@ -25,6 +25,7 @@ namespace WorldPackets
 {
     namespace Query
     {
+        /// 3.4.3 CMSG_QUERY_PLAYER_NAMES: u32 count, PackedGuid128 per player (writer FUN_14076a850).
         class NameQuery final : public ClientPacket
         {
         public:
@@ -32,25 +33,32 @@ namespace WorldPackets
 
             void Read() override;
 
-            ObjectGuid Guid;
+            std::vector<ObjectGuid> Players;
+        };
+
+        /// One player of SMSG_QUERY_PLAYER_NAMES_RESPONSE (PlayerGuidLookupData, FUN_140717ea0).
+        struct NameCacheLookupResult
+        {
+            ObjectGuid Player;
+            uint8 Result = 1;               // the handler (FUN_140351180): 0 found, 1 unknown
+            bool HasData = false;
+            bool IsDeleted = false;
+            std::string_view Name;
+            DeclinedName const* DeclinedNames = nullptr;
+            uint8 Race = RACE_NONE;
+            uint8 Sex = GENDER_MALE;
+            uint8 Class = CLASS_NONE;
+            uint8 Level = 0;
         };
 
         class NameQueryResponse final : public ServerPacket
         {
         public:
-            NameQueryResponse() : ServerPacket(SMSG_QUERY_PLAYER_NAMES_RESPONSE, 8 + 1 + 1 + 1 + 1 + 1 + 10) {}
+            NameQueryResponse() : ServerPacket(SMSG_QUERY_PLAYER_NAMES_RESPONSE, 4 + 60) {}
 
             WorldPacket const* Write() override;
 
-            PackedGuid Guid;
-            uint8 NameUnknown = false;
-            std::string_view Name;
-            std::string_view RealmName = ""; // Only set for cross realm interaction (such as Battlegrounds)
-            uint8 Race = RACE_NONE;
-            uint8 Sex = GENDER_MALE;
-            uint8 Class = CLASS_NONE;
-            uint8 Declined = false;
-            DeclinedName DeclinedNames;
+            std::vector<NameCacheLookupResult> Players;
         };
 
         class TimeQuery final : public ClientPacket
@@ -61,15 +69,15 @@ namespace WorldPackets
             void Read() override {};
         };
 
+        /// 3.4.3 SMSG_QUERY_TIME_RESPONSE: i64 CurrentTime only (handler FUN_141a6c040 reads 8 bytes).
         class TimeQueryResponse final : public ServerPacket
         {
         public:
-            TimeQueryResponse() : ServerPacket(SMSG_QUERY_TIME_RESPONSE, 4 + 4) {}
+            TimeQueryResponse() : ServerPacket(SMSG_QUERY_TIME_RESPONSE, 8) {}
 
             WorldPacket const* Write() override;
 
-            uint32 ServerTime;
-            uint32 TimeResponse;
+            int64 CurrentTime = 0;
         };
 
         class CorpseMapPositionQuery final : public ClientPacket

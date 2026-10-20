@@ -61,7 +61,7 @@ namespace WorldPackets
         class SetDungeonDifficultyClient final : public ClientPacket
         {
         public:
-            SetDungeonDifficultyClient(WorldPacket&& packet) : ClientPacket(SMSG_SET_DUNGEON_DIFFICULTY, std::move(packet)) {}
+            SetDungeonDifficultyClient(WorldPacket&& packet) : ClientPacket(CMSG_SET_DUNGEON_DIFFICULTY, std::move(packet)) {}
 
             void Read() override;
 
@@ -93,7 +93,7 @@ namespace WorldPackets
         class SetRaidDifficultyClient final : public ClientPacket
         {
         public:
-            SetRaidDifficultyClient(WorldPacket&& packet) : ClientPacket(SMSG_RAID_DIFFICULTY_SET, std::move(packet)) {}
+            SetRaidDifficultyClient(WorldPacket&& packet) : ClientPacket(CMSG_SET_RAID_DIFFICULTY, std::move(packet)) {}
 
             void Read() override;
 
