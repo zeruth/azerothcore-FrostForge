@@ -29,12 +29,41 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "ItemPackets.h"
+#include "PacketGuid128.h"
+
+namespace
+{
+    /// AddOnInfo ("TaintedBy"), 3.4.3 (writer FUN_14074b660): 10-bit name and version lengths (counting the NUL), bits
+    /// Loaded, Disabled, flush, the strings; a length of 1 writes no bytes. Present when the CMSG's HasTaintedBy is set.
+    void SkipAddOnInfo(WorldPacket& data)
+    {
+        uint32 nameLength = data.ReadBits(10);
+        uint32 versionLength = data.ReadBits(10);
+        data.ReadBit();
+        data.ReadBit();
+        data.ResetBitReader();
+        if (nameLength > 1)
+            data.read_skip(nameLength);
+        if (versionLength > 1)
+            data.read_skip(versionLength);
+    }
+
+    /// The bit group of most auction CMSGs: bit HasTaintedBy, flush, [AddOnInfo]
+    void SkipTaintedBy(WorldPacket& data)
+    {
+        bool tainted = data.ReadBit();
+        data.ResetBitReader();
+        if (tainted)
+            SkipAddOnInfo(data);
+    }
+}
 
 //void called when player click on auctioneer npc
 void WorldSession::HandleAuctionHelloOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;                                            //NPC guid
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075bc60): PackedGuid128 Auctioneer
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_AUCTIONEER);
     if (!unit)
@@ -66,46 +95,103 @@ void WorldSession::SendAuctionHello(ObjectGuid guid, Creature* unit)
     if (!ahEntry)
         return;
 
-    WorldPacket data(SMSG_AUCTION_HELLO_RESPONSE, 12);
-    data << guid;
+    // SMSG_AUCTION_HELLO_RESPONSE, 3.4.3 (FUN_1406b7c30, handler FUN_141c7c410): PackedGuid128 Auctioneer, u32
+    // PurchasedItemDeliveryDelay, u32 CancelledItemDeliveryDelay, u32 AuctionHouseID (the outbid tracking keys on
+    // it), bit OpenForBusiness, flush. The handler opens the auction interaction itself.
+    WorldPacket data(SMSG_AUCTION_HELLO_RESPONSE, 18 + 12 + 1);
+    Guid128::Write(data, guid);
+    data << uint32(sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY));
+    data << uint32(0);
     data << uint32(ahEntry->houseId);
-    data << uint8(1);                                       // 3.3.3: 1 - AH enabled, 0 - AH disabled
+    data.WriteBit(true);
+    data.FlushBits();
     SendPacket(&data);
 }
 
 //call this method when player bids, creates, or deletes auction
-void WorldSession::SendAuctionCommandResult(uint32 auctionId, uint32 Action, uint32 ErrorCode, uint32 bidError)
+/// SMSG_AUCTION_COMMAND_RESULT, 3.4.3 (FUN_1406b7890, handler FUN_141c7bf50): u32 AuctionID, u32 Command (AuctionAction),
+/// u32 ErrorCode (AuctionError), u32 BagResult, PackedGuid128 Guid (the bidder on ERR_HIGHER_BID), u64 BidAmount, u64
+/// MinIncrement, u32 DesiredDelay; every field always present. A multi-stack post sends its next stack only after a
+/// successful sell result, so every request is answered.
+void WorldSession::SendAuctionCommandResult(uint32 auctionId, uint32 Action, uint32 ErrorCode, uint32 bidError, ObjectGuid bidder, uint64 bidAmount)
 {
-    WorldPacket data(SMSG_AUCTION_COMMAND_RESULT, 16);
-    data << auctionId;
-    data << Action;
-    data << ErrorCode;
-    if (!ErrorCode && Action)
-        data << bidError;                                   //when bid, then send 0, once...
+    WorldPacket data(SMSG_AUCTION_COMMAND_RESULT, 16 + 18 + 16 + 4);
+    data << uint32(auctionId);
+    data << uint32(Action);
+    data << uint32(ErrorCode);
+    data << uint32(ErrorCode == ERR_AUCTION_INVENTORY ? ClientInventoryResult(InventoryResult(bidError)) : 0);
+    Guid128::Write(data, bidder);
+    data << uint64(bidAmount);
+    data << uint64(ErrorCode == ERR_AUCTION_OK || ErrorCode == ERR_AUCTION_HIGHER_BID ? bidError : 0);    // MinIncrement
+    data << uint32(AUCTION_SEARCH_DELAY);
     SendPacket(&data);
 }
 
 //this function sends notification, if bidder is online
+/// 3.4.3 splits the bidder notification. SMSG_AUCTION_OUTBID_NOTIFICATION (FUN_1406b8240, handler FUN_141c7dcd0): u32
+/// AuctionHouseID, u32 AuctionID, PackedGuid128 Bidder (the new high bidder), ItemInstance, u64 BidAmount, u64
+/// MinIncrement. SMSG_AUCTION_WON_NOTIFICATION (FUN_1406b85b0, handler FUN_141c7f1b0): u32 AuctionHouseID, u32
+/// AuctionID, PackedGuid128 Bidder, ItemInstance. AC passes no bid for a won auction.
 void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template)
 {
-    // the 3.4.3 client splits SMSG_AUCTION_BIDDER_NOTIFICATION into SMSG_AUCTION_OUTBID_NOTIFICATION and
-    // SMSG_AUCTION_WON_NOTIFICATION; not sent until ported
+    bool won = bidSum == 0;
+    WorldPacket data(won ? SMSG_AUCTION_WON_NOTIFICATION : SMSG_AUCTION_OUTBID_NOTIFICATION, 8 + 18 + 40 + 16);
+    data << uint32(location);
+    data << uint32(auctionId);
+    Guid128::Write(data, bidder);
+    WorldPackets::Item::WriteItemInstance(data, item_template);
+    if (!won)
+    {
+        data << uint64(bidSum);
+        data << uint64(diff);
+    }
+    SendPacket(&data);
 }
 
 //this void causes on client to display: "Your auction sold"
+/// SMSG_AUCTION_CLOSED_NOTIFICATION, 3.4.3 (FUN_1406b7770, handler FUN_141c7db90): u32 AuctionID, u64 BidAmount,
+/// ItemInstance, f32 ProceedsMailDelay (s), bit Sold, flush. Sold shows "sold" and starts the mail timer, otherwise
+/// "expired".
 void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
 {
-    // the 3.4.3 client splits SMSG_AUCTION_OWNER_NOTIFICATION into SMSG_AUCTION_OWNER_BID_NOTIFICATION and
-    // SMSG_AUCTION_CLOSED_NOTIFICATION; not sent until ported
+    bool sold = !auction->bidder.IsEmpty();
+    WorldPacket data(SMSG_AUCTION_CLOSED_NOTIFICATION, 4 + 8 + 40 + 5);
+    data << uint32(auction->Id);
+    data << uint64(auction->bid);
+    WorldPackets::Item::WriteItemInstance(data, auction->item_template);
+    data << float(sold ? sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY) : 0);
+    data.WriteBit(sold);
+    data.FlushBits();
+    SendPacket(&data);
+}
+
+/// SMSG_AUCTION_OWNER_BID_NOTIFICATION, 3.4.3 (FUN_1406b8370, handler FUN_141c7e510): u32 AuctionID, u64 BidAmount,
+/// ItemInstance, u64 MinIncrement, PackedGuid128 Bidder. Updates the owner's rows; no chat line.
+void WorldSession::SendAuctionOwnerBidNotification(AuctionEntry* auction)
+{
+    WorldPacket data(SMSG_AUCTION_OWNER_BID_NOTIFICATION, 4 + 8 + 40 + 8 + 18);
+    data << uint32(auction->Id);
+    data << uint64(auction->bid);
+    WorldPackets::Item::WriteItemInstance(data, auction->item_template);
+    data << uint64(AuctionEntry::CalculateAuctionOutBid(auction->bid));
+    Guid128::Write(data, auction->bidder);
+    SendPacket(&data);
 }
 
 //this void creates new auction and adds auction to some auctionhouse
 void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 {
-    ObjectGuid auctioneer;
-    uint32 itemsCount, etime, bid, buyout;
-    recvData >> auctioneer;
-    recvData >> itemsCount;
+    // 3.4.3 (writer FUN_14075c070, Lua PostAuction): PackedGuid128 Auctioneer, u64 MinBid, u64 BuyoutPrice, u32 RunTime
+    // (minutes), bit HasTaintedBy, 6-bit item count, flush, [AddOnInfo], count x {PackedGuid128 item, u32 UseCount}
+    ObjectGuid auctioneer = Guid128::Read(recvData);
+    uint64 bid64 = recvData.read<uint64>();
+    uint64 buyout64 = recvData.read<uint64>();
+    uint32 etime = recvData.read<uint32>();
+    bool tainted = recvData.ReadBit();
+    uint32 itemsCount = recvData.ReadBits(6);
+    recvData.ResetBitReader();
+    if (tainted)
+        SkipAddOnInfo(recvData);
 
     ObjectGuid itemGUIDs[MAX_AUCTION_ITEMS]; // 160 slot = 4x 36 slot bag + backpack 16 slot
     uint32 count[MAX_AUCTION_ITEMS];
@@ -127,24 +213,24 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 
     for (uint32 i = 0; i < itemsCount; ++i)
     {
-        recvData >> itemGUIDs[i];
+        itemGUIDs[i] = Guid128::Read(recvData);
         recvData >> count[i];
 
         if (!itemGUIDs[i] || !count[i] || count[i] > 1000)
         {
             recvData.rfinish();
+            SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_ITEM_NOT_FOUND);
             return;
         }
     }
 
-    recvData >> bid;
-    recvData >> buyout;
-    recvData >> etime;
-
-    if (!bid || !etime)
+    if (!bid64 || !etime)
+    {
+        SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_DATABASE_ERROR);
         return;
+    }
 
-    if (bid > MAX_MONEY_AMOUNT || buyout > MAX_MONEY_AMOUNT)
+    if (bid64 > MAX_MONEY_AMOUNT || buyout64 > MAX_MONEY_AMOUNT)
     {
         LOG_DEBUG("network", "WORLD: HandleAuctionSellItem - Player {} ({}) attempted to sell item with higher price than max gold amount.",
             _player->GetName(), _player->GetGUID().ToString());
@@ -152,10 +238,14 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         return;
     }
 
+    uint32 bid = uint32(bid64);
+    uint32 buyout = uint32(buyout64);
+
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(auctioneer, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
     {
         LOG_DEBUG("network", "WORLD: HandleAuctionSellItem - Unit ({}) not found or you can't interact with him.", auctioneer.ToString());
+        SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_DATABASE_ERROR);
         return;
     }
 
@@ -175,6 +265,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         case 4*MIN_AUCTION_TIME:
             break;
         default:
+            SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_DATABASE_ERROR);
             return;
     }
 
@@ -410,14 +501,19 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 //this function is called when client bids or buys out auction
 void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 {
-    ObjectGuid auctioneer;
-    uint32 auctionId;
-    uint32 price;
-    recvData >> auctioneer;
-    recvData >> auctionId >> price;
+    // 3.4.3 (writer FUN_14075be90, Lua PlaceAuctionBid): PackedGuid128 Auctioneer, u32 AuctionID, u64 BidAmount (a buyout
+    // is a bid of the buyout price), bit HasTaintedBy, flush, [AddOnInfo]
+    ObjectGuid auctioneer = Guid128::Read(recvData);
+    uint32 auctionId = recvData.read<uint32>();
+    uint64 price64 = recvData.read<uint64>();
+    SkipTaintedBy(recvData);
 
-    if (!auctionId || !price)
+    if (!auctionId || !price64 || price64 > MAX_MONEY_AMOUNT)
+    {
+        SendAuctionCommandResult(auctionId, AUCTION_PLACE_BID, ERR_AUCTION_DATABASE_ERROR);
         return;                                             //check for cheaters
+    }
+    uint32 price = uint32(price64);
 
     if (sWorld->getBoolConfig(CONFIG_TRIAL_RESTRICTION_AUCTION) && IsTrialAccount())
     {
@@ -470,22 +566,24 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
         return;
     }
 
-    // cheating
+    // someone bid higher meanwhile: the client takes the new bid from the answer
     if (price <= auction->bid || price < auction->startbid)
+    {
+        SendAuctionCommandResult(auction->Id, AUCTION_PLACE_BID, ERR_AUCTION_HIGHER_BID, AuctionEntry::CalculateAuctionOutBid(auction->bid), auction->bidder, auction->bid);
         return;
+    }
 
     // price too low for next bid if not buyout
     if ((price < auction->buyout || auction->buyout == 0) &&
             price < auction->bid + AuctionEntry::CalculateAuctionOutBid(auction->bid))
     {
-        //auction has already higher bid, client tests it!
+        SendAuctionCommandResult(auction->Id, AUCTION_PLACE_BID, ERR_AUCTION_BID_INCREMENT);
         return;
     }
 
     if (!player->HasEnoughMoney(price))
     {
-        //you don't have enought money!, client tests!
-        //SendAuctionCommandResult(auction->auctionId, AUCTION_PLACE_BID, ???);
+        SendAuctionCommandResult(auction->Id, AUCTION_PLACE_BID, ERR_AUCTION_NOT_ENOUGHT_MONEY);
         return;
     }
 
@@ -520,7 +618,9 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
         stmt->SetData(2, auction->Id);
         trans->Append(stmt);
 
-        SendAuctionCommandResult(auction->Id, AUCTION_PLACE_BID, ERR_AUCTION_OK, 0);
+        SendAuctionCommandResult(auction->Id, AUCTION_PLACE_BID, ERR_AUCTION_OK, AuctionEntry::CalculateAuctionOutBid(auction->bid), auction->bidder, auction->bid);
+        if (auction_owner)
+            auction_owner->GetSession()->SendAuctionOwnerBidNotification(auction);
 
         if (HasPermission(rbac::RBAC_PERM_LOG_GM_TRADE))
         {
@@ -579,10 +679,11 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 //this void is called when auction_owner cancels his auction
 void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
 {
-    ObjectGuid auctioneer;
-    uint32 auctionId;
-    recvData >> auctioneer;
-    recvData >> auctionId;
+    // 3.4.3 (writer FUN_14075bf30, Lua CancelAuction): PackedGuid128 Auctioneer, u32 AuctionID, bit HasTaintedBy, flush,
+    // [AddOnInfo]
+    ObjectGuid auctioneer = Guid128::Read(recvData);
+    uint32 auctionId = recvData.read<uint32>();
+    SkipTaintedBy(recvData);
 
     if (sWorld->getBoolConfig(CONFIG_TRIAL_RESTRICTION_AUCTION) && IsTrialAccount())
     {
@@ -611,13 +712,19 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
     {
         Item* pItem = sAuctionMgr->GetAItem(auction->item_guid);
         if (!pItem)
+        {
+            SendAuctionCommandResult(auctionId, AUCTION_CANCEL, ERR_AUCTION_ITEM_NOT_FOUND);
             return;
+        }
 
         if (auction->bidder)                        // If we have a bidder, we have to send him the money he paid
         {
             uint32 auctionCut = auction->GetAuctionCut();
-            if (!player->HasEnoughMoney(auctionCut))          //player doesn't have enough money, maybe message needed
+            if (!player->HasEnoughMoney(auctionCut))
+            {
+                SendAuctionCommandResult(auctionId, AUCTION_CANCEL, ERR_AUCTION_NOT_ENOUGHT_MONEY);
                 return;
+            }
             //some auctionBidderNotification would be needed, but don't know that parts..
             sAuctionMgr->SendAuctionCancelledToBidderMail(auction, trans);
             player->ModifyMoney(-int32(auctionCut));
@@ -656,18 +763,15 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
 //called when player lists his bids
 void WorldSession::HandleAuctionListBidderItems(WorldPacket& recvData)
 {
-    ObjectGuid guid;                                            //NPC guid
-    uint32 listfrom;                                        //page of auctions
-    uint32 outbiddedCount;                                  //count of outbidded auctions
-
-    recvData >> guid;
-    recvData >> listfrom;                                  // not used in fact (this list not have page control in client)
-    recvData >> outbiddedCount;
-    if (recvData.size() != (16 + outbiddedCount * 4))
-    {
-        LOG_ERROR("network.opcode", "Client sent bad opcode!!! with count: {} and size : {} (must be: {})", outbiddedCount, (unsigned long)recvData.size(), (16 + outbiddedCount * 4));
-        outbiddedCount = 0;
-    }
+    // 3.4.3 (writer FUN_14075bca0): PackedGuid128 Auctioneer, u32 Offset, 7-bit AuctionID count, bit HasTaintedBy (after
+    // the count here), flush, [AddOnInfo], the AuctionIDs (the outbid auctions the client remembers)
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.read_skip<uint32>();                          // Offset
+    uint32 outbiddedCount = recvData.ReadBits(7);
+    bool tainted = recvData.ReadBit();
+    recvData.ResetBitReader();
+    if (tainted)
+        SkipAddOnInfo(recvData);
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
@@ -708,11 +812,10 @@ void WorldSession::HandleAuctionListBidderItems(WorldPacket& recvData)
 //this void sends player info about his auctions
 void WorldSession::HandleAuctionListOwnerItems(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    uint32 listfrom;
-
-    recvData >> guid;
-    recvData >> listfrom;       // not used in fact (this list does not have page control in client)
+    // 3.4.3 (writer FUN_14075bde0): PackedGuid128 Auctioneer, u32 Offset, bit HasTaintedBy, flush, [AddOnInfo]
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.read_skip<uint32>();
+    SkipTaintedBy(recvData);
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
@@ -734,41 +837,65 @@ void WorldSession::HandleAuctionListOwnerItems(WorldPacket& recvData)
 //this void is called when player clicks on search button
 void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
 {
-    std::string searchedname;
-    uint8 levelmin, levelmax, usable;
-    uint32 listfrom, auctionSlotID, auctionMainCategory, auctionSubCategory, quality;
-    ObjectGuid guid;
-
-    recvData >> guid;
-    recvData >> listfrom;                                  // start, used for page control listing by 50 elements
-    recvData >> searchedname;
-
-    recvData >> levelmin >> levelmax;
-    recvData >> auctionSlotID >> auctionMainCategory >> auctionSubCategory;
-    recvData >> quality >> usable;
-
-    uint8 getAll;
-    recvData >> getAll;
-
-    // Read sort block
-    uint8 sortOrderCount;
-    recvData >> sortOrderCount;
-
-    if (sortOrderCount > AUCTION_SORT_MAX)
+    // 3.4.3 (writer FUN_14075bda0 -> FUN_140750000, Lua QueryAuctionItems): PackedGuid128 Auctioneer, u32 Offset (page *
+    // 50), u8 MinLevel, u8 MaxLevel, u32 Quality (-1 any), u8 sort count, u32 known pets size, u8 MaxPetLevel, the known
+    // pets, bit HasTaintedBy, 8-bit name length, flush, the name, 3-bit class filter count, bits OnlyUsable, ExactMatch,
+    // flush, [AddOnInfo], the class filters {u32 ItemClass, 5-bit subclass count, flush, {u64 InvTypeMask, u32
+    // ItemSubclass}}, u32 sorts size, the sorts {u8 SortType, u8 Reversed}. getAll is CMSG_AUCTION_REPLICATE_ITEMS now.
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 listfrom = recvData.read<uint32>();
+    uint8 levelmin = recvData.read<uint8>();
+    uint8 levelmax = recvData.read<uint8>();
+    uint32 quality = recvData.read<uint32>();
+    uint8 sortOrderCount = recvData.read<uint8>();
+    uint32 knownPetsSize = recvData.read<uint32>();
+    recvData.read_skip<uint8>();                            // MaxPetLevel
+    if (knownPetsSize > recvData.size())
+    {
+        recvData.rfinish();
         return;
+    }
+    recvData.read_skip(knownPetsSize);
+    bool tainted = recvData.ReadBit();
+    uint32 nameLength = recvData.ReadBits(8);
+    recvData.ResetBitReader();
+    std::string searchedname = recvData.ReadString(nameLength);
+    uint32 classFilterCount = recvData.ReadBits(3);
+    uint8 usable = recvData.ReadBit();
+    bool exactMatch = recvData.ReadBit();
+    recvData.ResetBitReader();
+    if (tainted)
+        SkipAddOnInfo(recvData);
 
+    std::vector<AuctionHouseClassFilter> classFilters(classFilterCount);
+    for (AuctionHouseClassFilter& filter : classFilters)
+    {
+        filter.itemClass = recvData.read<uint32>();
+        uint32 subClassCount = recvData.ReadBits(5);
+        recvData.ResetBitReader();
+        filter.subClasses.resize(subClassCount);
+        for (AuctionHouseSubClassFilter& sub : filter.subClasses)
+        {
+            sub.invTypeMask = recvData.read<uint64>();
+            sub.itemSubClass = recvData.read<int32>();
+        }
+    }
+
+    recvData.read_skip<uint32>();                           // sorts size, 2 * count
     AuctionSortOrderVector sortOrder;
     for (uint8 i = 0; i < sortOrderCount; i++)
     {
-        uint8 sortMode;
-        uint8 isDesc;
-        recvData >> sortMode;
-        recvData >> isDesc;
+        uint8 sortMode = recvData.read<uint8>();
+        uint8 isDesc = recvData.read<uint8>();
+        if (sortMode >= AUCTION_SORT_MAX)                   // 3.4.3's unit price columns: the client sorts its page itself
+            continue;
         AuctionSortInfo sortInfo;
         sortInfo.isDesc = (isDesc == 1);
         sortInfo.sortOrder = static_cast<AuctionSortOrder>(sortMode);
         sortOrder.push_back(std::move(sortInfo));
     }
+    uint8 getAll = 0;
+    uint32 auctionSlotID = 0xFFFFFFFF, auctionMainCategory = 0xFFFFFFFF, auctionSubCategory = 0xFFFFFFFF;
 
     // converting string that we try to find to lower case
     std::wstring wsearchedname;
@@ -803,6 +930,8 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
     ahSearchInfo.quality = quality;
     ahSearchInfo.getAll = getAll;
     ahSearchInfo.sorting = std::move(sortOrder);
+    ahSearchInfo.classFilters = std::move(classFilters);
+    ahSearchInfo.exactMatch = exactMatch;
 
     AuctionHousePlayerInfo ahPlayerInfo;
     ahPlayerInfo.playerGuid = GetPlayer()->GetGUID();
@@ -832,21 +961,59 @@ void WorldSession::HandleAuctionListItems(WorldPacket& recvData)
     sAuctionMgr->GetAuctionHouseSearcher()->QueueSearchRequest(new AuctionSearchListRequest(auctionHouseFaction, std::move(ahSearchInfo), std::move(ahPlayerInfo)));
 }
 
-void WorldSession::HandleAuctionListPendingSales(WorldPacket& recvData)
+void WorldSession::HandleAuctionListPendingSales(WorldPacket& /*recvData*/)
 {
-    recvData.read_skip<uint64>();
-
-    uint32 count = 0;
-
-    WorldPacket data(SMSG_AUCTION_LIST_PENDING_SALES_RESULT, 4);
-    data << uint32(count);                                  // count
-    /*for (uint32 i = 0; i < count; ++i)
-    {
-        data << "";                                         // string
-        data << "";                                         // string
-        data << uint32(0);
-        data << uint32(0);
-        data << float(0);
-    }*/
+    // CMSG_AUCTION_LIST_PENDING_SALES, 3.4.3: empty. SMSG_AUCTION_LIST_PENDING_SALES_RESULT is a mail list (parser
+    // FUN_1406b8170): u32 count, i32 total, the mails. Its rows are rebuilt from the auction mail texts [TODO: list the
+    // sold auctions' pending mails once the auction mail bodies are in 3.4.3's text form]; the answer releases the
+    // client's owner query slot.
+    WorldPacket data(SMSG_AUCTION_LIST_PENDING_SALES_RESULT, 8);
+    data << uint32(0);
+    data << int32(0);
     SendPacket(&data);
+}
+
+/// CMSG_AUCTION_REPLICATE_ITEMS, 3.4.3 (writer FUN_14075bfc0, QueryAuctionItems with getAll): PackedGuid128 Auctioneer,
+/// u32 ChangeNumberGlobal, ChangeNumberCursor, ChangeNumberTombstone (echoed from the last answer), u32 Count (1024),
+/// bit HasTaintedBy, flush, [AddOnInfo]. The whole house in pages; the client asks again while a page is full.
+void WorldSession::HandleAuctionReplicateItems(WorldPacket& recvData)
+{
+    ObjectGuid guid = Guid128::Read(recvData);
+    recvData.read_skip<uint32>();                           // ChangeNumberGlobal
+    uint32 cursor = recvData.read<uint32>();
+    recvData.read_skip<uint32>();                           // ChangeNumberTombstone
+    uint32 count = recvData.read<uint32>();
+    SkipTaintedBy(recvData);
+
+    Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_AUCTIONEER);
+    AuctionHouseEntry const* ahEntry = creature ? AuctionHouseMgr::GetAuctionHouseEntryFromFactionTemplate(creature->GetFaction()) : nullptr;
+    if (!ahEntry)
+    {
+        // the browse slot is released by any answer
+        WorldPacket data(SMSG_AUCTION_REPLICATE_RESPONSE, 24);
+        data << uint32(1) << uint32(AUCTION_SEARCH_DELAY) << uint32(0) << uint32(0) << uint32(0) << uint32(0);
+        SendPacket(&data);
+        return;
+    }
+
+    AuctionHouseSearchInfo ahSearchInfo;
+    ahSearchInfo.listfrom = cursor;
+    ahSearchInfo.levelmin = 0;
+    ahSearchInfo.levelmax = 0;
+    ahSearchInfo.usable = false;
+    ahSearchInfo.inventoryType = 0xFFFFFFFF;
+    ahSearchInfo.itemClass = 0xFFFFFFFF;
+    ahSearchInfo.itemSubClass = 0xFFFFFFFF;
+    ahSearchInfo.quality = 0xFFFFFFFF;
+    ahSearchInfo.getAll = true;
+    ahSearchInfo.replicateCount = std::min<uint32>(count ? count : 1024, 1024);
+
+    AuctionHousePlayerInfo ahPlayerInfo;
+    ahPlayerInfo.playerGuid = GetPlayer()->GetGUID();
+    ahPlayerInfo.faction = GetPlayer()->GetFaction();
+    ahPlayerInfo.loc_idx = GetPlayer()->GetSession()->GetSessionDbLocaleIndex();
+    ahPlayerInfo.locdbc_idx = GetPlayer()->GetSession()->GetSessionDbcLocale();
+
+    AuctionHouseFaction auctionHouseFaction = AuctionHouseMgr::GetAuctionHouseFactionFromHouseId(AuctionHouseId(ahEntry->houseId));
+    sAuctionMgr->GetAuctionHouseSearcher()->QueueSearchRequest(new AuctionSearchListRequest(auctionHouseFaction, std::move(ahSearchInfo), std::move(ahPlayerInfo)));
 }

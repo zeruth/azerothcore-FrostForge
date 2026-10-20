@@ -17,6 +17,8 @@
 
 #include "AuctionHouseMgr.h"
 #include "AuctionHouseSearcher.h"
+#include "ItemPackets.h"
+#include "PacketGuid128.h"
 #include "CharacterCache.h"
 #include "DBCStores.h"
 #include "GameTime.h"
@@ -139,15 +141,19 @@ void AuctionHouseWorkerThread::ProcessSearchRequests()
     }
 }
 
+/// SMSG_AUCTION_LIST_ITEMS_RESULT, 3.4.3 (FUN_1406b7f20, handler FUN_141c7c4b0): u32 ItemsCount, u32 TotalCount, u32
+/// DesiredDelay, bit OnlyUsable, flush, the AuctionItems. getAll (CMSG_AUCTION_REPLICATE_ITEMS) answers
+/// SMSG_AUCTION_REPLICATE_RESPONSE (FUN_1406b8480): u32 Result, u32 DesiredDelay, u32 ChangeNumberGlobal, Cursor,
+/// Tombstone (echoed back by the next request), u32 ItemsCount, the AuctionItems; a full page makes the client ask for
+/// the next one at Cursor.
 void AuctionHouseWorkerThread::SearchListRequest(AuctionSearchListRequest const& searchListRequest)
 {
     SearchableAuctionEntriesMap const& searchableAuctionMap = GetSearchableAuctionMap(searchListRequest.listFaction);
     uint32 count = 0, totalCount = 0;
+    ByteBuffer items;
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchListRequest.playerInfo.playerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_ITEMS_RESULT, (4 + 4 + 4));
-    searchResponse->packet << (uint32)0;
 
     if (!searchListRequest.searchInfo.getAll)
     {
@@ -171,35 +177,58 @@ void AuctionHouseWorkerThread::SearchListRequest(AuctionSearchListRequest const&
 
         for (; itr != auctionEntries.end(); ++itr)
         {
-            (*itr)->BuildAuctionInfo(searchResponse->packet);
+            (*itr)->BuildAuctionInfo(items);
 
             if (++count >= MAX_AUCTIONS_PER_PAGE)
                 break;
         }
 
         totalCount = auctionEntries.size();
+
+        searchResponse->packet.Initialize(SMSG_AUCTION_LIST_ITEMS_RESULT, 13 + items.size());
+        searchResponse->packet << uint32(count);
+        searchResponse->packet << uint32(totalCount);
+        searchResponse->packet << uint32(AUCTION_SEARCH_DELAY);
+        searchResponse->packet.WriteBit(searchListRequest.searchInfo.usable);
+        searchResponse->packet.FlushBits();
     }
     else
     {
-        // getAll handling
+        // getAll: the house in pages from the cursor
+        uint32 cursor = searchListRequest.searchInfo.listfrom;
+        uint32 pageSize = searchListRequest.searchInfo.replicateCount ? searchListRequest.searchInfo.replicateCount : 1024;
+        uint32 index = 0;
         for (auto const& pair : searchableAuctionMap)
         {
-            std::shared_ptr<SearchableAuctionEntry> const& Aentry = pair.second;
-            ++count;
-            Aentry->BuildAuctionInfo(searchResponse->packet);
-
-            if (count >= MAX_GETALL_RETURN)
+            if (index++ < cursor)
+                continue;
+            pair.second->BuildAuctionInfo(items);
+            if (++count >= pageSize)
                 break;
         }
 
-        totalCount = searchableAuctionMap.size();
+        searchResponse->packet.Initialize(SMSG_AUCTION_REPLICATE_RESPONSE, 24 + items.size());
+        searchResponse->packet << uint32(0);                // Result
+        searchResponse->packet << uint32(AUCTION_SEARCH_DELAY);
+        searchResponse->packet << uint32(1);                // ChangeNumberGlobal: a snapshot is held
+        searchResponse->packet << uint32(cursor + count);   // ChangeNumberCursor
+        searchResponse->packet << uint32(0);                // ChangeNumberTombstone
+        searchResponse->packet << uint32(count);
     }
 
-    searchResponse->packet.put<uint32>(0, count);
-    searchResponse->packet << totalCount;
-    searchResponse->packet << uint32(AUCTION_SEARCH_DELAY);
-
+    searchResponse->packet.append(items);
     _responseQueue->Enqueue(searchResponse);
+}
+
+/// SMSG_AUCTION_LIST_OWNER_ITEMS_RESULT / SMSG_AUCTION_LIST_BIDDER_ITEMS_RESULT, 3.4.3 (FUN_1406b7df0): u32 ItemsCount, u32
+/// TotalCount, u32 DesiredDelay, the AuctionItems
+static void BuildAuctionListResult(WorldPacket& packet, Opcodes opcode, uint32 count, ByteBuffer const& items)
+{
+    packet.Initialize(opcode, 12 + items.size());
+    packet << uint32(count);
+    packet << uint32(count);
+    packet << uint32(AUCTION_SEARCH_DELAY);
+    packet.append(items);
 }
 
 void AuctionHouseWorkerThread::SearchOwnerListRequest(AuctionSearchOwnerListRequest const& searchOwnerListRequest)
@@ -208,27 +237,19 @@ void AuctionHouseWorkerThread::SearchOwnerListRequest(AuctionSearchOwnerListRequ
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchOwnerListRequest.ownerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_OWNER_ITEMS_RESULT, (4 + 4 + 4));
-    searchResponse->packet << (uint32)0;                                     // amount place holder
 
     uint32 count = 0;
-    uint32 totalcount = 0;
-
+    ByteBuffer items;
     for (auto const& pair : searchableAuctionMap)
     {
         if (pair.second->ownerGuid != searchOwnerListRequest.ownerGuid)
             continue;
 
-        std::shared_ptr<SearchableAuctionEntry> const& auctionEntry = pair.second;
-        auctionEntry->BuildAuctionInfo(searchResponse->packet);
+        pair.second->BuildAuctionInfo(items);
         ++count;
-        ++totalcount;
     }
 
-    searchResponse->packet.put<uint32>(0, count);
-    searchResponse->packet << (uint32)totalcount;
-    searchResponse->packet << uint32(AUCTION_SEARCH_DELAY);
-
+    BuildAuctionListResult(searchResponse->packet, SMSG_AUCTION_LIST_OWNER_ITEMS_RESULT, count, items);
     _responseQueue->Enqueue(searchResponse);
 }
 
@@ -238,22 +259,17 @@ void AuctionHouseWorkerThread::SearchBidderListRequest(AuctionSearchBidderListRe
 
     AuctionSearcherResponse* searchResponse = new AuctionSearcherResponse();
     searchResponse->playerGuid = searchBidderListRequest.ownerGuid;
-    searchResponse->packet.Initialize(SMSG_AUCTION_LIST_BIDDER_ITEMS_RESULT, (4 + 4 + 4));
-    searchResponse->packet << (uint32)0;                                     //add 0 as count
 
     uint32 count = 0;
-    uint32 totalcount = 0;
-
+    ByteBuffer items;
     for (uint32 const auctionId : searchBidderListRequest.outbiddedAuctionIds)
     {
         SearchableAuctionEntriesMap::const_iterator itr = searchableAuctionMap.find(auctionId);
         if (itr == searchableAuctionMap.end())
             continue;
 
-        std::shared_ptr<SearchableAuctionEntry> const& auctionEntry = itr->second;
-        auctionEntry->BuildAuctionInfo(searchResponse->packet);
+        itr->second->BuildAuctionInfo(items);
         ++count;
-        ++totalcount;
     }
 
     for (auto const& pair : searchableAuctionMap)
@@ -261,16 +277,11 @@ void AuctionHouseWorkerThread::SearchBidderListRequest(AuctionSearchBidderListRe
         if (pair.second->bidderGuid != searchBidderListRequest.ownerGuid)
             continue;
 
-        std::shared_ptr<SearchableAuctionEntry> const& auctionEntry = pair.second;
-        auctionEntry->BuildAuctionInfo(searchResponse->packet);
+        pair.second->BuildAuctionInfo(items);
         ++count;
-        ++totalcount;
     }
 
-    searchResponse->packet.put<uint32>(0, count);                           // add count to placeholder
-    searchResponse->packet << totalcount;
-    searchResponse->packet << uint32(AUCTION_SEARCH_DELAY);
-
+    BuildAuctionListResult(searchResponse->packet, SMSG_AUCTION_LIST_BIDDER_ITEMS_RESULT, count, items);
     _responseQueue->Enqueue(searchResponse);
 }
 
@@ -278,6 +289,7 @@ void AuctionHouseWorkerThread::BuildListAuctionItems(AuctionSearchListRequest co
 {
     // pussywizard: optimization, this is a simplified case for the default search state (no filters)
     if (searchRequest.searchInfo.itemClass == 0xffffffff && searchRequest.searchInfo.itemSubClass == 0xffffffff
+        && searchRequest.searchInfo.classFilters.empty()
         && searchRequest.searchInfo.inventoryType == 0xffffffff && searchRequest.searchInfo.quality == 0xffffffff
         && searchRequest.searchInfo.levelmin == 0x00 && searchRequest.searchInfo.levelmax == 0x00
         && searchRequest.searchInfo.usable == 0x00 && searchRequest.searchInfo.wsearchedname.empty())
@@ -310,6 +322,39 @@ void AuctionHouseWorkerThread::BuildListAuctionItems(AuctionSearchListRequest co
         if (searchRequest.searchInfo.quality != 0xffffffff && proto->Quality < searchRequest.searchInfo.quality)
             continue;
 
+        // 3.4.3's class filters: one of them must match (a class, then any of its subclass / inventory type pairs)
+        if (!searchRequest.searchInfo.classFilters.empty())
+        {
+            auto invTypeMatches = [proto](uint64 mask)
+            {
+                if (mask & (uint64(1) << proto->InventoryType))
+                    return true;
+                // xinef: exception, robes are counted as chests
+                return proto->InventoryType == INVTYPE_ROBE && (mask & (uint64(1) << INVTYPE_CHEST));
+            };
+            bool matched = false;
+            for (AuctionHouseClassFilter const& filter : searchRequest.searchInfo.classFilters)
+            {
+                if (filter.itemClass != proto->Class)
+                    continue;
+                if (filter.subClasses.empty())
+                {
+                    matched = true;
+                    break;
+                }
+                for (AuctionHouseSubClassFilter const& sub : filter.subClasses)
+                    if ((sub.itemSubClass < 0 || uint32(sub.itemSubClass) == proto->SubClass) && invTypeMatches(sub.invTypeMask))
+                    {
+                        matched = true;
+                        break;
+                    }
+                if (matched)
+                    break;
+            }
+            if (!matched)
+                continue;
+        }
+
         if (searchRequest.searchInfo.levelmin != 0x00 && (proto->RequiredLevel < searchRequest.searchInfo.levelmin
             || (searchRequest.searchInfo.levelmax != 0x00 && proto->RequiredLevel > searchRequest.searchInfo.levelmax)))
         {
@@ -326,7 +371,9 @@ void AuctionHouseWorkerThread::BuildListAuctionItems(AuctionSearchListRequest co
         // No need to do any of this if no search term was entered
         if (!searchRequest.searchInfo.wsearchedname.empty())
         {
-            if (Aitem.itemName[searchRequest.playerInfo.loc_idx].find(searchRequest.searchInfo.wsearchedname) == std::wstring::npos)
+            std::wstring const& itemName = Aitem.itemName[searchRequest.playerInfo.loc_idx];
+            if (searchRequest.searchInfo.exactMatch ? itemName != searchRequest.searchInfo.wsearchedname
+                : itemName.find(searchRequest.searchInfo.wsearchedname) == std::wstring::npos)
                 continue;
         }
 
@@ -431,31 +478,65 @@ void AuctionHouseSearcher::NotifyOneWorker(std::shared_ptr<AuctionSearcherUpdate
     (*_workerThreads.begin())->AddAuctionSearchUpdateToQueue(auctionSearchUpdate);
 }
 
-void SearchableAuctionEntry::BuildAuctionInfo(WorldPacket& data) const
+/// AuctionItem, 3.4.3 (FUN_14070b070): bits HasItem, 4-bit enchantment count, 2-bit gem count, HasMinBid,
+/// HasMinIncrement, HasBuyoutPrice, HasUnitPrice, CensorServerSideInfo, CensorBidInfo, HasAuctionBucketKey, HasCreator,
+/// [!CensorBidInfo: HasBidder, HasBidAmount], flush, [ItemInstance], i32 Count, i32 Charges, i32 Flags, u32 AuctionID,
+/// PackedGuid128 Owner, i32 DurationLeft (ms), u8 DeleteReason, the enchantments {u32 ID, u32 Expiration, i32 Charges,
+/// u8 Slot}, [u64 MinBid], [u64 MinIncrement], [u64 BuyoutPrice], [u64 UnitPrice], [!CensorServerSideInfo: item GUID,
+/// owner account, u32 EndTime], [Creator], [Bidder], [u64 BidAmount], the gems, [bucket key]
+void SearchableAuctionEntry::BuildAuctionInfo(ByteBuffer& data) const
 {
-    data << uint32(Id);
-    data << uint32(item.entry);
-
+    uint32 enchantCount = 0;
     for (uint8 i = 0; i < MAX_INSPECTED_ENCHANTMENT_SLOT; ++i)
+        if (item.enchants[i].id)
+            ++enchantCount;
+    enchantCount = std::min<uint32>(enchantCount, 15);
+
+    bool hasBidder = !bidderGuid.IsEmpty();
+    data.WriteBit(true);                                    // HasItem
+    data.WriteBits(enchantCount, 4);
+    data.WriteBits(0, 2);                                   // gems: the socket enchantments are in the list
+    data.WriteBit(true);                                    // HasMinBid
+    data.WriteBit(bid != 0);                                // HasMinIncrement
+    data.WriteBit(true);                                    // HasBuyoutPrice
+    data.WriteBit(false);                                   // HasUnitPrice
+    data.WriteBit(true);                                    // CensorServerSideInfo
+    data.WriteBit(false);                                   // CensorBidInfo
+    data.WriteBit(false);                                   // HasAuctionBucketKey
+    data.WriteBit(false);                                   // HasCreator
+    data.WriteBit(hasBidder);
+    data.WriteBit(bid != 0);                                // HasBidAmount
+    data.FlushBits();
+
+    WorldPackets::Item::WriteItemInstance(data, item.entry, int32(item.suffixFactor), item.randomPropertyId);
+    data << int32(item.count);
+    data << int32(item.spellCharges);
+    data << int32(0);                                       // Flags
+    data << uint32(Id);
+    Guid128::Write(data, ownerGuid);
+    data << int32(std::max<int64>(0, int64(expire_time - GameTime::GetGameTime().count())) * IN_MILLISECONDS);
+    data << uint8(0);                                       // DeleteReason
+
+    uint32 written = 0;
+    for (uint8 i = 0; i < MAX_INSPECTED_ENCHANTMENT_SLOT && written < enchantCount; ++i)
     {
+        if (!item.enchants[i].id)
+            continue;
         data << uint32(item.enchants[i].id);
         data << uint32(item.enchants[i].duration);
-        data << uint32(item.enchants[i].charges);
+        data << int32(item.enchants[i].charges);
+        data << uint8(i);
+        ++written;
     }
 
-    data << int32(item.randomPropertyId);                           // Random item property id
-    data << uint32(item.suffixFactor);                              // SuffixFactor
-    data << uint32(item.count);                                     // item->count
-    data << uint32(item.spellCharges);                              // item->charge FFFFFFF
-    data << uint32(0);                                              // item->flags (client doesnt do anything with it)
-    data << ownerGuid;                                              // Auction->owner
-    data << uint32(startbid);                                       // Auction->startbid (not sure if useful)
-    data << uint32(bid ? AuctionEntry::CalculateAuctionOutBid(bid) : 0);
-    // Minimal outbid
-    data << uint32(buyout);                                         // Auction->buyout
-    data << uint32((expire_time - GameTime::GetGameTime().count()) * IN_MILLISECONDS); // time left
-    data << bidderGuid;                                             // auction->bidder current
-    data << uint32(bid);                                            // current bid
+    data << uint64(startbid);
+    if (bid)
+        data << uint64(AuctionEntry::CalculateAuctionOutBid(bid));
+    data << uint64(buyout);
+    if (hasBidder)
+        Guid128::Write(data, bidderGuid);
+    if (bid)
+        data << uint64(bid);
 }
 
 void SearchableAuctionEntry::SetItemNames()

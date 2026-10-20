@@ -660,9 +660,10 @@ public:
     }
     //auction
     void SendAuctionHello(ObjectGuid guid, Creature* unit);
-    void SendAuctionCommandResult(uint32 auctionId, uint32 Action, uint32 ErrorCode, uint32 bidError = 0);
+    void SendAuctionCommandResult(uint32 auctionId, uint32 Action, uint32 ErrorCode, uint32 bidError = 0, ObjectGuid bidder = ObjectGuid::Empty, uint64 bidAmount = 0);
     void SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template);
     void SendAuctionOwnerNotification(AuctionEntry* auction);
+    void SendAuctionOwnerBidNotification(AuctionEntry* auction);
 
     //Item Enchantment
     void SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, ObjectGuid itemGuid, uint32 itemId, uint32 enchantId, uint32 enchantSlot);
@@ -962,6 +963,7 @@ public:                                                 // opcodes handlers
     void HandleAuctionListOwnerItems(WorldPacket& recvData);
     void HandleAuctionPlaceBid(WorldPacket& recvData);
     void HandleAuctionListPendingSales(WorldPacket& recvData);
+    void HandleAuctionReplicateItems(WorldPacket& recvData);
 
     // Bank
     void HandleBankerActivateOpcode(WorldPacket& recvData);

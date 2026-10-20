@@ -88,13 +88,27 @@ struct SearchableAuctionEntry
     AuctionHouseFaction listFaction;
     SearchableAuctionEntryItem item;
 
-    void BuildAuctionInfo(WorldPacket& data) const;
+    void BuildAuctionInfo(ByteBuffer& data) const;
     void SetItemNames();
 
     int CompareAuctionEntry(uint32 column, SearchableAuctionEntry const& auc, int loc_idx) const;
 };
 
 typedef std::vector<AuctionSortInfo> AuctionSortOrderVector;
+
+/// A 3.4.3 browse class filter (CMSG_AUCTION_LIST_ITEMS): a class, and per wanted subclass the inventory types as a
+/// mask (1 << InventoryType; 0xFFFFFFFF: any) and the subclass (-1: any)
+struct AuctionHouseSubClassFilter
+{
+    uint64 invTypeMask = 0xFFFFFFFF;
+    int32 itemSubClass = -1;
+};
+
+struct AuctionHouseClassFilter
+{
+    uint32 itemClass = 0;
+    std::vector<AuctionHouseSubClassFilter> subClasses;
+};
 
 struct AuctionHouseSearchInfo
 {
@@ -109,6 +123,9 @@ struct AuctionHouseSearchInfo
     uint32 quality;
     bool getAll;
     AuctionSortOrderVector sorting;
+    std::vector<AuctionHouseClassFilter> classFilters;
+    bool exactMatch = false;
+    uint32 replicateCount = 0;                              // getAll: the page size of SMSG_AUCTION_REPLICATE_RESPONSE
 };
 
 typedef std::unordered_map<uint32, uint16> AuctionPlayerSkills;
