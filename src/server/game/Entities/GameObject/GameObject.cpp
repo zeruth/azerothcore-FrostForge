@@ -16,6 +16,7 @@
  */
 
 #include "AccountMgr.h"
+#include "PacketGuid128.h"
 #include "BattlegroundAV.h"
 #include "CellImpl.h"
 #include "CreatureAISelector.h"
@@ -1651,8 +1652,10 @@ void GameObject::Use(Unit* user)
 
                     if (info->goober.pageId)                    // show page...
                     {
-                        WorldPacket data(SMSG_PAGE_TEXT, 8);
-                        data << GetGUID();
+                        // 3.4.3 (handler FUN_1417530f0): PackedGuid128 GameObjectGUID; the client
+                        // queries the pages itself
+                        WorldPacket data(SMSG_PAGE_TEXT, 18);
+                        Guid128::Write(data, GetGUID());
                         player->SendDirectMessage(&data);
                     }
                     else if (info->goober.gossipID)
@@ -2169,9 +2172,13 @@ void GameObject::CastSpell(Unit* target, uint32 spellId)
 
 void GameObject::SendCustomAnim(uint32 anim)
 {
-    WorldPacket data(SMSG_GAME_OBJECT_CUSTOM_ANIM, 8 + 4);
-    data << GetGUID();
+    // 3.4.3 (FUN_1406c0470, handler FUN_141752b90): PackedGuid128 ObjectGUID, u32 CustomAnim (the client
+    // plays only 0-3), bit PlayAsDespawn, flush
+    WorldPacket data(SMSG_GAME_OBJECT_CUSTOM_ANIM, 18 + 4 + 1);
+    Guid128::Write(data, GetGUID());
     data << uint32(anim);
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 

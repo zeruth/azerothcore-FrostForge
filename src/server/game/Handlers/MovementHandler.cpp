@@ -887,10 +887,9 @@ void WorldSession::HandleSummonResponseOpcode(WorldPacket& recvData)
     if (!_player->IsAlive() || _player->IsInCombat())
         return;
 
-    ObjectGuid summoner_guid;
-    bool agree;
-    recvData >> summoner_guid;
-    recvData >> agree;
+    // 3.4.3 (writer FUN_1407699c0): PackedGuid128 SummonerGUID, bit Accept, flush
+    ObjectGuid summoner_guid = Guid128::Read(recvData);
+    bool agree = recvData.ReadBit();
 
     if (agree && _player->IsSummonAsSpectator())
     {

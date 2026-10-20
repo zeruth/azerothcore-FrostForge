@@ -24,6 +24,7 @@
  */
 
 #include "ThreatManager.h"
+#include "PacketGuid128.h"
 #include "CombatManager.h"
 #include "Containers.h"
 #include "Creature.h"
@@ -864,25 +865,30 @@ void ThreatManager::UnregisterRedirectThreat(uint32 spellId, ObjectGuid const& v
 
 void ThreatManager::SendClearAllThreatToClients() const
 {
-    WorldPacket data(SMSG_THREAT_CLEAR, 8);
-    data << _owner->GetPackGUID();
+    // 3.4.3 (FUN_1406b8960, handler FUN_14178e570): PackedGuid128 UnitGUID
+    WorldPacket data(SMSG_THREAT_CLEAR, 18);
+    Guid128::Write(data, _owner->GetGUID());
     _owner->SendMessageToSet(&data, false);
 }
 
 void ThreatManager::SendRemoveToClients(Unit const* victim) const
 {
-    WorldPacket data(SMSG_THREAT_REMOVE, 16);
-    data << _owner->GetPackGUID();
-    data << victim->GetPackGUID();
+    // 3.4.3 (FUN_1406b75d0, handler FUN_14178e5b0): PackedGuid128 UnitGUID, PackedGuid128 AboutGUID
+    WorldPacket data(SMSG_THREAT_REMOVE, 18 * 2);
+    Guid128::Write(data, _owner->GetGUID());
+    Guid128::Write(data, victim->GetGUID());
     _owner->SendMessageToSet(&data, false);
 }
 
 void ThreatManager::SendThreatListToClients(bool newHighest) const
 {
-    WorldPacket data(newHighest ? SMSG_HIGHEST_THREAT_UPDATE : SMSG_THREAT_UPDATE, (_sortedThreatList->size() + 2) * 8); // guess
-    data << _owner->GetPackGUID();
+    // 3.4.3: SMSG_HIGHEST_THREAT_UPDATE (FUN_1406c20f0, handler FUN_141789a80): PackedGuid128 UnitGUID,
+    // PackedGuid128 HighestThreatGUID, u32 count, {PackedGuid128, i64 Threat}; SMSG_THREAT_UPDATE
+    // (FUN_1406cc1b0, handler FUN_14178e5f0) the same without the highest. The threat is 64-bit now.
+    WorldPacket data(newHighest ? SMSG_HIGHEST_THREAT_UPDATE : SMSG_THREAT_UPDATE, (_sortedThreatList->size() + 2) * 26);
+    Guid128::Write(data, _owner->GetGUID());
     if (newHighest)
-        data << _currentVictimRef->GetVictim()->GetPackGUID();
+        Guid128::Write(data, _currentVictimRef->GetVictim()->GetGUID());
     size_t countPos = data.wpos();
     data << uint32(0); // placeholder
     uint32 count = 0;
@@ -890,8 +896,8 @@ void ThreatManager::SendThreatListToClients(bool newHighest) const
     {
         if (!ref->IsAvailable())
             continue;
-        data << ref->GetVictim()->GetPackGUID();
-        data << uint32(ref->GetThreat() * 100);
+        Guid128::Write(data, ref->GetVictim()->GetGUID());
+        data << int64(ref->GetThreat() * 100);
         ++count;
     }
     data.put<uint32>(countPos, count);

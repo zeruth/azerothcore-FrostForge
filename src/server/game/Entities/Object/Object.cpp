@@ -2197,8 +2197,9 @@ bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) co
 
 void WorldObject::SendPlayMusic(uint32 Music, bool OnlySelf)
 {
+    // 3.4.3: read raw, i32 SoundKitID
     WorldPacket data(SMSG_PLAY_MUSIC, 4);
-    data << Music;
+    data << int32(Music);
     if (OnlySelf && IsPlayer())
         ToPlayer()->SendDirectMessage(&data);
     else
@@ -2258,8 +2259,9 @@ void WorldObject::SendMessageToSet(WorldPacket const* data, Player const* skippe
 
 void WorldObject::SendObjectDeSpawnAnim(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_GAME_OBJECT_DESPAWN, 8);
-    data << guid;
+    // 3.4.3 (handler FUN_141752c40): PackedGuid128 ObjectGUID
+    WorldPacket data(SMSG_GAME_OBJECT_DESPAWN, 18);
+    Guid128::Write(data, guid);
     SendMessageToSet(&data, true);
 }
 
@@ -3077,18 +3079,20 @@ void WorldObject::SetPhaseMask(uint32 newPhaseMask, bool update)
 
 void WorldObject::PlayDistanceSound(uint32 sound_id, Player* target /*= nullptr*/)
 {
+    WorldPackets::Misc::PlayObjectSound sound(GetGUID(), sound_id);
+    sound.Position = GetPosition();
     if (target)
-        target->SendDirectMessage(WorldPackets::Misc::PlayObjectSound(GetGUID(), sound_id).Write());
+        target->SendDirectMessage(sound.Write());
     else
-        SendMessageToSet(WorldPackets::Misc::PlayObjectSound(GetGUID(), sound_id).Write(), true);
+        SendMessageToSet(sound.Write(), true);
 }
 
 void WorldObject::PlayDirectSound(uint32 sound_id, Player* target /*= nullptr*/)
 {
     if (target)
-        target->SendDirectMessage(WorldPackets::Misc::Playsound(sound_id).Write());
+        target->SendDirectMessage(WorldPackets::Misc::Playsound(sound_id, GetGUID()).Write());
     else
-        SendMessageToSet(WorldPackets::Misc::Playsound(sound_id).Write(), true);
+        SendMessageToSet(WorldPackets::Misc::Playsound(sound_id, GetGUID()).Write(), true);
 }
 
 void WorldObject::PlayRadiusSound(uint32 sound_id, float radius)
@@ -3099,7 +3103,7 @@ void WorldObject::PlayRadiusSound(uint32 sound_id, float radius)
     Cell::VisitObjects(this, searcher, radius);
 
     for (Player* player : targets)
-        player->SendDirectMessage(WorldPackets::Misc::Playsound(sound_id).Write());
+        player->SendDirectMessage(WorldPackets::Misc::Playsound(sound_id, GetGUID()).Write());
 }
 
 void WorldObject::PlayDirectMusic(uint32 music_id, Player* target /*= nullptr*/)

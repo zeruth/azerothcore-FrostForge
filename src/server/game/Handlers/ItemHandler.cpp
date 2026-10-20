@@ -1255,24 +1255,25 @@ void WorldSession::HandleItemRefund(WorldPackets::Item::ItemRefund& packet)
  */
 void WorldSession::HandleItemTextQuery(WorldPacket& recvData )
 {
-    ObjectGuid itemGuid;
-    recvData >> itemGuid;
+    // 3.4.3 (writer FUN_14075e340): PackedGuid128 Id
+    ObjectGuid itemGuid = Guid128::Read(recvData);
 
     LOG_DEBUG("network", "CMSG_ITEM_TEXT_QUERY item: {}", itemGuid.ToString());
 
-    WorldPacket data(SMSG_QUERY_ITEM_TEXT_RESPONSE, 50);        // guess size
+    // SMSG_QUERY_ITEM_TEXT_RESPONSE, 3.4.3 (handler FUN_140348c90): bit Valid, flush, 13-bit length, flush,
+    // the text, PackedGuid128 Id. The client keeps up to 8000 characters.
+    Item* item = _player->GetItemByGuid(itemGuid);
+    std::string text = item ? item->GetText() : std::string();
+    if (text.size() > 8000)
+        text.resize(8000);
 
-    if (Item* item = _player->GetItemByGuid(itemGuid))
-    {
-        data << uint8(0);                                       // has text
-        data << itemGuid;                                       // item guid
-        data << item->GetText();
-    }
-    else
-    {
-        data << uint8(1);                                       // no text
-    }
-
+    WorldPacket data(SMSG_QUERY_ITEM_TEXT_RESPONSE, 3 + text.size() + 18);
+    data.WriteBit(item != nullptr);
+    data.FlushBits();
+    data.WriteBits(text.size(), 13);
+    data.FlushBits();
+    data.WriteString(text);
+    Guid128::Write(data, itemGuid);
     SendPacket(&data);
 }
 

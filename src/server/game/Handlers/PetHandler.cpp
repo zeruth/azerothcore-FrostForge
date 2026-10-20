@@ -1141,9 +1141,10 @@ void WorldSession::HandlePetLearnTalent(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_PET_LEARN_TALENT");
 
-    ObjectGuid guid;
-    uint32 talent_id, requested_rank;
-    recvData >> guid >> talent_id >> requested_rank;
+    // 3.4.3 (writer FUN_14075e4e0): PackedGuid128 PetGUID, i32 TalentID, u16 RequestedRank
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 talent_id = recvData.read<uint32>();
+    uint32 requested_rank = recvData.read<uint16>();
 
     _player->LearnPetTalent(guid, talent_id, requested_rank);
     _player->SendTalentsInfoData(true);
@@ -1153,20 +1154,19 @@ void WorldSession::HandleLearnPreviewTalentsPet(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "CMSG_LEARN_PREVIEW_TALENTS_PET");
 
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075e530): PackedGuid128 PetGUID, u32 Count, Count x {i32 TalentID, u8 Rank}
+    ObjectGuid guid = Guid128::Read(recvData);
 
     uint32 talentsCount;
     recvData >> talentsCount;
-
-    uint32 talentId, talentRank;
 
     // Client has max 24 talents, rounded up : 30
     uint32 const MaxTalentsCount = 30;
 
     for (uint32 i = 0; i < talentsCount && i < MaxTalentsCount; ++i)
     {
-        recvData >> talentId >> talentRank;
+        uint32 talentId = recvData.read<uint32>();
+        uint32 talentRank = recvData.read<uint8>();
 
         _player->LearnPetTalent(guid, talentId, talentRank);
     }

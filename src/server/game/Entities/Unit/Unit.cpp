@@ -10374,8 +10374,9 @@ void Unit::Dismount()
         player->GetSession()->IncrementOrderCounter();
     }
 
-    WorldPacket data(SMSG_DISMOUNT, 8);
-    data << GetPackGUID();
+    // 3.4.3 (FUN_1406b8960, handler FUN_1417899a0): PackedGuid128 Guid
+    WorldPacket data(SMSG_DISMOUNT, 18);
+    Guid128::Write(data, GetGUID());
     SendMessageToSet(&data, true);
 
     // dismount as a vehicle
@@ -13640,9 +13641,11 @@ void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackTyp
     // call kill spell proc event (before real die and combat stop to triggering auras removed at death/combat stop)
     if (isRewardAllowed && player && player != victim)
     {
-        WorldPacket data(SMSG_PARTY_KILL_LOG, (8 + 8)); // send event PARTY_KILL
-        data << player->GetGUID(); // player with killing blow
-        data << victim->GetGUID(); // victim
+        // SMSG_PARTY_KILL_LOG, 3.4.3 (FUN_1406c6380, handler FUN_1417262b0): PackedGuid128 Player (the
+        // killing blow), PackedGuid128 Victim; the client logs PARTY_KILL
+        WorldPacket data(SMSG_PARTY_KILL_LOG, 18 * 2);
+        Guid128::Write(data, player->GetGUID());
+        Guid128::Write(data, victim->GetGUID());
 
         Player* looter = player;
         Group* group = player->GetGroup();
@@ -15901,8 +15904,10 @@ void Unit::CastDelayedSpellWithPeriodicAmount(Unit* caster, uint32 spellId, Aura
 
 void Unit::SendClearTarget()
 {
-    WorldPacket data(SMSG_BREAK_TARGET, GetPackGUID().size());
-    data << GetPackGUID();
+    // 3.4.3 (handler FUN_141926d20): PackedGuid128 UnitGUID; the client drops the target only if it can
+    // no longer hold it
+    WorldPacket data(SMSG_BREAK_TARGET, 18);
+    Guid128::Write(data, GetGUID());
     SendMessageToSet(&data, false);
 }
 

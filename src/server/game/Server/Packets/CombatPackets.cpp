@@ -20,7 +20,9 @@
 
 void WorldPackets::Combat::SetSheathed::Read()
 {
+    // 3.4.3 (writer FUN_140760930): i32 CurrentSheathState, bit Animate, flush
     _worldPacket >> CurrentSheathState;
+    _worldPacket.ReadBit();
 }
 
 WorldPacket const* WorldPackets::Combat::SAttackStop::Write()

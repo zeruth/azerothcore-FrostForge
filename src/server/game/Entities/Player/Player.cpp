@@ -1578,10 +1578,18 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             if (!GetSession()->PlayerLogout())
             {
                 // send transfer packets
-                WorldPacket data(SMSG_TRANSFER_PENDING, 4 + 4 + 4);
-                data << uint32(mapid);
+                // 3.4.3 (FUN_1406cc660, handler FUN_140236360): i32 MapID, f32 OldMapPosition x/y/z, bits
+                // HasShipTransfer, HasTransferSpell, flush, [i32 ShipID, i32 OriginMapID], [i32 spell]
+                WorldPacket data(SMSG_TRANSFER_PENDING, 4 + 12 + 1 + 8);
+                data << int32(mapid);
+                data << float(GetPositionX());
+                data << float(GetPositionY());
+                data << float(GetPositionZ());
+                data.WriteBit(m_transport != nullptr);
+                data.WriteBit(false);
+                data.FlushBits();
                 if (m_transport)
-                    data << m_transport->GetEntry() << GetMapId();
+                    data << int32(m_transport->GetEntry()) << int32(GetMapId());
 
                 SendDirectMessage(&data);
             }
@@ -9219,10 +9227,13 @@ void Player::SetBindPoint(ObjectGuid guid)
 
 void Player::SendTalentWipeConfirm(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_RESPEC_WIPE_CONFIRM, (8 + 4));
-    data << guid;
+    // 3.4.3 (FUN_1406c94f0, handler FUN_1417375c0): i8 RespecType (0 talents), u32 Cost, PackedGuid128
+    // RespecMaster; the client answers CMSG_CONFIRM_RESPEC_WIPE if the player accepts and can pay
+    WorldPacket data(SMSG_RESPEC_WIPE_CONFIRM, 1 + 4 + 18);
     uint32 cost = sWorld->getBoolConfig(CONFIG_NO_RESET_TALENT_COST) ? 0 : resetTalentsCost();
-    data << cost;
+    data << int8(0);
+    data << uint32(cost);
+    Guid128::Write(data, guid);
     SendDirectMessage(&data);
 }
 
@@ -11949,57 +11960,33 @@ void Player::SendInitialPacketsAfterAddToMap()
     GetZoneAndAreaId(newzone, newarea);
     UpdateZone(newzone, newarea);                            // also call SendInitWorldStates();
 
-    WorldPacket setCompoundState(SMSG_MOVE_SET_COMPOUND_STATE, 100);
-    setCompoundState << uint32(0); // size placeholder
-
-    // manual send package (have code in HandleEffect(this, AURA_EFFECT_HANDLE_SEND_FOR_CLIENT, true); that must not be re-applied.
-    if (IsImmobilizedState())
+    // The movement states a login must restore (a ghost walks on water). 3.3.5 bundled them in one
+    // SMSG_MOVE_SET_COMPOUND_STATE; here each goes as its own 3.4.3 message, PackedGuid128 MoverGUID and u32
+    // SequenceIndex, as Unit::SetControlled and the Set* movement helpers send them. The auras are not
+    // re-applied (their HandleEffect must not run twice).
+    auto sendMoveState = [this](Opcodes opcode)
     {
         uint32 const counter = GetSession()->GetOrderCounter();
-        setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_ROOT);
-        setCompoundState << GetPackGUID();
-        setCompoundState << uint32(counter);
+        WorldPacket data(opcode, 18 + 4);
+        Guid128::Write(data, GetGUID());
+        data << uint32(counter);
+        SendDirectMessage(&data);
         GetSession()->IncrementOrderCounter();
-    }
+    };
+
+    if (IsImmobilizedState())
+        sendMoveState(SMSG_MOVE_ROOT);
 
     if (HasAuraType(SPELL_AURA_FEATHER_FALL))
-    {
-        uint32 const counter = GetSession()->GetOrderCounter();
-        setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_SET_FEATHER_FALL);
-        setCompoundState << GetPackGUID();
-        setCompoundState << uint32(counter);
-        GetSession()->IncrementOrderCounter();
-    }
+        sendMoveState(SMSG_MOVE_SET_FEATHER_FALL);
 
     if (HasAuraType(SPELL_AURA_WATER_WALK) || HasAura(8326))
-    {
-        uint32 const counter = GetSession()->GetOrderCounter();
-        setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_SET_WATER_WALK);
-        setCompoundState << GetPackGUID();
-        setCompoundState << uint32(counter);
-        GetSession()->IncrementOrderCounter();
-    }
+        sendMoveState(SMSG_MOVE_SET_WATER_WALK);
 
     if (HasAuraType(SPELL_AURA_HOVER))
-    {
-        uint32 const counter = GetSession()->GetOrderCounter();
-        setCompoundState << uint8(2 + GetPackGUID().size() + 4);
-        setCompoundState << uint16(SMSG_MOVE_SET_HOVERING);
-        setCompoundState << GetPackGUID();
-        setCompoundState << uint32(counter);
-        GetSession()->IncrementOrderCounter();
-    }
+        sendMoveState(SMSG_MOVE_SET_HOVERING);
 
     // TODO: Pending mount protocol
-
-    if (setCompoundState.size() > 4)
-    {
-        setCompoundState.put<uint32>(0, setCompoundState.size() - 4);
-        SendDirectMessage(&setCompoundState);
-    }
 
     SendEnchantmentDurations();                             // must be after add to map
     SendItemDurations();                                    // must be after add to map
@@ -12041,20 +12028,15 @@ void Player::SendUpdateToOutOfRangeGroupMembers()
 
 void Player::SendTransferAborted(uint32 mapid, TransferAbortReason reason, uint8 arg)
 {
-    WorldPacket data(SMSG_TRANSFER_ABORTED, 4 + 2);
+    // 3.4.3 (FUN_1406cc5a0, handler FUN_140235c50): u32 MapID, u8 Arg, i32 MapDifficultyXConditionID,
+    // 6-bit reason, flush. The reasons keep 3.3.5's numbering; the client shows nothing for a map Map.db2
+    // does not have.
+    WorldPacket data(SMSG_TRANSFER_ABORTED, 4 + 1 + 4 + 1);
     data << uint32(mapid);
-    data << uint8(reason);                                 // transfer abort reason
-    switch (reason)
-    {
-        case TRANSFER_ABORT_INSUF_EXPAN_LVL:
-        case TRANSFER_ABORT_DIFFICULTY:
-        case TRANSFER_ABORT_UNIQUE_MESSAGE:
-            // these are the ONLY cases that have an extra argument in the packet!!!
-            data << uint8(arg);
-            break;
-        default:
-            break;
-    }
+    data << uint8(arg);
+    data << int32(0);
+    data.WriteBits(reason, 6);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -13790,9 +13772,10 @@ void Player::SetTitle(CharTitlesEntry const* title, bool lost)
         SetFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag);
     }
 
-    WorldPacket data(SMSG_TITLE_EARNED, 4 + 4);
+    // 3.4.3: SMSG_TITLE_EARNED / SMSG_TITLE_LOST, each read raw (handlers FUN_141907460 / FUN_141907470):
+    // u32 the CharTitles MaskID (the bit index)
+    WorldPacket data(lost ? SMSG_TITLE_LOST : SMSG_TITLE_EARNED, 4);
     data << uint32(title->bit_index);
-    data << uint32(lost ? 0 : 1);                           // 1 - earned, 0 - lost
     SendDirectMessage(&data);
 
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_OWN_RANK);

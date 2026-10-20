@@ -16,6 +16,7 @@
  */
 
 #include "Battleground.h"
+#include "PacketGuid128.h"
 #include "ArenaSpectator.h"
 #include "ArenaTeam.h"
 #include "BattlegroundMgr.h"
@@ -637,10 +638,15 @@ inline void Battleground::_ProcessJoin(uint32 diff)
 
                             p->SetSummonPoint(t->GetMapId(), t->GetPositionX(), t->GetPositionY(), t->GetPositionZ(), 15, true);
 
-                            WorldPacket data(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
-                            data << t->GetGUID();
-                            data << uint32(t->GetZoneId());
-                            data << uint32(15 * IN_MILLISECONDS);
+                            // SMSG_SUMMON_REQUEST, 3.4.3 (FUN_1406cbd70): PackedGuid128 SummonerGUID, u32 its virtual realm address,
+                            // i32 AreaID, u8 Reason, bit SkipStartingArea, flush (the client times the answer itself)
+                            WorldPacket data(SMSG_SUMMON_REQUEST, 18 + 10);
+                            Guid128::Write(data, t->GetGUID());
+                            data << uint32(Guid128::VirtualRealmAddress());
+                            data << int32(t->GetZoneId());
+                            data << uint8(0);
+                            data.WriteBit(false);
+                            data.FlushBits();
                             p->SendDirectMessage(&data);
                         }
                 m_ToBeTeleported.clear();

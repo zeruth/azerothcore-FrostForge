@@ -1501,13 +1501,11 @@ void WorldSession::HandlePlayerLoginToCharOutOfWorld(Player* /*pCurrChar*/)
 
 void WorldSession::HandleSetFactionAtWar(WorldPacket& recvData)
 {
-    uint32 repListID;
-    uint8  flag;
+    // 3.4.3: CMSG_SET_FACTION_AT_WAR (writer FUN_140760650) and CMSG_SET_FACTION_NOT_AT_WAR
+    // (FUN_140760700), each a u8 FactionIndex (the reputation list index); 3.3.5 had one opcode and a flag
+    uint8 repListID = recvData.read<uint8>();
 
-    recvData >> repListID;
-    recvData >> flag;
-
-    GetPlayer()->GetReputationMgr().SetAtWar(repListID, flag);
+    GetPlayer()->GetReputationMgr().SetAtWar(repListID, recvData.GetOpcode() == CMSG_SET_FACTION_AT_WAR);
 }
 
 //I think this function is never used :/ I dunno, but i guess this opcode not exists
@@ -1556,16 +1554,16 @@ void WorldSession::HandleTutorialFlag(WorldPacket& recvData)
 
 void WorldSession::HandleSetWatchedFactionOpcode(WorldPacket& recvData)
 {
-    uint32 fact;
-    recvData >> fact;
-    GetPlayer()->SetUInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX, fact);
+    // 3.4.3 (writer FUN_140760ae0): i32 FactionIndex, -1 for none
+    int32 fact = recvData.read<int32>();
+    GetPlayer()->SetInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX, fact);
 }
 
 void WorldSession::HandleSetFactionInactiveOpcode(WorldPacket& recvData)
 {
-    uint32 replistid;
-    uint8 inactive;
-    recvData >> replistid >> inactive;
+    // 3.4.3 (writer FUN_140760690): u32 Index, bit State, flush
+    uint32 replistid = recvData.read<uint32>();
+    bool inactive = recvData.ReadBit();
 
     _player->GetReputationMgr().SetInactive(replistid, inactive);
 }

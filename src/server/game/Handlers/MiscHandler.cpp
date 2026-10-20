@@ -497,11 +497,11 @@ void WorldSession::HandleLogoutCancelOpcode(WorldPackets::Character::LogoutCance
 
 void WorldSession::HandleTogglePvP(WorldPacket& recv_data)
 {
-    // this opcode can be used in two ways: Either set explicit new status or toggle old status
-    if (recv_data.size() == 1)
+    // 3.4.3: CMSG_TOGGLE_PVP is empty (writer FUN_140761240), CMSG_SET_PVP (FUN_1407607f0) a bit
+    // EnablePVP, flush
+    if (recv_data.GetOpcode() == CMSG_SET_PVP)
     {
-        bool newPvPStatus;
-        recv_data >> newPvPStatus;
+        bool newPvPStatus = recv_data.ReadBit();
         GetPlayer()->ApplyModFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP, newPvPStatus);
     }
     else
@@ -688,8 +688,12 @@ void WorldSession::HandleResurrectResponseOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recv_data)
 {
-    uint32 triggerId;
-    recv_data >> triggerId;
+    // 3.4.3 (writer FUN_14075bb50): u32 AreaTriggerID, bits Entered, FromClient, flush; AC acts on entering
+    uint32 triggerId = recv_data.read<uint32>();
+    bool entered = recv_data.ReadBit();
+    recv_data.ReadBit();
+    if (!entered)
+        return;
 
     LOG_DEBUG("network", "CMSG_AREA_TRIGGER. Trigger ID: {}", triggerId);
 

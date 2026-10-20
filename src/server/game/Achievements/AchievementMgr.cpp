@@ -763,11 +763,19 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
         Cell::VisitObjects(GetPlayer(), _worker, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY));
     }
 
-    WorldPacket data(SMSG_ACHIEVEMENT_EARNED, 8 + 4 + 8);
-    data << GetPlayer()->GetPackGUID();
+    // SMSG_ACHIEVEMENT_EARNED, 3.4.3 (FUN_1406b6400, handler FUN_1419ca0c0): PackedGuid128 Sender,
+    // PackedGuid128 Earner, u32 AchievementID, u32 packed time, u32 EarnerNativeRealm, u32
+    // EarnerVirtualRealm, bit Initial, flush. The earner's client records it; the toast shows only where
+    // Sender is the receiving player, so the others in range just see it in chat.
+    WorldPacket data(SMSG_ACHIEVEMENT_EARNED, 18 * 2 + 4 * 4 + 1);
+    Guid128::Write(data, GetPlayer()->GetGUID());
+    Guid128::Write(data, GetPlayer()->GetGUID());
     data << uint32(achievement->ID);
     data.AppendPackedTime(GameTime::GetGameTime().count());
-    data << uint32(0);
+    data << uint32(Guid128::VirtualRealmAddress());
+    data << uint32(Guid128::VirtualRealmAddress());
+    data.WriteBit(false);                                   // Initial
+    data.FlushBits();
     GetPlayer()->SendMessageToSetInRange(&data, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY), true);
 }
 

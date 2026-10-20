@@ -21,6 +21,7 @@
 
 #include "TC9Sidecar.h"
 #include "WorldSession.h"
+#include "Chat.h"
 #include "AccountMgr.h"
 #include "BattlegroundMgr.h"
 #include "BanMgr.h"
@@ -289,13 +290,13 @@ std::string WorldSession::GetPlayerInfo() const
 
 void WorldSession::SendAreaTriggerMessage(std::string_view str)
 {
+    // 3.4.3's SMSG_AREA_TRIGGER_MESSAGE names an AreaTrigger.db2 record and carries no text: free text
+    // goes out as SMSG_PRINT_NOTIFICATION, the same centred message
     std::vector<std::string_view> lines = Acore::Tokenize(str, '\n', true);
     for (std::string_view line : lines)
     {
-        uint32 length = line.size() + 1;
-        WorldPacket data(SMSG_AREA_TRIGGER_MESSAGE, 4 + length);
-        data << length;
-        data << line.data();
+        WorldPacket data;
+        ChatHandler::BuildNotificationPacket(data, std::string(line));
         SendPacket(&data);
     }
 }

@@ -55,22 +55,34 @@ WorldPacket const* WorldPackets::Misc::LevelUpInfo::Write()
 
 WorldPacket const* WorldPackets::Misc::PlayMusic::Write()
 {
-    _worldPacket << SoundKitID;
+    // 3.4.3: read raw (FUN_1406b55f0, handler FUN_141919df0), i32 SoundKitID (0 or less stops the music)
+    _worldPacket << int32(SoundKitID);
 
     return &_worldPacket;
 }
 
 WorldPacket const* WorldPackets::Misc::PlayObjectSound::Write()
 {
-    _worldPacket << SoundKitID;
-    _worldPacket << SourceObjectGUID;
+    // 3.4.3 (FUN_1406c7670, handler FUN_141919e10): i32 SoundKitID, PackedGuid128 SourceObjectGUID,
+    // PackedGuid128 TargetObjectGUID, f32 X, Y, Z, i32 BroadcastTextID
+    _worldPacket << int32(SoundKitID);
+    Guid128::Write(_worldPacket, SourceObjectGUID);
+    Guid128::Write(_worldPacket, SourceObjectGUID);
+    _worldPacket << float(Position.GetPositionX());
+    _worldPacket << float(Position.GetPositionY());
+    _worldPacket << float(Position.GetPositionZ());
+    _worldPacket << int32(0);
 
     return &_worldPacket;
 }
 
 WorldPacket const* WorldPackets::Misc::Playsound::Write()
 {
-    _worldPacket << SoundKitID;
+    // 3.4.3 (FUN_1406c7b30, handler FUN_14191a0d0): i32 SoundKitID, PackedGuid128 SourceObjectGUID, i32
+    // BroadcastTextID
+    _worldPacket << int32(SoundKitID);
+    Guid128::Write(_worldPacket, SourceObjectGUID);
+    _worldPacket << int32(0);
 
     return &_worldPacket;
 }
@@ -117,29 +129,35 @@ WorldPacket const* WorldPackets::Misc::RandomRoll::Write()
     return &_worldPacket;
 }
 
+// 3.4.3 (FUN_1406cbb70, handler FUN_141926ee0): i32 Timer (0 fatigue, 1 breath, 2 feign death), i32 Value,
+// i32 MaxValue, i32 Scale, i32 SpellID, bit Paused, flush
 WorldPacket const* WorldPackets::Misc::StartMirrorTimer::Write()
 {
-    _worldPacket << uint32(Timer);
-    _worldPacket << uint32(Value);
-    _worldPacket << uint32(MaxValue);
+    _worldPacket << int32(Timer);
+    _worldPacket << int32(Value);
+    _worldPacket << int32(MaxValue);
     _worldPacket << int32(Scale);
-    _worldPacket << uint8(Paused);
-    _worldPacket << uint32(SpellID);
+    _worldPacket << int32(SpellID);
+    _worldPacket.WriteBit(Paused);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }
 
+// 3.4.3 (FUN_1406b89a0, handler FUN_141926e30): i32 Timer, bit Paused, flush
 WorldPacket const* WorldPackets::Misc::PauseMirrorTimer::Write()
 {
-    _worldPacket << uint32(Timer);
-    _worldPacket << uint8(Paused);
+    _worldPacket << int32(Timer);
+    _worldPacket.WriteBit(Paused);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }
 
+// 3.4.3: read raw (handler FUN_141927080), i32 Timer
 WorldPacket const* WorldPackets::Misc::StopMirrorTimer::Write()
 {
-    _worldPacket << uint32(Timer);
+    _worldPacket << int32(Timer);
 
     return &_worldPacket;
 }

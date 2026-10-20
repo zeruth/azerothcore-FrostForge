@@ -4506,10 +4506,15 @@ void Spell::EffectSummonPlayer(SpellEffIndex /*effIndex*/)
 
     player->SetSummonPoint(unitCaster->GetMapId(), x, y, z);
 
-    WorldPacket data(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
-    data << unitCaster->GetGUID();                                // summoner guid
-    data << uint32(unitCaster->GetZoneId());                      // summoner zone
-    data << uint32(MAX_PLAYER_SUMMON_DELAY * IN_MILLISECONDS);  // auto decline after msecs
+    // SMSG_SUMMON_REQUEST, 3.4.3 (FUN_1406cbd70): PackedGuid128 SummonerGUID, u32 its virtual realm address,
+    // i32 AreaID, u8 Reason, bit SkipStartingArea, flush (the client times the answer itself)
+    WorldPacket data(SMSG_SUMMON_REQUEST, 18 + 10);
+    Guid128::Write(data, unitCaster->GetGUID());
+    data << uint32(Guid128::VirtualRealmAddress());
+    data << int32(unitCaster->GetZoneId());
+    data << uint8(0);
+    data.WriteBit(false);
+    data.FlushBits();
     player->SendDirectMessage(&data);
 }
 
@@ -5082,8 +5087,9 @@ void Spell::EffectForceDeselect(SpellEffIndex /*effIndex*/)
     // xinef: clear focus
     unitCaster->SendClearTarget();
 
-    WorldPacket data(SMSG_CLEAR_TARGET, 8);
-    data << unitCaster->GetGUID();
+    // 3.4.3 (handler FUN_14182b9b0): PackedGuid128 Guid, cleared unconditionally
+    WorldPacket data(SMSG_CLEAR_TARGET, 18);
+    Guid128::Write(data, unitCaster->GetGUID());
 
     float dist = unitCaster->GetVisibilityRange() + VISIBILITY_COMPENSATION;
     Acore::MessageDistDelivererToHostile notifier(unitCaster, &data, dist);

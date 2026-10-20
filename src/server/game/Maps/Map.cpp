@@ -3306,13 +3306,13 @@ void Map::PlayDirectSoundToMap(uint32 soundId, uint32 zoneId)
     Map::PlayerList const& players = GetPlayers();
     if (!players.IsEmpty())
     {
-        WorldPacket data(SMSG_PLAY_SOUND, 4);
-        data << uint32(soundId);
+        WorldPackets::Misc::Playsound sound(soundId);
+        WorldPacket const* data = sound.Write();
 
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
             if (Player* player = itr->GetSource())
                 if (!zoneId || player->GetZoneId() == zoneId)
-                    player->SendDirectMessage(&data);
+                    player->SendDirectMessage(data);
     }
 }
 

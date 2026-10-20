@@ -178,6 +178,7 @@ void Player::SendAutoRepeatCancel(Unit* target)
 
 void Player::SendExplorationExperience(uint32 Area, uint32 Experience)
 {
+    // 3.4.3: read raw (handler FUN_14170dde0), i32 AreaID, i32 Experience: 3.3.5's layout
     WorldPacket data(SMSG_EXPLORATION_EXPERIENCE, 8);
     data << uint32(Area);
     data << uint32(Experience);

@@ -17,14 +17,16 @@
 
 #include "CharacterPackets.h"
 
+// 3.4.3 (writer FUN_140761180): bit ShowCloak, flush
 void WorldPackets::Character::ShowingCloak::Read()
 {
-    _worldPacket >> ShowCloak;
+    ShowCloak = _worldPacket.ReadBit();
 }
 
+// 3.4.3 (writer FUN_1407611e0): bit ShowHelm, flush
 void WorldPackets::Character::ShowingHelm::Read()
 {
-    _worldPacket >> ShowHelm;
+    ShowHelm = _worldPacket.ReadBit();
 }
 
 WorldPacket const* WorldPackets::Character::LogoutResponse::Write()

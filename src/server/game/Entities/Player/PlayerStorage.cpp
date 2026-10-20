@@ -6739,12 +6739,18 @@ void Player::SendRaidInfo()
             {
                 InstanceSave* save = itr->second.save;
                 time_t resetTime = itr->second.extended ? save->GetExtendedResetTime() : save->GetResetTime();
-                data << uint32(save->GetMapId());           // map id
-                data << uint32(save->GetDifficulty());      // difficulty
-                data << ObjectGuid::Create<HighGuid::Instance>(save->GetInstanceId()); // instance id
-                data << uint8(1);                           // expired = 0
-                data << uint8(itr->second.extended ? 1 : 0);// extended = 1
-                data << uint32(resetTime >= now ? resetTime - now : 0); // reset time
+                // 3.4.3 (FUN_1406c28c0, handler FUN_1419efee0): u32 MapID, u32 DifficultyID, u64 InstanceID,
+                // u32 TimeRemaining, u32 CompletedMask, bits Locked, Extended, flush. DifficultyID is
+                // Difficulty.db2's: AC's 5-man 0/1 are 1/2, its raid 0-3 are 3-6.
+                MapEntry const* mapEntry = sMapStore.LookupEntry(save->GetMapId());
+                data << uint32(save->GetMapId());
+                data << uint32(save->GetDifficulty() + (mapEntry && mapEntry->IsRaid() ? 3 : 1));
+                data << uint64(save->GetInstanceId());
+                data << uint32(resetTime >= now ? resetTime - now : 0);
+                data << uint32(0);                          // CompletedMask
+                data.WriteBit(true);                        // Locked
+                data.WriteBit(itr->second.extended);
+                data.FlushBits();
                 ++counter;
             }
         }

@@ -78,7 +78,7 @@ namespace WorldPackets
 
             ObjectGuid SourceObjectGUID;
             uint32 SoundKitID = 0;
-
+            ::Position Position;
         };
 
         class AC_GAME_API Playsound final : public ServerPacket
@@ -87,10 +87,12 @@ namespace WorldPackets
             // cppcheck-suppress missingReturn
             Playsound() : ServerPacket(SMSG_PLAY_SOUND, 4) { }
             Playsound(uint32 soundKitID) : ServerPacket(SMSG_PLAY_SOUND, 4), SoundKitID(soundKitID) { }
+            Playsound(uint32 soundKitID, ObjectGuid source) : ServerPacket(SMSG_PLAY_SOUND, 4 + 18 + 4), SoundKitID(soundKitID), SourceObjectGUID(source) { }
 
             WorldPacket const* Write() override;
 
             uint32 SoundKitID = 0;
+            ObjectGuid SourceObjectGUID;
         };
 
         class MinimapPingClient final : public ClientPacket
