@@ -32,13 +32,18 @@ WorldPacket const* WorldPackets::Chat::Emote::Write()
 
 void WorldPackets::Chat::EmoteClient::Read()
 {
-    _worldPacket >> EmoteID;
+    // 3.4.3: empty
 }
 
 WorldPacket const* WorldPackets::Chat::ChatServerMessage::Write()
 {
+    // 3.4.3 (inline in the chat switch, handler FUN_141906bd0): i32 MessageID (ServerMessages.db2),
+    // 11-bit parameter length, flush, the parameter
+    std::string_view param = std::string_view(StringParam).substr(0, std::min<std::size_t>(StringParam.size(), 0x7FF));
     _worldPacket << int32(MessageID);
-    _worldPacket << StringParam;
+    _worldPacket.WriteBits(param.size(), 11);
+    _worldPacket.FlushBits();
+    _worldPacket.WriteString(param);
 
     return &_worldPacket;
 }

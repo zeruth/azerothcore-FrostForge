@@ -205,7 +205,7 @@ public:
     void UnsetModerator(Player const* player, std::string const& newname) { SetMode(player, newname, true, false); }
     void SetMute(Player const* player, std::string const& newname) { SetMode(player, newname, false, true); }
     void UnsetMute(Player const* player, std::string const& newname) { SetMode(player, newname, false, false); }
-    void List(Player const* player);
+    void List(Player const* player, bool display = true);
     void Announce(Player const* player);
     void Say(ObjectGuid guid, std::string const& what, uint32 lang);
     void Invite(Player const* player, std::string const& newp);
@@ -224,6 +224,8 @@ public:
 private:
     // initial packet data (notify type and channel name)
     void MakeNotifyPacket(WorldPacket* data, uint8 notify_type);
+    void MakeNotifyPacket(WorldPacket* data, uint8 notify_type, ObjectGuid sender, ObjectGuid target = ObjectGuid::Empty, std::string_view senderName = {}, uint8 oldFlags = 0, uint8 newFlags = 0);
+    void MakeUserListPacket(WorldPacket& data, Opcodes opcode, Player const* p);
     // type specific packet data
     void MakeJoined(WorldPacket* data, ObjectGuid guid);                        //+ 0x00
     void MakeLeft(WorldPacket* data, ObjectGuid guid);                          //+ 0x01

@@ -23,6 +23,7 @@
 #include "Language.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "Realm.h"
@@ -115,8 +116,8 @@ void ChatHandler::SendNotification(std::string_view str)
     std::vector<std::string_view> lines = Acore::Tokenize(str, '\n', true);
     for (std::string_view line : lines)
     {
-        WorldPacket data(SMSG_PRINT_NOTIFICATION, line.size() + 1);
-        data << line.data();
+        WorldPacket data;
+        BuildNotificationPacket(data, line);
         m_session->SendPacket(&data);
     }
 }
@@ -274,80 +275,78 @@ std::size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, La
                                     std::string const& senderName /*= ""*/, std::string const& receiverName /*= ""*/,
                                     uint32 achievementId /*= 0*/, bool gmMessage /*= false*/, std::string const& channelName /*= ""*/)
 {
-    std::size_t receiverGUIDPos = 0;
-    data.Initialize(!gmMessage ? SMSG_CHAT : SMSG_CHAT);
-    data << uint8(chatType);
-    data << int32(language);
-    data << senderGUID;
-    data << uint32(0);  // some flags
-    switch (chatType)
+    // SMSG_CHAT, 3.4.3 (reader FUN_1407099d0, handler FUN_1419065d0): u8 SlashCmd, u32 Language,
+    // PackedGuid128 SenderGUID, SenderGuildGUID, SenderAccountGUID, TargetGUID, u32 TargetVirtualAddress,
+    // u32 SenderVirtualAddress, u32 AchievementID, f32 DisplayTime, u32 SpellID, then bits: 11 sender
+    // name length, 11 target name length, 5 prefix, 7 channel, 12 text, 15 ChatFlags, HideChatLog,
+    // FakeSenderName, HasUnused801, HasChannelGUID; flush; the five strings (no NUL), [u32], [GUID].
+    // The client copies the strings into fixed buffers without checking: names <= 1024 bytes, prefix
+    // <= 16, channel <= 127, text <= 3000. Every message names its sender, so the old 3.3.5 per-type
+    // variants (monster names, GM chat, ...) collapse into one layout; the GM chat tag is ChatFlags 0x04.
+    // The client keys its ignore list on TargetGUID (body+0x38), which a player's say/yell carries as
+    // the sender itself (AC passes the speaker as the receiver too).
+    std::string_view prefix, text = message;
+    if (language == LANG_ADDON)
     {
-        case CHAT_MSG_MONSTER_SAY:
-        case CHAT_MSG_MONSTER_PARTY:
-        case CHAT_MSG_MONSTER_YELL:
-        case CHAT_MSG_MONSTER_WHISPER:
-        case CHAT_MSG_MONSTER_EMOTE:
-        case CHAT_MSG_RAID_BOSS_EMOTE:
-        case CHAT_MSG_RAID_BOSS_WHISPER:
-        case CHAT_MSG_BATTLENET:
-            data << uint32(senderName.length() + 1);
-            data << senderName;
-            receiverGUIDPos = data.wpos();
-            data << receiverGUID;
-            if (receiverGUID && !receiverGUID.IsPlayer() && !receiverGUID.IsPet())
-            {
-                data << uint32(receiverName.length() + 1);
-                data << receiverName;
-            }
-            break;
-        case CHAT_MSG_WHISPER_FOREIGN:
-            data << uint32(senderName.length() + 1);
-            data << senderName;
-            receiverGUIDPos = data.wpos();
-            data << receiverGUID;
-            break;
-        case CHAT_MSG_BG_SYSTEM_NEUTRAL:
-        case CHAT_MSG_BG_SYSTEM_ALLIANCE:
-        case CHAT_MSG_BG_SYSTEM_HORDE:
-            receiverGUIDPos = data.wpos();
-            data << receiverGUID;
-            if (receiverGUID && !receiverGUID.IsPlayer())
-            {
-                data << uint32(receiverName.length() + 1);
-                data << receiverName;
-            }
-            break;
-        case CHAT_MSG_ACHIEVEMENT:
-        case CHAT_MSG_GUILD_ACHIEVEMENT:
-            receiverGUIDPos = data.wpos();
-            data << receiverGUID;
-            break;
-        default:
-            if (gmMessage)
-            {
-                data << uint32(senderName.length() + 1);
-                data << senderName;
-            }
-
-            if (chatType == CHAT_MSG_CHANNEL)
-            {
-                ASSERT(channelName.length() > 0);
-                data << channelName;
-            }
-
-            receiverGUIDPos = data.wpos();
-            data << receiverGUID;
-            break;
+        // AC keeps an addon message as "prefix\ttext"; 3.4.3 sends the prefix in its own field
+        std::size_t tab = message.find('\t');
+        if (tab != std::string_view::npos)
+        {
+            prefix = message.substr(0, std::min<std::size_t>(tab, 16));
+            text = message.substr(tab + 1);
+        }
     }
 
-    data << uint32(message.length() + 1);
-    data << message;
-    data << uint8(chatTag);
+    auto clamp = [](std::string_view s, std::size_t max) { return s.substr(0, std::min(s.size(), max)); };
+    std::string_view sender = clamp(senderName, 1024), target = clamp(receiverName, 1024);
+    std::string_view channel = clamp(channelName, 127);
+    text = clamp(text, 2999);
 
-    if (chatType == CHAT_MSG_ACHIEVEMENT || chatType == CHAT_MSG_GUILD_ACHIEVEMENT)
-        data << uint32(achievementId);
+    uint16 chatFlags = chatTag;
+    if (gmMessage)
+        chatFlags |= CHAT_TAG_GM;
+
+    data.Initialize(SMSG_CHAT, 1 + 4 + 4 * 18 + 5 * 4 + 9 + sender.size() + target.size() + text.size());
+    data << uint8(chatType);
+    data << uint32(language);
+    Guid128::Write(data, senderGUID);
+    Guid128::Write(data, ObjectGuid::Empty);            // SenderGuildGUID
+    Guid128::Write(data, ObjectGuid::Empty);            // SenderAccountGUID
+    std::size_t receiverGUIDPos = data.wpos();
+    Guid128::Write(data, receiverGUID);
+    data << uint32(Guid128::VirtualRealmAddress());     // TargetVirtualAddress
+    data << uint32(Guid128::VirtualRealmAddress());     // SenderVirtualAddress
+    data << uint32(achievementId);
+    data << float(0.0f);                                // DisplayTime
+    data << uint32(0);                                  // SpellID
+    data.WriteBits(sender.size(), 11);
+    data.WriteBits(target.size(), 11);
+    data.WriteBits(prefix.size(), 5);
+    data.WriteBits(channel.size(), 7);
+    data.WriteBits(text.size(), 12);
+    data.WriteBits(chatFlags, 15);
+    data.WriteBit(false);                               // HideChatLog
+    data.WriteBit(false);                               // FakeSenderName
+    data.WriteBit(false);                               // HasUnused801
+    data.WriteBit(false);                               // HasChannelGUID
+    data.FlushBits();
+    data.WriteString(sender);
+    data.WriteString(target);
+    data.WriteString(prefix);
+    data.WriteString(channel);
+    data.WriteString(text);
 
     return receiverGUIDPos;
+}
+
+void ChatHandler::BuildNotificationPacket(WorldPacket& data, std::string_view text)
+{
+    // SMSG_PRINT_NOTIFICATION, 3.4.3 (FUN_1406c5540): 12-bit length, flush, the text
+    text = text.substr(0, std::min<std::size_t>(text.size(), 0xFFF));
+    data.Initialize(SMSG_PRINT_NOTIFICATION, 2 + text.size());
+    data.WriteBits(text.size(), 12);
+    data.FlushBits();
+    data.WriteString(text);
 }
 
 std::size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, Language language, WorldObject const* sender, WorldObject const* receiver, std::string_view message,

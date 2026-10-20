@@ -738,7 +738,7 @@ enum Language
     LANG_ZOMBIE         = 36,
     LANG_GNOMISH_BINARY = 37,
     LANG_GOBLIN_BINARY  = 38,
-    LANG_ADDON          = 0xFFFFFFFF                        // used by addons, in 2.4.0 not exist, replaced by messagetype?
+    LANG_ADDON          = 183                               // 3.4.3: addon messages (184 for logged ones, sent as 183); 3.3.5 used 0xFFFFFFFF
 };
 
 #define LANGUAGES_COUNT   19
@@ -3428,17 +3428,18 @@ enum ChatMsg
     CHAT_MSG_RAID_BOSS_EMOTE        = 0x29,
     CHAT_MSG_RAID_BOSS_WHISPER      = 0x2A,
     CHAT_MSG_FILTERED               = 0x2B,
-    CHAT_MSG_BATTLEGROUND           = 0x2C,
-    CHAT_MSG_BATTLEGROUND_LEADER    = 0x2D,
-    CHAT_MSG_RESTRICTED             = 0x2E,
-    CHAT_MSG_BATTLENET              = 0x2F,
-    CHAT_MSG_ACHIEVEMENT            = 0x30,
-    CHAT_MSG_GUILD_ACHIEVEMENT      = 0x31,
-    CHAT_MSG_ARENA_POINTS           = 0x32,
-    CHAT_MSG_PARTY_LEADER           = 0x33
+    CHAT_MSG_RESTRICTED             = 0x2C,             // 3.4.3 numbering from here on (chat type table 0x142803420)
+    CHAT_MSG_BATTLENET              = 0x2D,
+    CHAT_MSG_ACHIEVEMENT            = 0x2E,
+    CHAT_MSG_GUILD_ACHIEVEMENT      = 0x2F,
+    CHAT_MSG_ARENA_POINTS           = 0x30,
+    CHAT_MSG_PARTY_LEADER           = 0x31,
+    CHAT_MSG_TARGETICONS            = 0x32,
+    CHAT_MSG_BATTLEGROUND           = 0x3E,             // 3.4.3 INSTANCE_CHAT
+    CHAT_MSG_BATTLEGROUND_LEADER    = 0x3F              // 3.4.3 INSTANCE_CHAT_LEADER
 };
 
-#define MAX_CHAT_MSG_TYPE 0x34
+#define MAX_CHAT_MSG_TYPE 0x45
 
 enum ChatLinkColors
 {

@@ -21,6 +21,8 @@
 #include "Chat.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "ObjectAccessor.h"
+#include "PacketGuid128.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "RBAC.h"
@@ -686,7 +688,7 @@ void Channel::SendWhoOwner(ObjectGuid guid)
     SendToOne(&data, guid);
 }
 
-void Channel::List(Player const* player)
+void Channel::List(Player const* player, bool display /*= true*/)
 {
     ObjectGuid guid = player->GetGUID();
 
@@ -698,14 +700,20 @@ void Channel::List(Player const* player)
         return;
     }
 
+    // SMSG_CHANNEL_LIST, 3.4.3 (inline in the chat switch, handler FUN_141905aa0): bit Display, 7-bit
+    // name length (one byte together), u32 ChannelFlags, u32 MemberCount, the name, then per member
+    // {PackedGuid128, u32 VirtualRealmAddress, u8 Flags}. Display is set for /chatlist's own listing.
     LOG_DEBUG("chat.system", "SMSG_CHANNEL_LIST {} Channel: {}", player->GetSession()->GetPlayerInfo(), GetName());
-    WorldPacket data(SMSG_CHANNEL_LIST, 1 + (GetName().size() + 1) + 1 + 4 + playersStore.size() * (8 + 1));
-    data << uint8(1);                                   // channel type?
-    data << GetName();                                  // channel name
-    data << uint8(GetFlags());                          // channel flags?
+    std::string_view channel = std::string_view(_name).substr(0, std::min<std::size_t>(_name.size(), 127));
+    WorldPacket data(SMSG_CHANNEL_LIST, 1 + 4 + 4 + channel.size() + playersStore.size() * (18 + 4 + 1));
+    data.WriteBit(display);
+    data.WriteBits(channel.size(), 7);
+    data.FlushBits();
+    data << uint32(GetFlags());
 
     std::size_t pos = data.wpos();
-    data << uint32(0);                                  // size of list, placeholder
+    data << uint32(0);                                  // MemberCount, placeholder
+    data.WriteString(channel);
 
     uint32 gmLevelInWhoList = sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST);
 
@@ -717,8 +725,9 @@ void Channel::List(Player const* player)
                      member->GetSession()->GetSecurity() <= AccountTypes(gmLevelInWhoList)) &&
                     member->IsVisibleGloballyFor(player))
                 {
-                    data << i->first;
-                    data << uint8(i->second.flags); // flags seems to be changed...
+                    Guid128::Write(data, i->first);
+                    data << uint32(Guid128::VirtualRealmAddress());
+                    data << uint8(i->second.flags);
                     ++count;
                 }
 
@@ -951,36 +960,74 @@ void Channel::DeVoice(ObjectGuid /*guid1*/, ObjectGuid /*guid2*/)
 
 void Channel::MakeNotifyPacket(WorldPacket* data, uint8 notify_type)
 {
-    data->Initialize(SMSG_CHANNEL_NOTIFY, 1 + _name.size());
-    *data << uint8(notify_type);
-    *data << _name;
+    MakeNotifyPacket(data, notify_type, ObjectGuid::Empty, ObjectGuid::Empty, {});
+}
+
+void Channel::MakeNotifyPacket(WorldPacket* data, uint8 notify_type, ObjectGuid sender, ObjectGuid target, std::string_view senderName, uint8 oldFlags, uint8 newFlags)
+{
+    // SMSG_CHANNEL_NOTIFY, 3.4.3 (FUN_1406bb060, handler FUN_141905bf0): 6-bit Type, 7-bit channel name
+    // length, 6-bit sender name length, flush, PackedGuid128 SenderGuid, SenderAccountID, u32
+    // SenderVirtualRealm, PackedGuid128 TargetGuid, u32 TargetVirtualRealm, i32 ChatChannelID,
+    // [u8 OldFlags, u8 NewFlags for MODE_CHANGE only], channel name, sender name
+    std::string_view channel = std::string_view(_name).substr(0, std::min<std::size_t>(_name.size(), 127));
+    senderName = senderName.substr(0, std::min<std::size_t>(senderName.size(), 63));
+
+    data->Initialize(SMSG_CHANNEL_NOTIFY, 3 + 3 * 18 + 12 + channel.size() + senderName.size());
+    data->WriteBits(notify_type, 6);
+    data->WriteBits(channel.size(), 7);
+    data->WriteBits(senderName.size(), 6);
+    data->FlushBits();
+    Guid128::Write(*data, sender);
+    Guid128::Write(*data, ObjectGuid::Empty);           // SenderAccountID
+    *data << uint32(Guid128::VirtualRealmAddress());
+    Guid128::Write(*data, target);
+    *data << uint32(Guid128::VirtualRealmAddress());
+    *data << int32(GetChannelId());
+    if (notify_type == CHAT_MODE_CHANGE_NOTICE)
+        *data << uint8(oldFlags) << uint8(newFlags);
+    data->WriteString(channel);
+    data->WriteString(senderName);
 }
 
 void Channel::MakeJoined(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_JOINED_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_JOINED_NOTICE, guid);
 }
 
 void Channel::MakeLeft(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_LEFT_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_LEFT_NOTICE, guid);
 }
 
 void Channel::MakeYouJoined(WorldPacket* data)
 {
-    MakeNotifyPacket(data, CHAT_YOU_JOINED_NOTICE);
-    *data << uint8(GetFlags());
-    *data << uint32(GetChannelId());
-    *data << uint32(0);
+    // 3.4.3 tells the joining player through its own message, SMSG_CHANNEL_NOTIFY_JOINED (handler
+    // FUN_141905f90), which creates the channel on the client: 7-bit name length, 11-bit welcome
+    // message length, flush, u32 ChannelFlags, i32 ChatChannelID, u64 InstanceID, PackedGuid128
+    // ChannelGUID, the name, the welcome message
+    std::string_view channel = std::string_view(_name).substr(0, std::min<std::size_t>(_name.size(), 127));
+    data->Initialize(SMSG_CHANNEL_NOTIFY_JOINED, 3 + 16 + 18 + channel.size());
+    data->WriteBits(channel.size(), 7);
+    data->WriteBits(0, 11);
+    data->FlushBits();
+    *data << uint32(GetFlags());
+    *data << int32(GetChannelId());
+    *data << uint64(0);                                 // InstanceID
+    Guid128::Write(*data, ObjectGuid::Empty);           // ChannelGUID [TODO: if a use turns up; the client then sends 0]
+    data->WriteString(channel);
 }
 
 void Channel::MakeYouLeft(WorldPacket* data)
 {
-    MakeNotifyPacket(data, CHAT_YOU_LEFT_NOTICE);
-    *data << uint32(GetChannelId());
-    *data << uint8(IsConstant());
+    // SMSG_CHANNEL_NOTIFY_LEFT, 3.4.3 (handler FUN_141906270): 7-bit name length, bit Suspended, flush,
+    // i32 ChatChannelID, the name
+    std::string_view channel = std::string_view(_name).substr(0, std::min<std::size_t>(_name.size(), 127));
+    data->Initialize(SMSG_CHANNEL_NOTIFY_LEFT, 2 + 4 + channel.size());
+    data->WriteBits(channel.size(), 7);
+    data->WriteBit(false);                              // Suspended
+    data->FlushBits();
+    *data << int32(GetChannelId());
+    data->WriteString(channel);
 }
 
 void Channel::MakeWrongPassword(WorldPacket* data)
@@ -1000,20 +1047,17 @@ void Channel::MakeNotModerator(WorldPacket* data)
 
 void Channel::MakePasswordChanged(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_PASSWORD_CHANGED_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_PASSWORD_CHANGED_NOTICE, guid);
 }
 
 void Channel::MakeOwnerChanged(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_OWNER_CHANGED_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_OWNER_CHANGED_NOTICE, guid);
 }
 
 void Channel::MakePlayerNotFound(WorldPacket* data, std::string const& name)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_NOT_FOUND_NOTICE);
-    *data << name;
+    MakeNotifyPacket(data, CHAT_PLAYER_NOT_FOUND_NOTICE, ObjectGuid::Empty, ObjectGuid::Empty, name);
 }
 
 void Channel::MakeNotOwner(WorldPacket* data)
@@ -1028,28 +1072,22 @@ void Channel::MakeChannelOwner(WorldPacket* data)
     if (!sCharacterCache->GetCharacterNameByGuid(_ownerGUID, name) || name.empty())
         name = "PLAYER_NOT_FOUND";
 
-    MakeNotifyPacket(data, CHAT_CHANNEL_OWNER_NOTICE);
-    *data << ((IsConstant() || !_ownerGUID) ? "Nobody" : name);
+    MakeNotifyPacket(data, CHAT_CHANNEL_OWNER_NOTICE, ObjectGuid::Empty, ObjectGuid::Empty, (IsConstant() || !_ownerGUID) ? "Nobody" : name);
 }
 
 void Channel::MakeModeChange(WorldPacket* data, ObjectGuid guid, uint8 oldflags)
 {
-    MakeNotifyPacket(data, CHAT_MODE_CHANGE_NOTICE);
-    *data << guid;
-    *data << uint8(oldflags);
-    *data << uint8(GetPlayerFlags(guid));
+    MakeNotifyPacket(data, CHAT_MODE_CHANGE_NOTICE, guid, ObjectGuid::Empty, {}, oldflags, GetPlayerFlags(guid));
 }
 
 void Channel::MakeAnnouncementsOn(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_ANNOUNCEMENTS_ON_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_ANNOUNCEMENTS_ON_NOTICE, guid);
 }
 
 void Channel::MakeAnnouncementsOff(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_ANNOUNCEMENTS_OFF_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_ANNOUNCEMENTS_OFF_NOTICE, guid);
 }
 
 void Channel::MakeMuted(WorldPacket* data)
@@ -1057,11 +1095,10 @@ void Channel::MakeMuted(WorldPacket* data)
     MakeNotifyPacket(data, CHAT_MUTED_NOTICE);
 }
 
+// For kicks and bans the sender is the one who acts and the target the player it falls on.
 void Channel::MakePlayerKicked(WorldPacket* data, ObjectGuid bad, ObjectGuid good)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_KICKED_NOTICE);
-    *data << bad;
-    *data << good;
+    MakeNotifyPacket(data, CHAT_PLAYER_KICKED_NOTICE, good, bad);
 }
 
 void Channel::MakeBanned(WorldPacket* data)
@@ -1071,34 +1108,27 @@ void Channel::MakeBanned(WorldPacket* data)
 
 void Channel::MakePlayerBanned(WorldPacket* data, ObjectGuid bad, ObjectGuid good)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_BANNED_NOTICE);
-    *data << bad;
-    *data << good;
+    MakeNotifyPacket(data, CHAT_PLAYER_BANNED_NOTICE, good, bad);
 }
 
 void Channel::MakePlayerUnbanned(WorldPacket* data, ObjectGuid bad, ObjectGuid good)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_UNBANNED_NOTICE);
-    *data << bad;
-    *data << good;
+    MakeNotifyPacket(data, CHAT_PLAYER_UNBANNED_NOTICE, good, bad);
 }
 
 void Channel::MakePlayerNotBanned(WorldPacket* data, std::string const& name)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_NOT_BANNED_NOTICE);
-    *data << name;
+    MakeNotifyPacket(data, CHAT_PLAYER_NOT_BANNED_NOTICE, ObjectGuid::Empty, ObjectGuid::Empty, name);
 }
 
 void Channel::MakePlayerAlreadyMember(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_ALREADY_MEMBER_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_PLAYER_ALREADY_MEMBER_NOTICE, guid);
 }
 
 void Channel::MakeInvite(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_INVITE_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_INVITE_NOTICE, guid);
 }
 
 void Channel::MakeInviteWrongFaction(WorldPacket* data)
@@ -1123,14 +1153,12 @@ void Channel::MakeNotModerated(WorldPacket* data)
 
 void Channel::MakePlayerInvited(WorldPacket* data, std::string const& name)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_INVITED_NOTICE);
-    *data << name;
+    MakeNotifyPacket(data, CHAT_PLAYER_INVITED_NOTICE, ObjectGuid::Empty, ObjectGuid::Empty, name);
 }
 
 void Channel::MakePlayerInviteBanned(WorldPacket* data, std::string const& name)
 {
-    MakeNotifyPacket(data, CHAT_PLAYER_INVITE_BANNED_NOTICE);
-    *data << name;
+    MakeNotifyPacket(data, CHAT_PLAYER_INVITE_BANNED_NOTICE, ObjectGuid::Empty, ObjectGuid::Empty, name);
 }
 
 void Channel::MakeThrottled(WorldPacket* data)
@@ -1150,14 +1178,29 @@ void Channel::MakeNotInLfg(WorldPacket* data)
 
 void Channel::MakeVoiceOn(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_VOICE_ON_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_VOICE_ON_NOTICE, guid);
 }
 
 void Channel::MakeVoiceOff(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_VOICE_OFF_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_VOICE_OFF_NOTICE, guid);
+}
+
+/// SMSG_USERLIST_ADD / _UPDATE, 3.4.3 (handlers FUN_1419074f0 / FUN_1419077e0): PackedGuid128, u8
+/// UserFlags, u32 ChannelFlags, i32 ChannelID, 7-bit name length, flush, the name. _REMOVE (FUN_141907680)
+/// has no UserFlags.
+void Channel::MakeUserListPacket(WorldPacket& data, Opcodes opcode, Player const* p)
+{
+    std::string_view channel = std::string_view(_name).substr(0, std::min<std::size_t>(_name.size(), 127));
+    data.Initialize(opcode, 18 + 1 + 4 + 4 + 1 + channel.size());
+    Guid128::Write(data, p->GetGUID());
+    if (opcode != SMSG_USERLIST_REMOVE)
+        data << uint8(GetPlayerFlags(p->GetGUID()));
+    data << uint32(GetFlags());
+    data << int32(GetChannelId());
+    data.WriteBits(channel.size(), 7);
+    data.FlushBits();
+    data.WriteString(channel);
 }
 
 void Channel::JoinNotify(Player* p)
@@ -1167,13 +1210,8 @@ void Channel::JoinNotify(Player* p)
     if (p->GetSession()->HasPermission(rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL))
         return;
 
-    WorldPacket data(SMSG_USERLIST_ADD, 8 + 1 + 1 + 4 + GetName().size());
-    data << p->GetGUID();
-    data << uint8(GetPlayerFlags(p->GetGUID()));
-    data << uint8(GetFlags());
-    data << uint32(GetNumPlayers());
-    data << GetName();
-
+    WorldPacket data;
+    MakeUserListPacket(data, SMSG_USERLIST_ADD, p);
     SendToAllWatching(&data);
 }
 
@@ -1184,12 +1222,8 @@ void Channel::LeaveNotify(Player* p)
     if (p->GetSession()->HasPermission(rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL))
         return;
 
-    WorldPacket data(SMSG_USERLIST_REMOVE, 8 + 1 + 4 + GetName().size());
-    data << p->GetGUID();
-    data << uint8(GetFlags());
-    data << uint32(GetNumPlayers());
-    data << GetName();
-
+    WorldPacket data;
+    MakeUserListPacket(data, SMSG_USERLIST_REMOVE, p);
     SendToAllWatching(&data);
 }
 
@@ -1200,13 +1234,8 @@ void Channel::FlagsNotify(Player* p)
     if (p->GetSession()->HasPermission(rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL))
         return;
 
-    WorldPacket data(SMSG_USERLIST_UPDATE, 8 + 1 + 1 + 4 + GetName().size());
-    data << p->GetGUID();
-    data << uint8(GetPlayerFlags(p->GetGUID()));
-    data << uint8(GetFlags());
-    data << uint32(GetNumPlayers());
-    data << GetName();
-
+    WorldPacket data;
+    MakeUserListPacket(data, SMSG_USERLIST_UPDATE, p);
     SendToAllWatching(&data);
 }
 
@@ -1264,12 +1293,10 @@ void Channel::ToggleModeration(Player* player)
 
 void Channel::MakeModerationOn(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_MODERATION_ON_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_MODERATION_ON_NOTICE, guid);
 }
 
 void Channel::MakeModerationOff(WorldPacket* data, ObjectGuid guid)
 {
-    MakeNotifyPacket(data, CHAT_MODERATION_OFF_NOTICE);
-    *data << guid;
+    MakeNotifyPacket(data, CHAT_MODERATION_OFF_NOTICE, guid);
 }

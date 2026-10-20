@@ -32,6 +32,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SocialMgr.h"
@@ -58,22 +59,162 @@ inline bool isNasty(uint8 c)
     return false;
 }
 
+/// 3.4.3 sends one opcode per kind of chat message (writers in FUN_141913710's SendChatMessage); reads
+/// one into AC's (type, language, whisper target, channel, text). Strings carry no NUL, their lengths
+/// travel in bit fields:
+///   SAY, PARTY, RAID, RAID_WARNING, INSTANCE_CHAT: u32 Language, 11-bit text length, bit IsSecure, flush, text
+///   YELL, GUILD, OFFICER: u32 Language, 11-bit length, flush, text
+///   EMOTE, AFK, DND: 11-bit length, flush, text (no language)
+///   WHISPER: u32 Language, 9-bit target length, 11-bit text length, flush, target, text
+///   CHANNEL: u32 Language, PackedGuid128 ChannelGUID, 9-bit channel name length, 11-bit text length,
+///            bit HasIsSecure, [bit IsSecure], flush, channel name, text
+///   ADDON_MESSAGE: 5-bit prefix length, 8-bit text length, bit IsLogged, flush, u32 chat type, prefix, text
+///   ADDON_MESSAGE_WHISPER: 9-bit target length, flush, the addon params above, PackedGuid128, target
+/// Addon messages become AC's LANG_ADDON with the text "prefix\ttext".
+static bool ReadChatMessage(WorldPacket& recvData, uint32& type, uint32& lang, std::string& to, std::string& channel, std::string& msg)
+{
+    auto readText = [&recvData](uint32 length) { return recvData.ReadString(length); };
+    auto readAddon = [&](uint32& chatType)
+    {
+        uint32 prefixLength = recvData.ReadBits(5);
+        uint32 textLength = recvData.ReadBits(8);
+        recvData.ReadBit();                             // IsLogged
+        recvData.ResetBitReader();
+        chatType = recvData.read<uint32>();
+        std::string prefix = readText(prefixLength);
+        msg = prefix + '\t' + readText(textLength);
+        lang = LANG_ADDON;
+    };
+
+    switch (recvData.GetOpcode())
+    {
+        case CMSG_CHAT_MESSAGE_SAY:
+        case CMSG_CHAT_MESSAGE_PARTY:
+        case CMSG_CHAT_MESSAGE_RAID:
+        case CMSG_CHAT_MESSAGE_RAID_WARNING:
+        case CMSG_CHAT_MESSAGE_INSTANCE_CHAT:
+        {
+            switch (recvData.GetOpcode())
+            {
+                case CMSG_CHAT_MESSAGE_SAY:           type = CHAT_MSG_SAY; break;
+                case CMSG_CHAT_MESSAGE_PARTY:         type = CHAT_MSG_PARTY; break;
+                case CMSG_CHAT_MESSAGE_RAID:          type = CHAT_MSG_RAID; break;
+                case CMSG_CHAT_MESSAGE_RAID_WARNING:  type = CHAT_MSG_RAID_WARNING; break;
+                default:                              type = CHAT_MSG_BATTLEGROUND; break;
+            }
+            lang = recvData.read<uint32>();
+            uint32 length = recvData.ReadBits(11);
+            recvData.ReadBit();                         // IsSecure
+            msg = readText(length);
+            return true;
+        }
+        case CMSG_CHAT_MESSAGE_YELL:
+        case CMSG_CHAT_MESSAGE_GUILD:
+        case CMSG_CHAT_MESSAGE_OFFICER:
+        {
+            type = recvData.GetOpcode() == CMSG_CHAT_MESSAGE_YELL ? CHAT_MSG_YELL
+                : recvData.GetOpcode() == CMSG_CHAT_MESSAGE_GUILD ? CHAT_MSG_GUILD : CHAT_MSG_OFFICER;
+            lang = recvData.read<uint32>();
+            msg = readText(recvData.ReadBits(11));
+            return true;
+        }
+        case CMSG_CHAT_MESSAGE_EMOTE:
+        case CMSG_CHAT_MESSAGE_AFK:
+        case CMSG_CHAT_MESSAGE_DND:
+        {
+            type = recvData.GetOpcode() == CMSG_CHAT_MESSAGE_EMOTE ? CHAT_MSG_EMOTE
+                : recvData.GetOpcode() == CMSG_CHAT_MESSAGE_AFK ? CHAT_MSG_AFK : CHAT_MSG_DND;
+            lang = LANG_UNIVERSAL;
+            msg = readText(recvData.ReadBits(11));
+            return true;
+        }
+        case CMSG_CHAT_MESSAGE_WHISPER:
+        {
+            type = CHAT_MSG_WHISPER;
+            lang = recvData.read<uint32>();
+            uint32 targetLength = recvData.ReadBits(9);
+            uint32 textLength = recvData.ReadBits(11);
+            to = readText(targetLength);
+            msg = readText(textLength);
+            return true;
+        }
+        case CMSG_CHAT_MESSAGE_CHANNEL:
+        {
+            type = CHAT_MSG_CHANNEL;
+            lang = recvData.read<uint32>();
+            Guid128::Skip(recvData);                    // ChannelGUID: AC finds the channel by name
+            uint32 channelLength = recvData.ReadBits(9);
+            uint32 textLength = recvData.ReadBits(11);
+            if (recvData.ReadBit())                     // HasIsSecure
+                recvData.ReadBit();
+            channel = readText(channelLength);
+            msg = readText(textLength);
+            return true;
+        }
+        case CMSG_CHAT_ADDON_MESSAGE:
+        {
+            uint32 chatType = 0;
+            readAddon(chatType);
+            switch (chatType)
+            {
+                case CHAT_MSG_PARTY:
+                case CHAT_MSG_RAID:
+                case CHAT_MSG_GUILD:
+                case CHAT_MSG_OFFICER:
+                case CHAT_MSG_SAY:
+                case CHAT_MSG_YELL:
+                case CHAT_MSG_BATTLEGROUND:
+                    type = chatType;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        case CMSG_CHAT_ADDON_MESSAGE_WHISPER:
+        {
+            uint32 targetLength = recvData.ReadBits(9);
+            recvData.ResetBitReader();
+            uint32 chatType = 0;
+            readAddon(chatType);
+            Guid128::Skip(recvData);
+            to = readText(targetLength);
+            type = CHAT_MSG_WHISPER;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
 {
-    uint32 type;
-    uint32 lang;
-
-    recvData >> type;
-    recvData >> lang;
-
-    if (type >= MAX_CHAT_MSG_TYPE)
+    uint32 type = 0;
+    uint32 lang = LANG_UNIVERSAL;
+    std::string to, channel, msg;
+    if (!ReadChatMessage(recvData, type, lang, to, channel, msg))
     {
-        LOG_ERROR("network.opcode", "CHAT: Wrong message type received: {}", type);
+        LOG_ERROR("network.opcode", "CHAT: unexpected chat message {} from {}", GetOpcodeNameForLogging(Opcodes(recvData.GetOpcode())), GetPlayerInfo());
         recvData.rfinish();
         return;
     }
 
-    if (lang == LANG_UNIVERSAL && type != CHAT_MSG_AFK && type != CHAT_MSG_DND)
+    // 3.4.3 has one opcode for party, raid and instance chat; the leader variants are the server's
+    if (lang != LANG_ADDON)
+    {
+        Group const* group = type == CHAT_MSG_BATTLEGROUND ? GetPlayer()->GetGroup()
+            : (GetPlayer()->GetOriginalGroup() ? GetPlayer()->GetOriginalGroup() : GetPlayer()->GetGroup());
+        if (group && group->IsLeader(GetPlayer()->GetGUID()))
+        {
+            if (type == CHAT_MSG_PARTY)
+                type = CHAT_MSG_PARTY_LEADER;
+            else if (type == CHAT_MSG_RAID)
+                type = CHAT_MSG_RAID_LEADER;
+            else if (type == CHAT_MSG_BATTLEGROUND)
+                type = CHAT_MSG_BATTLEGROUND_LEADER;
+        }
+    }
+
+    if (lang == LANG_UNIVERSAL && type != CHAT_MSG_AFK && type != CHAT_MSG_DND && type != CHAT_MSG_EMOTE)
     {
         LOG_ERROR("entities.player.cheat", "CMSG_MESSAGECHAT: Possible hacking-attempt: {} tried to send a message in universal language", GetPlayerInfo());
         ChatHandler(this).SendNotification(LANG_UNKNOWN_LANGUAGE);
@@ -249,37 +390,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             sender->UpdateSpeakTime(lang == LANG_ADDON ? Player::ChatFloodThrottle::ADDON : Player::ChatFloodThrottle::REGULAR);
     }
 
-    std::string to, channel, msg;
-    bool ignoreChecks = false;
-    switch (type)
+    bool ignoreChecks = type == CHAT_MSG_AFK || type == CHAT_MSG_DND;
+    std::wstring wmsg;
+    if (lang != LANG_ADDON && !Utf8toWStr(msg, wmsg))
     {
-        case CHAT_MSG_SAY:
-        case CHAT_MSG_EMOTE:
-        case CHAT_MSG_YELL:
-        case CHAT_MSG_PARTY:
-        case CHAT_MSG_PARTY_LEADER:
-        case CHAT_MSG_GUILD:
-        case CHAT_MSG_OFFICER:
-        case CHAT_MSG_RAID:
-        case CHAT_MSG_RAID_LEADER:
-        case CHAT_MSG_RAID_WARNING:
-        case CHAT_MSG_BATTLEGROUND:
-        case CHAT_MSG_BATTLEGROUND_LEADER:
-            msg = recvData.ReadCString(lang != LANG_ADDON);
-            break;
-        case CHAT_MSG_WHISPER:
-            recvData >> to;
-            msg = recvData.ReadCString(lang != LANG_ADDON);
-            break;
-        case CHAT_MSG_CHANNEL:
-            recvData >> channel;
-            msg = recvData.ReadCString(lang != LANG_ADDON);
-            break;
-        case CHAT_MSG_AFK:
-        case CHAT_MSG_DND:
-            msg = recvData.ReadCString(lang != LANG_ADDON);
-            ignoreChecks = true;
-            break;
+        LOG_ERROR("network", "Player {} sent a chat message that is not valid UTF-8", GetPlayerInfo());
+        return;
     }
 
     // Our Warden module also uses SendAddonMessage as a way to communicate Lua check results to the server, see if this is that
@@ -666,17 +782,15 @@ void WorldSession::HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet)
     if (GetPlayer()->IsSpectator())
         return;
 
-    uint32 emoteId = packet.EmoteID;
-
-    // restrict to the only emotes hardcoded in client
-    if (emoteId != EMOTE_ONESHOT_NONE && emoteId != EMOTE_ONESHOT_WAVE)
-        return;
-
+    // 3.4.3's CMSG_EMOTE is empty (FUN_14075cc20): the client sends it to end the emote it shows
+    // (a moving or acting player stops dancing), so it clears the emote state
+    (void)packet;
     if (!_player->IsAlive() || _player->HasUnitState(UNIT_STATE_DIED))
         return;
 
-    sScriptMgr->OnPlayerEmote(_player, emoteId);
-    _player->HandleEmoteCommand(emoteId);
+    sScriptMgr->OnPlayerEmote(_player, EMOTE_ONESHOT_NONE);
+    if (_player->GetUInt32Value(UNIT_NPC_EMOTESTATE))
+        _player->SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_ONESHOT_NONE);
 }
 
 namespace Acore
@@ -689,18 +803,16 @@ namespace Acore
 
         void operator()(WorldPacket& data, LocaleConstant loc_idx)
         {
-            std::string const name(i_target ? i_target->GetNameForLocaleIdx(loc_idx) : "");
-            uint32 namlen = name.size();
-
-            data.Initialize(SMSG_TEXT_EMOTE, 20 + namlen);
-            data << i_player.GetGUID();
-            data << uint32(i_text_emote);
-            data << uint32(i_emote_num);
-            data << uint32(namlen);
-            if (namlen > 1)
-                data << name;
-            else
-                data << uint8(0x00);
+            // SMSG_TEXT_EMOTE, 3.4.3 (FUN_1406cc110, handler FUN_141907360): PackedGuid128 SourceGUID,
+            // SourceAccountGUID, i32 EmoteID, i32 SoundIndex, PackedGuid128 TargetGUID. The client
+            // finds the target's name itself (it queries a player's), so none is sent.
+            (void)loc_idx;
+            data.Initialize(SMSG_TEXT_EMOTE, 2 * 18 + 8 + 18);
+            Guid128::Write(data, i_player.GetGUID());
+            Guid128::Write(data, ObjectGuid::Empty);
+            data << int32(i_text_emote);
+            data << int32(i_emote_num);
+            Guid128::Write(data, i_target ? i_target->GetGUID() : ObjectGuid::Empty);
         }
 
     private:
@@ -713,8 +825,14 @@ namespace Acore
 
 void WorldSession::HandleTextEmoteOpcode(WorldPacket& recvData)
 {
-    uint32 text_emote;
-    recvData >> text_emote;
+    // CMSG_SEND_TEXT_EMOTE, 3.4.3 (FUN_14074ef00): PackedGuid128 Target, i32 EmoteID, i32 SoundIndex,
+    // u32 SpellVisualKitIDs count, i32 SequenceVariation, i32 SpellVisualKitIDs[count]
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 text_emote = recvData.read<uint32>();
+    uint32 emoteNum = recvData.read<uint32>();            // SoundIndex
+    uint32 kitCount = recvData.read<uint32>();
+    recvData.read_skip<int32>();                          // SequenceVariation
+    recvData.read_skip(std::size_t(std::min<uint32>(kitCount, 16)) * 4);
 
     constexpr uint32 readyEmote = 126;
 
@@ -739,12 +857,6 @@ void WorldSession::HandleTextEmoteOpcode(WorldPacket& recvData)
 
     if (GetPlayer()->IsSpectator())
         return;
-
-    uint32 emoteNum;
-    ObjectGuid guid;
-
-    recvData >> emoteNum;
-    recvData >> guid;
 
     sScriptMgr->OnPlayerTextEmote(GetPlayer(), text_emote, emoteNum, guid);
 
@@ -788,11 +900,9 @@ void WorldSession::HandleTextEmoteOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleChatIgnoredOpcode(WorldPacket& recvData)
 {
-    ObjectGuid iguid;
-    uint8 unk;
-
-    recvData >> iguid;
-    recvData >> unk;                                       // probably related to spam reporting
+    // 3.4.3 (FUN_14075ae20): PackedGuid128 IgnoredGUID, u8 Reason (0 ignored, 1 a stranger's whisper)
+    ObjectGuid iguid = Guid128::Read(recvData);
+    recvData.read_skip<uint8>();
 
     Player* player = ObjectAccessor::FindConnectedPlayer(iguid);
     if (!player)
@@ -813,15 +923,21 @@ void WorldSession::HandleChannelDeclineInvite(WorldPacket& recvPacket)
 
 void WorldSession::SendPlayerNotFoundNotice(std::string const& name)
 {
-    WorldPacket data(SMSG_CHAT_PLAYER_NOTFOUND, name.size() + 1);
-    data << name;
+    // 3.4.3: 9-bit name length, flush, the name
+    WorldPacket data(SMSG_CHAT_PLAYER_NOTFOUND, 2 + name.size());
+    data.WriteBits(std::min<std::size_t>(name.size(), 511), 9);
+    data.FlushBits();
+    data.WriteString(std::string_view(name).substr(0, 511));
     SendPacket(&data);
 }
 
 void WorldSession::SendPlayerAmbiguousNotice(std::string const& name)
 {
-    WorldPacket data(SMSG_CHAT_PLAYER_AMBIGUOUS, name.size() + 1);
-    data << name;
+    // 3.4.3: 9-bit name length, flush, the name
+    WorldPacket data(SMSG_CHAT_PLAYER_AMBIGUOUS, 2 + name.size());
+    data.WriteBits(std::min<std::size_t>(name.size(), 511), 9);
+    data.FlushBits();
+    data.WriteString(std::string_view(name).substr(0, 511));
     SendPacket(&data);
 }
 
@@ -832,6 +948,7 @@ void WorldSession::SendWrongFactionNotice()
 
 void WorldSession::SendChatRestrictedNotice(ChatRestrictionType restriction)
 {
+    // 3.4.3 (handler FUN_14173f530): u8 Reason, 0 restricted, 1 throttled, 2 squelched, 3-4 trial
     WorldPacket data(SMSG_CHAT_RESTRICTED, 1);
     data << uint8(restriction);
     SendPacket(&data);

@@ -886,7 +886,7 @@ enum PlayerChatTag
     CHAT_TAG_AFK        = 0x01,
     CHAT_TAG_DND        = 0x02,
     CHAT_TAG_GM         = 0x04,
-    CHAT_TAG_COM        = 0x08, // Commentator tag. Do not exist in clean client
+    CHAT_TAG_COM        = 0x80, // Commentator tag; 3.4.3 shows "COM" for 0x80 (0x08 makes it drop a whisper from a stranger)
     CHAT_TAG_DEV        = 0x10,
 };
 

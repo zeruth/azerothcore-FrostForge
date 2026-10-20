@@ -47,6 +47,9 @@ public:
     // Builds chat packet and returns receiver guid position in the packet to substitute in whisper builders
     static std::size_t BuildChatPacket(WorldPacket& data, ChatMsg chatType, Language language, WorldObject const* sender, WorldObject const* receiver, std::string_view message, uint32 achievementId = 0, std::string const& channelName = "", LocaleConstant locale = DEFAULT_LOCALE);
 
+    // SMSG_PRINT_NOTIFICATION (the 3.4.3 client's centre-screen notification)
+    static void BuildNotificationPacket(WorldPacket& data, std::string_view text);
+
     static char* LineFromMessage(char*& pos) { char* start = strtok(pos, "\n"); pos = nullptr; return start; }
 
     void SendNotification(std::string_view str);

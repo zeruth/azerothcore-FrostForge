@@ -17,6 +17,7 @@
 
 #include "ChannelMgr.h"
 #include "Log.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "StringConvert.h"
 #include "Tokenize.h"
@@ -224,6 +225,19 @@ void ChannelMgr::SetChannelRightsFor(std::string const& name, uint32 const& flag
 
 void ChannelMgr::MakeNotOnPacket(WorldPacket* data, std::string const& name)
 {
-    data->Initialize(SMSG_CHANNEL_NOTIFY, 1 + name.size());
-    (*data) << uint8(5) << name;
+    // SMSG_CHANNEL_NOTIFY NOT_MEMBER (5) for a channel that does not exist; layout in
+    // Channel::MakeNotifyPacket: no sender or target, channel id 0
+    std::string_view channel = std::string_view(name).substr(0, std::min<std::size_t>(name.size(), 127));
+    data->Initialize(SMSG_CHANNEL_NOTIFY, 3 + 3 * 2 + 12 + channel.size());
+    data->WriteBits(CHAT_NOT_MEMBER_NOTICE, 6);
+    data->WriteBits(channel.size(), 7);
+    data->WriteBits(0, 6);
+    data->FlushBits();
+    Guid128::WritePacked(*data, 0, 0);                  // SenderGuid
+    Guid128::WritePacked(*data, 0, 0);                  // SenderAccountID
+    *data << uint32(Guid128::VirtualRealmAddress());
+    Guid128::WritePacked(*data, 0, 0);                  // TargetGuid
+    *data << uint32(Guid128::VirtualRealmAddress());
+    *data << int32(0);                                  // ChatChannelID
+    data->WriteString(channel);
 }

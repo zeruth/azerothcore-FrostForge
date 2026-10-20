@@ -18,6 +18,7 @@
 #include "AreaDefines.h"
 #include "ArenaSpectator.h"
 #include "BattlegroundMgr.h"
+#include "Chat.h"
 #include "LFGMgr.h"
 #include "Map.h"
 #include "Pet.h"
@@ -212,16 +213,8 @@ bool ArenaSpectator::HandleSpectatorWatchCommand(ChatHandler* handler, std::stri
 
 void ArenaSpectator::CreatePacket(WorldPacket& data, std::string const& message)
 {
-    std::size_t len = message.length();
-    data.Initialize(SMSG_CHAT, 1 + 4 + 8 + 4 + 8 + 4 + 1 + len + 1);
-    data << uint8(CHAT_MSG_WHISPER);
-    data << uint32(LANG_ADDON);
-    data << uint64(0);
-    data << uint32(0);
-    data << uint64(0);
-    data << uint32(len + 1);
-    data << message;
-    data << uint8(0);
+    // an addon whisper with no sender, "prefix\ttext" split by BuildChatPacket into 3.4.3's fields
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
 }
 
 void ArenaSpectator::HandleResetCommand(Player* player)

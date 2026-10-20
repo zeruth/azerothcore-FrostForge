@@ -1127,7 +1127,8 @@ void WorldSession::HandleUpdateClientSettings(WorldPacket& recvData)
 // Requests the client makes on entering the world (GameUI enter-world, login-sequence.ANALYSIS.md 5)
 // for systems Wrath has no use for, or that answer only when there is something to say: the countdown
 // timer (u32 type), the conquest formula (empty), the premade-group finder status (empty), the battle
-// pet journal and its lock (empty). Read and dropped.
+// pet journal and its lock (empty); and the addon prefix registrations (u32 count, {5-bit length, flush,
+// prefix}; and the empty unregister), which AC does not filter on. Read and dropped.
 void WorldSession::HandleIgnoredWorldRequest(WorldPacket& recvData)
 {
     recvData.rfinish();
