@@ -34,6 +34,9 @@ endif()
 # Boost.System is header-only since 1.69; do not require it explicitly.
 set(BOOST_COMPONENTS filesystem program_options iostreams regex)
 
+# Boost.JSON (1.75+) for the Battle.net web login and realm list JSON.
+list(APPEND BOOST_COMPONENTS json container)
+
 GetModuleSourceList(AC_MODULES_PRESENT)
 if(BUILD_APPLICATION_WORLDSERVER AND AC_MODULES_PRESENT)
   list(APPEND BOOST_COMPONENTS thread)

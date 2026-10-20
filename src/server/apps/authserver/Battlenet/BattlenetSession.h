@@ -36,6 +36,12 @@ namespace bgs::protocol
     class Header;
 }
 
+namespace bgs::protocol::game_utilities::v1
+{
+    class ClientRequest;
+    class ClientResponse;
+}
+
 namespace Battlenet
 {
     // Service hashes: FNV-1a over the service's descriptor_name, as the 3.4.3 client computes them.
@@ -45,7 +51,8 @@ namespace Battlenet
         SERVICE_AUTHENTICATION      = 0x0DECFC01, // bnet.protocol.authentication.AuthenticationServer
         SERVICE_AUTHENTICATION_LISTENER = 0x71240E35, // bnet.protocol.authentication.AuthenticationClient
         SERVICE_GAME_UTILITIES      = 0x3FC1274D, // bnet.protocol.game_utilities.GameUtilities
-        SERVICE_ACCOUNT             = 0x62DA0891  // bnet.protocol.account.AccountService
+        SERVICE_ACCOUNT             = 0x62DA0891, // bnet.protocol.account.AccountService
+        SERVICE_CHALLENGE_LISTENER  = 0xBBDA171F  // bnet.protocol.challenge.ChallengeNotify
     };
 
     // A Header with this service_id is a response, matched to its call by token
@@ -56,7 +63,9 @@ namespace Battlenet
     enum RpcStatus : uint32
     {
         RPC_STATUS_OK                  = 0,
+        RPC_STATUS_DENIED              = 0x03,
         RPC_STATUS_NOT_IMPLEMENTED     = 0x0D,
+        RPC_STATUS_BAD_REQUEST         = 0x0B,
         RPC_STATUS_INVALID_SERVICE     = 0xBC2
     };
 
@@ -81,11 +90,26 @@ namespace Battlenet
         void HandleResponse(bgs::protocol::Header const& header);
 
         void HandleConnectionService(bgs::protocol::Header const& header, uint8 const* body, std::size_t size);
+        void HandleAuthenticationService(bgs::protocol::Header const& header, uint8 const* body, std::size_t size);
+        void HandleAccountService(bgs::protocol::Header const& header, uint8 const* body, std::size_t size);
+        void HandleGameUtilitiesService(bgs::protocol::Header const& header, uint8 const* body, std::size_t size);
+
+        // GameUtilities.ProcessClientRequest commands (bnet-login-flow.ANALYSIS.md section 5).
+        uint32 HandleRealmListTicketRequest(bgs::protocol::game_utilities::v1::ClientRequest const& request,
+            bgs::protocol::game_utilities::v1::ClientResponse& response);
+        uint32 HandleRealmListRequest(bgs::protocol::game_utilities::v1::ClientRequest const& request,
+            bgs::protocol::game_utilities::v1::ClientResponse& response);
+        uint32 HandleRealmJoinRequest(bgs::protocol::game_utilities::v1::ClientRequest const& request,
+            bgs::protocol::game_utilities::v1::ClientResponse& response);
 
         void SendResponse(uint32 token, uint32 status, google::protobuf::Message const* body);
+        // A call the server makes into a service the client exports, named by hash (bindless).
+        void SendRequest(uint32 serviceHash, uint32 methodId, google::protobuf::Message const& body);
         void SendFrame(bgs::protocol::Header const& header, google::protobuf::Message const* body);
         void WriteNext();
         void Close();
+
+        bool IsAuthenticated() const { return _accountId != 0; }
 
         SslSocket _socket;
         std::string _remote;
@@ -93,6 +117,13 @@ namespace Battlenet
         std::size_t _readSize;
         std::deque<std::vector<uint8>> _writeQueue;
         bool _closed;
+
+        uint32 _requestToken;
+        uint32 _accountId;
+        std::string _accountName;
+        std::string _locale;
+        std::vector<uint8> _sessionKey;   // LogonResult.session_key, echoed as Param_BnetSessionKey
+        std::vector<uint8> _clientSecret; // the 32 random bytes of Param_ClientInfo's secret
     };
 }
 

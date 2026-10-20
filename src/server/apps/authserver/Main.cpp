@@ -27,6 +27,7 @@
 #include "AuthSocketMgr.h"
 #include "Banner.h"
 #include "BattlenetServer.h"
+#include "LoginRestServer.h"
 #include "Config.h"
 #include "DBUpdater.h"
 #include "DatabaseEnv.h"
@@ -200,6 +201,25 @@ int main(int argc, char** argv)
     }
 
     std::shared_ptr<void> sBattlenetServerHandle(nullptr, [](void*) { sBattlenetServer.Stop(); });
+
+    // The web login the Battle.net logon challenge sends the client to
+    int32 loginRestPort = sConfigMgr->GetOption<int32>("LoginREST.Port", 8081);
+    if (loginRestPort <= 0 || loginRestPort > 0xFFFF)
+    {
+        LOG_ERROR("server.authserver", "Specified LoginREST.Port out of allowed range (1-65535)");
+        return 1;
+    }
+
+    if (battlenetPort && !sLoginRestServer.Start(*ioContext, bindIp, uint16(loginRestPort),
+        sConfigMgr->GetOption<std::string>("LoginREST.ExternalAddress", "127.0.0.1"),
+        sConfigMgr->GetOption<std::string>("BattlenetCertificatesFile", "bnetserver.cert.pem"),
+        sConfigMgr->GetOption<std::string>("BattlenetPrivateKeyFile", "bnetserver.key.pem")))
+    {
+        LOG_ERROR("server.authserver", "Failed to initialize the web login");
+        return 1;
+    }
+
+    std::shared_ptr<void> sLoginRestServerHandle(nullptr, [](void*) { sLoginRestServer.Stop(); });
 
     // Set signal handlers
     boost::asio::signal_set signals(*ioContext, SIGINT, SIGTERM);

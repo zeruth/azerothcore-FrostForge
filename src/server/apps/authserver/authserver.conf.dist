@@ -84,6 +84,17 @@ BattlenetCertificatesFile = "bnetserver.cert.pem"
 BattlenetPrivateKeyFile = "bnetserver.key.pem"
 
 #
+#    LoginREST.Port
+#    LoginREST.ExternalAddress
+#        Description: HTTPS port of the web login the Battle.net logon challenge sends the client
+#                     to (https://<ExternalAddress>:<Port>/bnetserver/login/). It uses the
+#                     Battle.net certificate; the client does not verify the peer on this path.
+#        Default:     8081, "127.0.0.1"
+
+LoginREST.Port = 8081
+LoginREST.ExternalAddress = "127.0.0.1"
+
+#
 #    EnableProxyProtocol
 #        Description: Enables Proxy Protocol v2. When your server is behind a proxy,
 #                     load balancer, or similar component, you need to enable Proxy Protocol v2 on both
