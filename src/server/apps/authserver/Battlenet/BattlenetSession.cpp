@@ -665,15 +665,18 @@ namespace Battlenet
             return RPC_STATUS_DENIED;
         }
 
-        // The key material is [JoinSecret][client secret] (FUN_1414833f0); the world server derives
-        // the session from it (world-handshake.ANALYSIS.md 3.3), so it is stored before the reply.
+        // The key material is [client secret][JoinSecret]: the 3.4.3 client's digest
+        // (FUN_141560ca0) hashes its own secret first, as TrinityCore's bnetserver stores it. The
+        // analysis had the halves the other way round and the stand-in client followed it, so the
+        // real client's AUTH_SESSION never matched (2026-10-20). The world server derives the
+        // session from it (world-handshake.ANALYSIS.md 3.3), so it is stored before the reply.
         if (_clientSecret.size() != 32)
             return RPC_STATUS_DENIED;
 
         std::array<uint8, 32> joinSecret = Acore::Crypto::GetRandomBytes<32>();
         std::array<uint8, 64> joinKey;
-        std::copy(joinSecret.begin(), joinSecret.end(), joinKey.begin());
-        std::copy(_clientSecret.begin(), _clientSecret.end(), joinKey.begin() + 32);
+        std::copy(_clientSecret.begin(), _clientSecret.end(), joinKey.begin());
+        std::copy(joinSecret.begin(), joinSecret.end(), joinKey.begin() + 32);
 
         LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_BNET_JOIN_KEY);
         stmt->SetData(0, joinKey);
