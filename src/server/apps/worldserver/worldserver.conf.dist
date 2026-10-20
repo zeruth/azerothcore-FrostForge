@@ -100,6 +100,16 @@ RealmID = 1
 WorldServerPort = 8085
 
 #
+#    EnterEncryptedModePrivateKeyFile
+#        Description: PEM Ed25519 private key the world server signs SMSG_ENTER_ENCRYPTED_MODE with.
+#                     The 3.4.3 client verifies the signature against a public key compiled into
+#                     it; FrostLite carries the public half of this key (src/net/WowConnection.cpp).
+#                     Make one with: openssl genpkey -algorithm ed25519 -out <file>
+#        Default:     "worldserver-ed25519.key.pem" (beside the executable)
+
+EnterEncryptedModePrivateKeyFile = "worldserver-ed25519.key.pem"
+
+#
 #    BindIP
 #        Description: Bind world server to IP/hostname
 #        Default:     "0.0.0.0" - (Bind to all IPs on the system)

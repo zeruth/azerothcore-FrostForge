@@ -18,7 +18,7 @@
 #ifndef __WORLDSOCKET_H__
 #define __WORLDSOCKET_H__
 
-#include "AuthCrypt.h"
+#include "AES.h"
 #include "Common.h"
 #include "MPSCQueue.h"
 #include "Socket.h"
@@ -39,10 +39,6 @@ public:
 
     bool NeedsEncryption() const { return _encrypt; }
 
-    bool NeedsCompression() const { return GetOpcode() == SMSG_UPDATE_OBJECT && size() > 100; }
-
-    void CompressIfNeeded();
-
     std::atomic<EncryptableAndCompressiblePacket*> SocketQueueLink;
 
 private:
@@ -54,18 +50,21 @@ namespace WorldPackets
     class ServerPacket;
 }
 
+// The 3.4.3 packet header, both directions (world-handshake.ANALYSIS.md 2.1): the length of
+// what follows (u16 opcode + body), then the first 12 bytes of its AES-GCM tag (zero while the
+// connection is not encrypted).
 #pragma pack(push, 1)
-struct ClientPktHeader
+struct WorldPacketHeader
 {
-    uint16 size;
-    uint32 cmd;
+    uint32 Size;
+    uint8 Tag[12];
 
-    bool IsValidSize() const { return size >= 4 && size < 10240; }
-    bool IsValidOpcode() const { return cmd < NUM_OPCODE_HANDLERS; }
+    bool IsValidSize() const { return Size >= 2 && Size < 0x40000; }
 };
 #pragma pack(pop)
 
 struct ClientAuthSession;
+struct AccountInfo;
 
 class AC_GAME_API WorldSocket final : public Socket<WorldSocket>
 {
@@ -104,6 +103,7 @@ protected:
 
 private:
     void CheckIpCallback(PreparedQueryResult result);
+    bool ReadConnectionString(MessageBuffer& packet);
 
     /// writes network.opcode log
     /// accessing WorldSession is not threadsafe, only do it when holding _worldSessionLock
@@ -111,16 +111,33 @@ private:
 
     /// sends and logs network.opcode without accessing WorldSession
     void SendPacketAndLogOpcode(WorldPacket const& packet);
-    void HandleSendAuthSession();
+    void SendAuthChallenge();
     void HandleAuthSession(WorldPacket& recvPacket);
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
-    void LoadSessionPermissionsCallback(PreparedQueryResult result);
-    void SendAuthResponseError(uint8 code);
+    bool HandleEnterEncryptedModeAck();
+    void SendAuthResponseError(uint32 code);
 
     bool HandlePing(WorldPacket& recvPacket);
 
-    std::array<uint8, 4> _authSeed;
-    AuthCrypt _authCrypt;
+    // AES-128-GCM of the payload; the IV is the direction's packet counter and "CLNT" / "SRVR"
+    // (world-handshake.ANALYSIS.md 2.2). The counters count every packet, encrypted or not.
+    bool DecryptRecv(uint8* data, std::size_t length, uint8 const (&tag)[12]);
+    void EncryptSend(uint8* data, std::size_t length, uint8 (&tag)[12]);
+
+    std::array<uint8, 32> _dosChallenge;
+    std::array<uint8, 16> _serverChallenge;
+    std::array<uint8, 40> _sessionKey;
+    Acore::Crypto::AES _decrypt;
+    Acore::Crypto::AES _encrypt;
+    uint64 _recvCounter;
+    uint64 _sendCounter;
+    bool _decryptEnabled;
+    std::atomic<bool> _encryptEnabled;
+
+    std::string _connectionString;
+    bool _connectionStringReceived;
+    std::shared_ptr<AccountInfo> _pendingAccount;
+    std::string _pendingAccountName;
 
     TimePoint _LastPingTime;
     uint32 _OverSpeedPings;

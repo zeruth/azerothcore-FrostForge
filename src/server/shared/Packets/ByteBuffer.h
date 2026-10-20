@@ -83,10 +83,15 @@ public:
     }
 
     ByteBuffer(ByteBuffer&& buf) noexcept :
-        _rpos(buf._rpos), _wpos(buf._wpos), _storage(std::move(buf._storage))
+        _rpos(buf._rpos), _wpos(buf._wpos), _storage(std::move(buf._storage)), _bitpos(buf._bitpos),
+        _curbitval(buf._curbitval), _readBitpos(buf._readBitpos), _readCurbitval(buf._readCurbitval)
     {
         buf._rpos = 0;
         buf._wpos = 0;
+        buf._bitpos = 8;
+        buf._curbitval = 0;
+        buf._readBitpos = 8;
+        buf._readCurbitval = 0;
     }
 
     ByteBuffer(ByteBuffer const& right) = default;
@@ -100,6 +105,10 @@ public:
             _rpos = right._rpos;
             _wpos = right._wpos;
             _storage = right._storage;
+            _bitpos = right._bitpos;
+            _curbitval = right._curbitval;
+            _readBitpos = right._readBitpos;
+            _readCurbitval = right._readCurbitval;
         }
 
         return *this;
@@ -114,6 +123,14 @@ public:
             _wpos = right._wpos;
             right._wpos = 0;
             _storage = std::move(right._storage);
+            _bitpos = right._bitpos;
+            right._bitpos = 8;
+            _curbitval = right._curbitval;
+            right._curbitval = 0;
+            _readBitpos = right._readBitpos;
+            right._readBitpos = 8;
+            _readCurbitval = right._readCurbitval;
+            right._readCurbitval = 0;
         }
 
         return *this;
@@ -123,6 +140,10 @@ public:
     {
         _storage.clear();
         _rpos = _wpos = 0;
+        _bitpos = 8;
+        _curbitval = 0;
+        _readBitpos = 8;
+        _readCurbitval = 0;
     }
 
     template <typename T>
@@ -527,9 +548,69 @@ public:
     void textlike() const;
     void hexlike() const;
 
+    // Bit fields, as the 3.4.3 client packs them: most significant bit first, a partly filled byte
+    // written out by FlushBits (zero padded) before the next byte-aligned field.
+    bool WriteBit(bool bit)
+    {
+        --_bitpos;
+        if (bit)
+            _curbitval |= uint8(1 << _bitpos);
+
+        if (_bitpos == 0)
+        {
+            _bitpos = 8;
+            append(&_curbitval, sizeof(_curbitval));
+            _curbitval = 0;
+        }
+
+        return bit;
+    }
+
+    void WriteBits(std::size_t value, int32 bits)
+    {
+        for (int32 i = bits - 1; i >= 0; --i)
+            WriteBit((value >> i) & 1);
+    }
+
+    void FlushBits()
+    {
+        if (_bitpos == 8)
+            return;
+
+        _bitpos = 8;
+        append(&_curbitval, sizeof(_curbitval));
+        _curbitval = 0;
+    }
+
+    bool ReadBit()
+    {
+        if (_readBitpos == 8)
+        {
+            _readCurbitval = read<uint8>();
+            _readBitpos = 0;
+        }
+
+        bool bit = ((_readCurbitval >> (7 - _readBitpos)) & 1) != 0;
+        ++_readBitpos;
+        return bit;
+    }
+
+    uint32 ReadBits(int32 bits)
+    {
+        uint32 value = 0;
+        for (int32 i = bits - 1; i >= 0; --i)
+            if (ReadBit())
+                value |= (1 << i);
+        return value;
+    }
+
+    void ResetBitReader() { _readBitpos = 8; }
+
 protected:
     std::size_t _rpos{0}, _wpos{0};
     std::vector<uint8> _storage;
+    uint8 _bitpos{8}, _curbitval{0};
+    uint8 _readBitpos{8}, _readCurbitval{0};
 };
 
 /// @todo Make a ByteBuffer.cpp and move all this inlining to it.

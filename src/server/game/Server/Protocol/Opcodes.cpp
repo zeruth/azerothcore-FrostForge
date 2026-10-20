@@ -1442,6 +1442,13 @@ void OpcodeTable::Initialize()
     /*0x51F*/ DEFINE_HANDLER(TC9_CMSG_PREPARE_FOR_REDIRECT,                                         STATUS_AUTHED,     PROCESS_THREADUNSAFE,   &WorldSession::HandleTC9PrepareForRedirect);
     /*0x520*/ DEFINE_SERVER_OPCODE_HANDLER(TC9_SMSG_READY_FOR_REDIRECT, STATUS_NEVER);
 
+    // 3.4.3 connection opcodes; the client ones are taken by WorldSocket before any session
+    /*0x256C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_AUTH_FAILED,                                       STATUS_NEVER);
+    /*0x3049*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ENTER_ENCRYPTED_MODE,                              STATUS_NEVER);
+    /*0x3767*/ DEFINE_HANDLER(CMSG_ENTER_ENCRYPTED_MODE_ACK,                                        STATUS_NEVER,      PROCESS_INPLACE,        &WorldSession::Handle_EarlyProccess                     );
+    /*0x3769*/ DEFINE_HANDLER(CMSG_LOG_DISCONNECT,                                                  STATUS_NEVER,      PROCESS_INPLACE,        &WorldSession::Handle_EarlyProccess                     );
+    /*0x376B*/ DEFINE_HANDLER(CMSG_QUEUED_MESSAGES_END,                                             STATUS_NEVER,      PROCESS_INPLACE,        &WorldSession::Handle_EarlyProccess                     );
+
 #undef DEFINE_HANDLER
 #undef DEFINE_SERVER_OPCODE_HANDLER
 }

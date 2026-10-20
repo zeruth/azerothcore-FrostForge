@@ -216,14 +216,173 @@ bool LoginQueryHolder::Initialize()
     return res;
 }
 
+namespace
+{
+    // A 128-bit GUID as the 3.4.3 client packs it (FUN_141550b20): a mask of the low half's
+    // non-zero bytes, one of the high half's, then those bytes.
+    void WritePackedGuid128(WorldPacket& data, uint64 low, uint64 high)
+    {
+        uint8 lowMask = 0, highMask = 0;
+        for (uint8 i = 0; i < 8; ++i)
+        {
+            if ((low >> (8 * i)) & 0xFF)
+                lowMask |= uint8(1 << i);
+            if ((high >> (8 * i)) & 0xFF)
+                highMask |= uint8(1 << i);
+        }
+
+        data << uint8(lowMask) << uint8(highMask);
+        for (uint8 i = 0; i < 8; ++i)
+            if (lowMask & (1 << i))
+                data << uint8(low >> (8 * i));
+        for (uint8 i = 0; i < 8; ++i)
+            if (highMask & (1 << i))
+                data << uint8(high >> (8 * i));
+    }
+
+    // A player's 128-bit GUID: HighGuid Player (2) in the top 6 bits and the realm id under it,
+    // the character counter in the low half.
+    uint64 PlayerGuidHigh()
+    {
+        return (uint64(2) << 58) | (uint64(realm.Id.Realm & 0x1FFF) << 42);
+    }
+
+    constexpr uint32 VISUAL_ITEM_SLOTS = 34;
+
+    // CharacterInfo of SMSG_ENUM_CHARACTERS_RESULT, 3.4.3 (FUN_1407109f0), from CHAR_SEL_ENUM's row:
+    //    0     1     2     3      4       5     6     7          8          9            10     11    12   13 14 15
+    //    guid, name, race, class, gender, skin, face, hairStyle, hairColor, facialStyle, level, zone, map, x, y, z,
+    //    16       17           18        19     20       21     22              23              24
+    //    guildid, playerFlags, at_login, entry, modelid, level, equipmentCache, banned guid,    extra_flags
+    // Customizations are not sent: 3.4.3 stores ChrCustomizationChoice ids, which come with the
+    // 3.4.3 character schema (D5), not from the 3.3.5 skin/face/hair bytes.
+    bool WriteCharacterInfo(WorldPacket& data, Field* fields, uint8 listPosition)
+    {
+        uint32 guidLow = fields[0].Get<uint32>();
+        std::string name = fields[1].Get<std::string>();
+        uint8 race = fields[2].Get<uint8>();
+        uint8 playerClass = fields[3].Get<uint8>();
+        uint8 gender = fields[4].Get<uint8>();
+
+        if (!sObjectMgr->GetPlayerInfo(race, playerClass) || !Player::IsValidGender(gender) || name.size() >= 64)
+        {
+            LOG_ERROR("entities.player", "Character {} has an invalid race/class/gender or name, not listed", guidLow);
+            return false;
+        }
+
+        uint32 playerFlags = fields[17].Get<uint32>();
+        uint16 atLoginFlags = fields[18].Get<uint16>();
+        uint32 zone = (atLoginFlags & AT_LOGIN_FIRST) != 0 ? 0 : fields[11].Get<uint16>(); // if first login do not show the zone
+
+        uint32 charFlags = 0;
+        if (atLoginFlags & AT_LOGIN_RESURRECT)
+            playerFlags &= ~PLAYER_FLAGS_GHOST;
+        if (playerFlags & PLAYER_FLAGS_HIDE_HELM)
+            charFlags |= CHARACTER_FLAG_HIDE_HELM;
+        if (playerFlags & PLAYER_FLAGS_HIDE_CLOAK)
+            charFlags |= CHARACTER_FLAG_HIDE_CLOAK;
+        if (playerFlags & PLAYER_FLAGS_GHOST)
+            charFlags |= CHARACTER_FLAG_GHOST;
+        if (atLoginFlags & AT_LOGIN_RENAME)
+            charFlags |= CHARACTER_FLAG_RENAME;
+        if (fields[23].Get<uint32>())
+            charFlags |= CHARACTER_FLAG_LOCKED_BY_BILLING;
+
+        uint32 customizeFlags = CHAR_CUSTOMIZE_FLAG_NONE;
+        if (atLoginFlags & AT_LOGIN_CUSTOMIZE)
+            customizeFlags = CHAR_CUSTOMIZE_FLAG_CUSTOMIZE;
+        else if (atLoginFlags & AT_LOGIN_CHANGE_FACTION)
+            customizeFlags = CHAR_CUSTOMIZE_FLAG_FACTION;
+        else if (atLoginFlags & AT_LOGIN_CHANGE_RACE)
+            customizeFlags = CHAR_CUSTOMIZE_FLAG_RACE;
+
+        uint32 petDisplayId = 0, petLevel = 0, petFamily = 0;
+        if (playerClass == CLASS_WARLOCK || playerClass == CLASS_HUNTER || playerClass == CLASS_DEATH_KNIGHT)
+        {
+            uint32 entry = fields[19].Get<uint32>();
+            if (CreatureTemplate const* creature = entry ? sObjectMgr->GetCreatureTemplate(entry) : nullptr)
+            {
+                petDisplayId = fields[20].Get<uint32>();
+                petLevel = fields[21].Get<uint16>();
+                petFamily = creature->family;
+            }
+        }
+
+        WritePackedGuid128(data, guidLow, PlayerGuidHigh());
+        data << uint64(0);                                      // GuildClubMemberID
+        data << uint8(listPosition);
+        data << uint8(race);
+        data << uint8(playerClass);
+        data << uint8(gender);
+        data << uint32(0);                                      // Customizations
+        data << uint8(fields[10].Get<uint8>());                 // level
+        data << uint32(zone);
+        data << uint32(fields[12].Get<uint16>());               // map
+        data << fields[13].Get<float>();
+        data << fields[14].Get<float>();
+        data << fields[15].Get<float>();
+        WritePackedGuid128(data, 0, 0);                         // GuildGuid: the 3.4.3 guild GUID comes with guilds
+        data << uint32(charFlags);
+        data << uint32(customizeFlags);
+        data << uint32(0);                                      // Flags3
+        data << uint32(petDisplayId);
+        data << uint32(petLevel);
+        data << uint32(petFamily);
+        data << uint32(0) << uint32(0);                         // ProfessionIds
+        for (uint32 slot = 0; slot < VISUAL_ITEM_SLOTS; ++slot)
+        {
+            // the 3.4.3 item displays come with the item data conversion
+            data << uint32(0);                                  // DisplayID
+            data << uint32(0);                                  // DisplayEnchantID
+            data << uint32(0);                                  // SecondaryItemModifiedAppearanceID
+            data << uint8(0);                                   // InvType
+            data << uint8(0);                                   // Subclass
+        }
+        data << uint64(0);                                      // LastPlayedTime
+        data << uint16(0);                                      // SpecID
+        data << uint32(0);
+        data << uint32(54261);                                  // LastLoginVersion
+        data << uint32(0);                                      // Flags4
+        data << uint32(0);                                      // MailSenders
+        data << uint32(0);                                      // MailSenderTypes
+        data << uint32(0);                                      // OverrideSelectScreenFileDataID
+
+        data.WriteBits(name.size(), 6);
+        data.WriteBit((atLoginFlags & AT_LOGIN_FIRST) != 0);    // FirstLogin
+        data.WriteBit(false);                                   // BoostInProgress
+        data.WriteBits(0, 5);
+        data.WriteBits(0, 2);
+        data.WriteBit(false);
+        data.WriteBit(false);
+        data.FlushBits();
+        data.append(name.data(), name.size());
+        return true;
+    }
+}
+
+// SMSG_ENUM_CHARACTERS_RESULT, 3.4.3 (parser FUN_1406faac0): the client drops the list unless
+// Success is set (FUN_1416943f0).
 void WorldSession::HandleCharEnum(PreparedQueryResult result)
 {
-    WorldPacket data(SMSG_CHAR_ENUM, 100);                  // we guess size
+    WorldPacket data(SMSG_CHAR_ENUM, 1000);
 
-    uint8 num = 0;
+    data.WriteBit(true);                                        // Success
+    data.WriteBit(false);                                       // IsDeletedCharacters
+    data.WriteBit(false);                                       // IsNewPlayerRestrictionSkipped
+    data.WriteBit(false);                                       // IsNewPlayerRestricted
+    data.WriteBit(false);                                       // IsNewPlayer
+    data.WriteBit(false);                                       // IsTrialAccountRestricted
+    data.WriteBit(false);                                       // HasDisabledClassesMask
+    data.FlushBits();
 
-    data << num;
+    std::size_t countPos = data.wpos();
+    data << uint32(0);                                          // Characters
+    data << uint32(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+    data << uint32(0);                                          // RaceUnlockData
+    data << uint32(0);                                          // UnlockedConditionalAppearances
+    data << uint32(0);                                          // RaceLimitDisables
 
+    uint32 num = 0;
     _legitCharacters.clear();
     if (result)
     {
@@ -231,7 +390,7 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result)
         {
             ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>((*result)[0].Get<uint32>());
             LOG_DEBUG("network.opcode", "Loading char {} from account {}.", guid.ToString(), GetAccountId());
-            if (Player::BuildEnumData(result, &data))
+            if (WriteCharacterInfo(data, result->Fetch(), uint8(num)))
             {
                 _legitCharacters.insert(guid);
                 ++num;
@@ -239,7 +398,7 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result)
         } while (result->NextRow());
     }
 
-    data.put<uint8>(0, num);
+    data.put<uint32>(countPos, num);
 
     SendPacket(&data);
 }

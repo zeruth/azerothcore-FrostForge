@@ -82,11 +82,11 @@ enum Opcodes : uint16
     CMSG_AUTH_SRP6_PROOF                            = 0x034,
     CMSG_AUTH_SRP6_RECODE                           = 0x035,
     CMSG_CHAR_CREATE                                = 0x036,
-    CMSG_CHAR_ENUM                                  = 0x037,
+    CMSG_CHAR_ENUM                                  = 0x35E9, // 3.4.3 CMSG_ENUM_CHARACTERS
     CMSG_CHAR_DELETE                                = 0x038,
     SMSG_AUTH_SRP6_RESPONSE                         = 0x039,
     SMSG_CHAR_CREATE                                = 0x03A,
-    SMSG_CHAR_ENUM                                  = 0x03B,
+    SMSG_CHAR_ENUM                                  = 0x2583, // 3.4.3 SMSG_ENUM_CHARACTERS_RESULT
     SMSG_CHAR_DELETE                                = 0x03C,
     CMSG_PLAYER_LOGIN                               = 0x03D,
     SMSG_NEW_WORLD                                  = 0x03E,
@@ -503,8 +503,8 @@ enum Opcodes : uint16
     SMSG_START_MIRROR_TIMER                         = 0x1D9,
     SMSG_PAUSE_MIRROR_TIMER                         = 0x1DA,
     SMSG_STOP_MIRROR_TIMER                          = 0x1DB,
-    CMSG_PING                                       = 0x1DC,
-    SMSG_PONG                                       = 0x1DD,
+    CMSG_PING                                       = 0x3768, // 3.4.3
+    SMSG_PONG                                       = 0x304E, // 3.4.3
     SMSG_CLEAR_COOLDOWN                             = 0x1DE,
     SMSG_GAMEOBJECT_PAGETEXT                        = 0x1DF,
     CMSG_SET_SHEATHED                               = 0x1E0,
@@ -519,9 +519,9 @@ enum Opcodes : uint16
     MSG_GM_SUMMON                                   = 0x1E9,
     SMSG_ITEM_TIME_UPDATE                           = 0x1EA,
     SMSG_ITEM_ENCHANT_TIME_UPDATE                   = 0x1EB,
-    SMSG_AUTH_CHALLENGE                             = 0x1EC,
-    CMSG_AUTH_SESSION                               = 0x1ED,
-    SMSG_AUTH_RESPONSE                              = 0x1EE,
+    SMSG_AUTH_CHALLENGE                             = 0x3048, // 3.4.3
+    CMSG_AUTH_SESSION                               = 0x3765, // 3.4.3
+    SMSG_AUTH_RESPONSE                              = 0x256D, // 3.4.3
     MSG_GM_SHOWLABEL                                = 0x1EF,
     CMSG_PET_CAST_SPELL                             = 0x1F0,
     MSG_SAVE_GUILD_EMBLEM                           = 0x1F1,
@@ -1340,8 +1340,21 @@ enum Opcodes : uint16
     SMSG_MULTIPLE_MOVES                             = 0x51E, // uncompressed version of SMSG_COMPRESSED_MOVES
     TC9_CMSG_PREPARE_FOR_REDIRECT                   = 0x51F,
     TC9_SMSG_READY_FOR_REDIRECT                     = 0x520,
-    NUM_MSG_TYPES                                   = 0x521
+
+    // 3.4.3.54261 (world-handshake.ANALYSIS.md). The client's opcodes start at 0x256C, above every
+    // 3.3.5 value, and its server and client ranges do not overlap: converted opcodes take their
+    // 3.4.3 numbers here one by one, and WorldSocket sends no server opcode still on a 3.3.5 one.
+    SMSG_AUTH_FAILED                                = 0x256C, // u32 result, allowed before encryption
+    SMSG_ENTER_ENCRYPTED_MODE                       = 0x3049,
+    CMSG_ENTER_ENCRYPTED_MODE_ACK                   = 0x3767,
+    CMSG_LOG_DISCONNECT                             = 0x3769,
+    CMSG_QUEUED_MESSAGES_END                        = 0x376B,
+
+    NUM_MSG_TYPES                                   = 0x4410  // above the 3.4.3 debug-menu range (0x43F8 + 0xF)
 };
+
+// The first opcode number of the 3.4.3 client; anything below is still a 3.3.5 value.
+constexpr uint16 FIRST_343_OPCODE = 0x256C;
 
 enum OpcodeMisc : uint16
 {

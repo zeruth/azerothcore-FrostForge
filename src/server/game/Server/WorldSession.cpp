@@ -956,20 +956,8 @@ void WorldSession::Handle_Deprecated(WorldPacket& recvPacket)
 
 void WorldSession::SendAuthWaitQueue(uint32 position)
 {
-    if (position == 0)
-    {
-        WorldPacket packet(SMSG_AUTH_RESPONSE, 1);
-        packet << uint8(AUTH_OK);
-        SendPacket(&packet);
-    }
-    else
-    {
-        WorldPacket packet(SMSG_AUTH_RESPONSE, 6);
-        packet << uint8(AUTH_WAIT_QUEUE);
-        packet << uint32(position);
-        packet << uint8(0);                                 // unk
-        SendPacket(&packet);
-    }
+    // 3.4.3: the queue is SMSG_AUTH_RESPONSE's WaitInfo (AuthHandler.cpp)
+    SendAuthResponse(position ? AUTH_WAIT_QUEUE : AUTH_OK, false, position);
 }
 
 void WorldSession::LoadAccountData(PreparedQueryResult result, uint32 mask)
