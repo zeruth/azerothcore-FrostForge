@@ -118,28 +118,7 @@ namespace
         return itr != powers.end() ? itr->second : none;
     }
 
-    /// AC's inventory slots (3.3.5's layout) as the 3.4.3 client's InvSlots indices: equipment 0-18,
-    /// bags 30-33, backpack 35-, bank 59-86, bank bags 87-93, buyback 94-105, keyring 106-137
-    /// (Lua BankButtonIDToInvSlotID 0x3b / 0x57, KeyRingButtonIDToInvSlotID 0x6a, container ids
-    /// FUN_141c5df80 0x1e / 0x53). 3.3.5's currency token slots have no place: -1.
-    int32 ClientInventorySlot(uint8 slot)
-    {
-        if (slot < EQUIPMENT_SLOT_END)
-            return slot;
-        if (slot >= INVENTORY_SLOT_BAG_START && slot < INVENTORY_SLOT_BAG_END)
-            return 30 + (slot - INVENTORY_SLOT_BAG_START);
-        if (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END)
-            return 35 + (slot - INVENTORY_SLOT_ITEM_START);
-        if (slot >= BANK_SLOT_ITEM_START && slot < BANK_SLOT_ITEM_END)
-            return 59 + (slot - BANK_SLOT_ITEM_START);
-        if (slot >= BANK_SLOT_BAG_START && slot < BANK_SLOT_BAG_END)
-            return 87 + (slot - BANK_SLOT_BAG_START);
-        if (slot >= BUYBACK_SLOT_START && slot < BUYBACK_SLOT_END)
-            return 94 + (slot - BUYBACK_SLOT_START);
-        if (slot >= KEYRING_SLOT_START && slot < KEYRING_SLOT_END)
-            return 106 + (slot - KEYRING_SLOT_START);
-        return -1;
-    }
+    // ClientInventorySlot (AC's slots as the client's InvSlots indices) lives in Player.h
 
     /// The GUID types of the account GUIDs a player carries [TrinityCore: HighGuid WowAccount 29, BNetAccount 30].
     constexpr uint64 WOW_ACCOUNT_HIGH = uint64(29) << 58;

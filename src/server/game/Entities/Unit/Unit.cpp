@@ -13672,10 +13672,14 @@ void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackTyp
 
             if (creature)
             {
-                WorldPacket data2(SMSG_LOOT_LIST, 8 + 1 + 1);
-                data2 << creature->GetGUID();
-                data2 << uint8(0); // unk1
-                data2 << uint8(0); // no group looter
+                // SMSG_LOOT_LIST, 3.4.3 (FUN_1406c4420): PackedGuid128 Owner, PackedGuid128 LootObj, bits
+                // HasMaster, HasRoundRobinWinner, flush, [Master], [RoundRobinWinner]
+                WorldPacket data2(SMSG_LOOT_LIST, 18 * 2 + 1);
+                Guid128::Write(data2, creature->GetGUID());
+                Guid128::Write(data2, creature->GetGUID());
+                data2.WriteBit(false);
+                data2.WriteBit(false);
+                data2.FlushBits();
                 player->SendMessageToSet(&data2, true);
             }
         }

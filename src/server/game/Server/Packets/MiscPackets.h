@@ -183,9 +183,13 @@ namespace WorldPackets
         class DurabilityDamageDeath final : public ServerPacket
         {
         public:
-            DurabilityDamageDeath() : ServerPacket(SMSG_DURABILITY_DAMAGE_DEATH, 0) { }
+            DurabilityDamageDeath() : ServerPacket(SMSG_DURABILITY_DAMAGE_DEATH, 4) { }
 
-            WorldPacket const* Write() override { return &_worldPacket; }
+            // 3.4.3: read raw (FUN_1406b55f0); the handler (FUN_141910c40) formats DURABILITYDAMAGE_DEATH
+            // with the first u32
+            WorldPacket const* Write() override { _worldPacket << uint32(Percent); return &_worldPacket; }
+
+            uint32 Percent = 10;
         };
 
         class CrossedInebriationThreshold final : public ServerPacket

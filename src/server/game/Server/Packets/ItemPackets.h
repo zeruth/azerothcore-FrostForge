@@ -209,14 +209,16 @@ namespace WorldPackets
         class EnchantmentLog final : public ServerPacket
         {
         public:
-            EnchantmentLog() : ServerPacket(SMSG_ENCHANTMENT_LOG, 8 + 8 + 4 + 4) {}
+            EnchantmentLog() : ServerPacket(SMSG_ENCHANTMENT_LOG, 18 * 3 + 4 * 3) {}
 
             WorldPacket const* Write() override;
 
-            PackedGuid Target;
-            PackedGuid Caster;
+            ObjectGuid Target;
+            ObjectGuid Caster;
+            ObjectGuid ItemGuid;
             uint32 ItemId = 0;
             uint32 EnchantId = 0;
+            uint32 EnchantSlot = 0;
         };
 
         class ItemEnchantTimeUpdate final : public ServerPacket

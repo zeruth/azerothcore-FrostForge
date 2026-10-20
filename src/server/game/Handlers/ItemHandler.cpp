@@ -21,6 +21,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SpellInfo.h"
@@ -399,16 +400,23 @@ void WorldSession::HandleReadItem(WorldPackets::Item::ReadItem& packet)
         InventoryResult msg = _player->CanUseItem(pItem);
         if (msg == EQUIP_ERR_OK)
         {
-            data.Initialize (SMSG_READ_ITEM_RESULT_OK, 8);
+            // SMSG_READ_ITEM_RESULT_OK, 3.4.3 (FUN_1406b8960): PackedGuid128 Item
+            data.Initialize(SMSG_READ_ITEM_RESULT_OK, 18);
+            Guid128::Write(data, pItem->GetGUID());
             LOG_DEBUG("network.opcode", "STORAGE: Item page sent");
         }
         else
         {
-            data.Initialize(SMSG_READ_ITEM_RESULT_FAILED, 8);
+            // SMSG_READ_ITEM_RESULT_FAILED, 3.4.3 (FUN_1406c8e80): PackedGuid128 Item, u32 Delay, 2-bit
+            // Subcode (2: the reading frame closes)
+            data.Initialize(SMSG_READ_ITEM_RESULT_FAILED, 18 + 5);
+            Guid128::Write(data, pItem->GetGUID());
+            data << uint32(0);
+            data.WriteBits(2, 2);
+            data.FlushBits();
             LOG_DEBUG("network.opcode", "STORAGE: Unable to read item");
             _player->SendEquipError(msg, pItem, nullptr);
         }
-        data << pItem->GetGUID();
         SendPacket(&data);
     }
     else
@@ -686,24 +694,30 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid, uint32 vendorEntry)
     SetCurrentVendor(vendorEntry);
 
     VendorItemData const* items = vendorEntry ? sObjectMgr->GetNpcVendorItemList(vendorEntry) : vendor->GetVendorItems();
+    // SMSG_VENDOR_INVENTORY, 3.4.3 (FUN_1406cd840, FUN_140706e20; the handler FUN_141b021c0 opens the
+    // merchant frame): PackedGuid128 Vendor, u8 Reason, u32 count, per item {u64 Price, u32 MuID (the vendor
+    // slot from 1, sent back in CMSG_BUY_ITEM), u32 Type (1 item), u32 Durability, i32 StackCount, i32
+    // Quantity (-1 unlimited), u32 ExtendedCostID, u32 PlayerConditionFailed, bits Locked,
+    // DoNotFilterOnVendor, Refundable, flush, ItemInstance}
     if (!items)
     {
-        WorldPacket data(SMSG_VENDOR_INVENTORY, 8 + 1 + 1);
-        data << vendorGuid;
-        data << uint8(0);                                   // count == 0, next will be error code
-        data << uint8(0);                                   // "Vendor has no inventory"
+        WorldPacket data(SMSG_VENDOR_INVENTORY, 18 + 5);
+        Guid128::Write(data, vendorGuid);
+        data << uint8(0);                                   // Reason
+        data << uint32(0);                                  // "Vendor has no inventory"
         SendPacket(&data);
         return;
     }
 
     uint8 itemCount = items->GetItemCount();
-    uint8 count = 0;
+    uint32 count = 0;
 
-    WorldPacket data(SMSG_VENDOR_INVENTORY, 8 + 1 + itemCount * 8 * 4);
-    data << vendorGuid;
+    WorldPacket data(SMSG_VENDOR_INVENTORY, 18 + 5 + itemCount * 64);
+    Guid128::Write(data, vendorGuid);
+    data << uint8(0);                                       // Reason
 
     std::size_t countPos = data.wpos();
-    data << uint8(count);
+    data << uint32(count);
 
     float discountMod = _player->GetReputationPriceDiscount(vendor);
 
@@ -741,14 +755,19 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid, uint32 vendorEntry)
                 // reputation discount
                 int32 price = item->IsGoldRequired(itemTemplate) ? uint32(std::floor(itemTemplate->BuyPrice * discountMod)) : 0;
 
+                data << uint64(price);
                 data << uint32(slot + 1);       // client expects counting to start at 1
-                data << uint32(item->item);
-                data << uint32(itemTemplate->DisplayInfoID);
-                data << int32(leftInStock);
-                data << uint32(price);
+                data << uint32(1);              // Type: item
                 data << uint32(itemTemplate->MaxDurability);
-                data << uint32(itemTemplate->BuyCount);
+                data << int32(itemTemplate->BuyCount);
+                data << int32(leftInStock);
                 data << uint32(item->ExtendedCost);
+                data << uint32(0);              // PlayerConditionFailed
+                data.WriteBit(false);           // Locked
+                data.WriteBit(false);           // DoNotFilterOnVendor
+                data.WriteBit(false);           // Refundable
+                data.FlushBits();
+                WorldPackets::Item::WriteItemInstance(data, item->item);
 
                 if (++count >= MAX_VENDOR_ITEMS)
                 {
@@ -758,14 +777,7 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid, uint32 vendorEntry)
         }
     }
 
-    if (count == 0)
-    {
-        data << uint8(0);
-        SendPacket(&data);
-        return;
-    }
-
-    data.put<uint8>(countPos, count);
+    data.put<uint32>(countPos, count);
     SendPacket(&data);
 }
 
@@ -843,13 +855,15 @@ void WorldSession::HandleSetAmmoOpcode(WorldPacket& recvData)
         _player->RemoveAmmo();
 }
 
-void WorldSession::SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, uint32 itemId, uint32 enchantId)
+void WorldSession::SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, ObjectGuid itemGuid, uint32 itemId, uint32 enchantId, uint32 enchantSlot)
 {
     WorldPackets::Item::EnchantmentLog enchantmentLog;
-    enchantmentLog.Target = target.WriteAsPacked();
-    enchantmentLog.Caster = caster.WriteAsPacked();
+    enchantmentLog.Target = target;
+    enchantmentLog.Caster = caster;
+    enchantmentLog.ItemGuid = itemGuid;
     enchantmentLog.ItemId = itemId;
     enchantmentLog.EnchantId = enchantId;
+    enchantmentLog.EnchantSlot = enchantSlot;
     GetPlayer()->SendMessageToSet(enchantmentLog.Write(), true);
 }
 

@@ -8034,8 +8034,11 @@ void Player::RemovedInsignia(Player* looterPlr)
 
 void Player::SendLootRelease(ObjectGuid guid)
 {
-    WorldPacket data(SMSG_LOOT_RELEASE, (8 + 1));
-    data << guid << uint8(1);
+    // SMSG_LOOT_RELEASE, 3.4.3 (FUN_1406b75d0): PackedGuid128 LootObj, PackedGuid128 Owner. A loot has no
+    // GUID of its own in AC: its owner's stands for it in both.
+    WorldPacket data(SMSG_LOOT_RELEASE, 36);
+    Guid128::Write(data, guid);
+    Guid128::Write(data, guid);
     SendDirectMessage(&data);
 }
 
@@ -8431,9 +8434,17 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
 
         sScriptMgr->OnPlayerBeforeSendLoot(this, guid, loot);
 
-        WorldPacket data(SMSG_LOOT_RESPONSE, (9 + 50));         // we guess size
-        data << guid;
+        // SMSG_LOOT_RESPONSE, 3.4.3 (FUN_1406c4600, FUN_1407009d0): PackedGuid128 Owner, PackedGuid128
+        // LootObj (the owner's GUID: AC's loot has none of its own), u8 FailureReason, u8 AcquireReason
+        // (the loot type), u8 LootMethod, u8 Threshold, then the LootView
+        Group* group = GetGroup();
+        WorldPacket data(SMSG_LOOT_RESPONSE, 36 + 4 + 13 + 60 * loot->items.size());
+        Guid128::Write(data, guid);
+        Guid128::Write(data, guid);
+        data << uint8(0);
         data << uint8(loot_type);
+        data << uint8(group ? group->GetLootMethod() : FREE_FOR_ALL);
+        data << uint8(group ? group->GetLootThreshold() : ITEM_QUALITY_UNCOMMON);
         data << LootView(*loot, this, permission);
 
         SendDirectMessage(&data);
@@ -8450,22 +8461,38 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
 
 void Player::SendLootError(ObjectGuid guid, LootError error)
 {
-    WorldPacket data(SMSG_LOOT_RESPONSE, 10);
-    data << guid;
-    data << uint8(LOOT_NONE);
+    // SMSG_LOOT_RESPONSE with Acquired 0: the client prints FailureReason (LootError, handler
+    // FUN_1419a05a0) and opens nothing
+    WorldPacket data(SMSG_LOOT_RESPONSE, 36 + 17);
+    Guid128::Write(data, guid);
+    Guid128::Write(data, guid);
     data << uint8(error);
+    data << uint8(LOOT_NONE);
+    data << uint8(0);                                       // LootMethod
+    data << uint8(0);                                       // Threshold
+    data << uint32(0);                                      // Coins
+    data << uint32(0);                                      // items
+    data << uint32(0);                                      // currencies
+    data.WriteBit(false);                                   // Acquired
+    data.WriteBit(false);                                   // AELooting
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
 void Player::SendNotifyLootMoneyRemoved()
 {
-    WorldPacket data(SMSG_COIN_REMOVED, 0);
+    // SMSG_COIN_REMOVED, 3.4.3 (FUN_1406b8960): PackedGuid128 LootObj
+    WorldPacket data(SMSG_COIN_REMOVED, 18);
+    Guid128::Write(data, GetLootGUID());
     SendDirectMessage(&data);
 }
 
 void Player::SendNotifyLootItemRemoved(uint8 lootSlot)
 {
-    WorldPacket data(SMSG_LOOT_REMOVED, 1);
+    // SMSG_LOOT_REMOVED, 3.4.3 (FUN_1406c4590): PackedGuid128 Owner, PackedGuid128 LootObj, u8 LootListID
+    WorldPacket data(SMSG_LOOT_REMOVED, 37);
+    Guid128::Write(data, GetLootGUID());
+    Guid128::Write(data, GetLootGUID());
     data << uint8(lootSlot);
     SendDirectMessage(&data);
 }
@@ -10875,10 +10902,12 @@ inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 c
     {
         uint32 new_count = pVendor->UpdateVendorItemCurrentCount(crItem, pProto->BuyCount * count);
 
-        WorldPacket data(SMSG_BUY_SUCCEEDED, (8 + 4 + 4 + 4));
-        data << pVendor->GetGUID();
-        data << uint32(vendorslot + 1);                   // numbered from 1 at client
-        data << int32(crItem->maxcount > 0 ? new_count : 0xFFFFFFFF);
+        // SMSG_BUY_SUCCEEDED, 3.4.3 (FUN_1406b9c10): PackedGuid128 VendorGUID, u32 Muid (the vendor slot,
+        // numbered from 1), i32 NewQuantity (-1 unlimited), u32 QuantityBought
+        WorldPacket data(SMSG_BUY_SUCCEEDED, 18 + 12);
+        Guid128::Write(data, pVendor->GetGUID());
+        data << uint32(vendorslot + 1);
+        data << int32(crItem->maxcount > 0 ? int32(new_count) : -1);
         data << uint32(count);
         SendDirectMessage(&data);
         SendNewItem(it, pProto->BuyCount * count, true, false, false);
@@ -12102,9 +12131,11 @@ void Player::ApplyEquipCooldown(Item* pItem)
 
         AddSpellCooldown(spellData.SpellId, pItem->GetEntry(), 30 * IN_MILLISECONDS, true, true);
 
-        WorldPacket data(SMSG_ITEM_COOLDOWN, 12);
-        data << pItem->GetGUID();
+        // 3.4.3 (FUN_1406b6fc0): PackedGuid128 ItemGuid, u32 SpellID, u32 Cooldown (ms)
+        WorldPacket data(SMSG_ITEM_COOLDOWN, 18 + 8);
+        Guid128::Write(data, pItem->GetGUID());
         data << uint32(spellData.SpellId);
+        data << uint32(30 * IN_MILLISECONDS);
         SendDirectMessage(&data);
     }
 

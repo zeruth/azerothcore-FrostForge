@@ -647,7 +647,7 @@ public:
     void SendAuctionOwnerNotification(AuctionEntry* auction);
 
     //Item Enchantment
-    void SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, uint32 itemId, uint32 enchantId);
+    void SendEnchantmentLog(ObjectGuid target, ObjectGuid caster, ObjectGuid itemGuid, uint32 itemId, uint32 enchantId, uint32 enchantSlot);
     void SendItemEnchantTimeUpdate(ObjectGuid Playerguid, ObjectGuid Itemguid, uint32 slot, uint32 Duration);
 
     //Taxi
@@ -774,6 +774,7 @@ public:                                                 // opcodes handlers
 
     void HandleRepopRequestOpcode(WorldPacket& recvPacket);
     void HandleAutostoreLootItemOpcode(WorldPacket& recvPacket);
+    void AutostoreLootItem(uint8 lootSlot);
     void HandleLootMoneyOpcode(WorldPacket& recvPacket);
     void HandleLootOpcode(WorldPacket& recvPacket);
     void HandleLootReleaseOpcode(WorldPacket& recvPacket);

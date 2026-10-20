@@ -137,8 +137,12 @@ enum InventoryResult : uint8
 
 /// The 3.4.3 client's number for an InventoryResult (its result-to-error map, FUN_141893710): the same
 /// up to 28; 3.4.3 inserts 29 (ERR_CANT_TRADE_GOLD), so everything from 3.3.5's 29 on is one higher.
+/// AC's EQUIP_ERR_NONE (3.3.5's silent 59) would land on ERR_CANT_BE_DISENCHANTED: it goes as 0, which
+/// the client also maps to no message.
 inline uint32 ClientInventoryResult(InventoryResult result)
 {
+    if (result == EQUIP_ERR_NONE)
+        return 0;
     return result < 29 ? uint32(result) : uint32(result) + 1;
 }
 

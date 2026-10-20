@@ -20,6 +20,7 @@
 #include "DisableMgr.h"
 #include "Group.h"
 #include "ItemEnchantmentMgr.h"
+#include "ItemPackets.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -960,34 +961,51 @@ bool Loot::hasOverThresholdItem() const
     return false;
 }
 
-ByteBuffer& operator<<(ByteBuffer& b, LootItem const& li)
+/// LootItemData, 3.4.3 (FUN_140714bb0): 2-bit Type (0 item), 3-bit UIType (LootSlotType), bit
+/// CanTradeToTapList, flush, ItemInstance, u32 Quantity, u8 LootItemType, u8 LootListID (what the client
+/// sends back in CMSG_LOOT_ITEM)
+static void WriteLootItemData(ByteBuffer& b, uint8 lootListId, LootItem const& li, uint8 uiType)
 {
-    b << uint32(li.itemid);
-    b << uint32(li.count);                                  // nr of items of this type
-    b << uint32(sObjectMgr->GetItemTemplate(li.itemid)->DisplayInfoID);
-    b << uint32(li.randomSuffix);
-    b << uint32(li.randomPropertyId);
-    //b << uint8(0);                                        // slot type - will send after this function call
-    return b;
+    b.WriteBits(0, 2);
+    b.WriteBits(uiType, 3);
+    b.WriteBit(false);
+    b.FlushBits();
+    WorldPackets::Item::WriteItemInstance(b, li.itemid, int32(li.randomSuffix), li.randomPropertyId);
+    b << uint32(li.count);
+    b << uint8(0);
+    b << uint8(lootListId);
 }
 
+/// The tail of SMSG_LOOT_RESPONSE, 3.4.3 (FUN_1407009d0), after Owner, LootObj, FailureReason,
+/// AcquireReason, LootMethod and Threshold: u32 Coins, u32 item count, u32 currency count, bits Acquired,
+/// AELooting, flush, the items (LootItemData), the currencies.
 ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
 {
+    ByteBuffer items;
+    uint32 itemsShown = 0;
+    auto emit = [&](uint8 lootListId, LootItem const& li, uint8 uiType)
+    {
+        WriteLootItemData(items, lootListId, li, uiType);
+        ++itemsShown;
+    };
+    auto finish = [&](uint32 gold)
+    {
+        b << uint32(gold);
+        b << uint32(itemsShown);
+        b << uint32(0);                                     // currencies
+        b.WriteBit(true);                                   // Acquired
+        b.WriteBit(false);                                  // AELooting
+        b.FlushBits();
+        b.append(items);
+    };
+
     if (lv.permission == NONE_PERMISSION)
     {
-        b << uint32(0);                                     //gold
-        b << uint8(0);                                      // item count
-        return b;                                           // nothing output more
+        finish(0);
+        return b;
     }
 
     Loot& l = lv.loot;
-
-    uint8 itemsShown = 0;
-
-    b << uint32(l.gold);                                    //gold
-
-    std::size_t count_pos = b.wpos();                            // pos of item count byte
-    b << uint8(0);                                          // item count placeholder
 
     switch (lv.permission)
     {
@@ -1048,9 +1066,7 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
                             // item shall not be displayed.
                             continue;
 
-                        b << uint8(i) << l.items[i];
-                        b << uint8(slot_type);
-                        ++itemsShown;
+                        emit(i, l.items[i], slot_type);
                     }
                 }
                 break;
@@ -1065,9 +1081,7 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
                             // item shall not be displayed.
                             continue;
 
-                        b << uint8(i) << l.items[i];
-                        b << uint8(LOOT_SLOT_TYPE_ALLOW_LOOT);
-                        ++itemsShown;
+                        emit(i, l.items[i], LOOT_SLOT_TYPE_ALLOW_LOOT);
                     }
                 }
                 break;
@@ -1079,15 +1093,12 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
                 for (uint8 i = 0; i < l.items.size(); ++i)
                 {
                     if (!l.items[i].is_looted && !l.items[i].freeforall && l.items[i].conditions.empty() && l.items[i].AllowedForPlayer(lv.viewer, l.sourceWorldObjectGUID))
-                    {
-                        b << uint8(i) << l.items[i];
-                        b << uint8(slot_type);
-                        ++itemsShown;
-                    }
+                        emit(i, l.items[i], slot_type);
                 }
                 break;
             }
         default:
+            finish(l.gold);
             return b;
     }
 
@@ -1095,6 +1106,23 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
 
     // Xinef: items that do not follow loot rules need this
     LootSlotType partySlotType = lv.permission == MASTER_PERMISSION ? LOOT_SLOT_TYPE_MASTER : slotType;
+
+    // the slot type of an item that follows the loot rules, under this permission
+    auto ruledSlotType = [&](LootItem const& item) -> uint8
+    {
+        switch (lv.permission)
+        {
+            case MASTER_PERMISSION:
+                return LOOT_SLOT_TYPE_MASTER;
+            case RESTRICTED_PERMISSION:
+                return item.is_blocked ? uint8(LOOT_SLOT_TYPE_LOCKED) : uint8(slotType);
+            case GROUP_PERMISSION:
+            case ROUND_ROBIN_PERMISSION:
+                return item.is_blocked ? uint8(LOOT_SLOT_TYPE_ROLL_ONGOING) : uint8(LOOT_SLOT_TYPE_ALLOW_LOOT);
+            default:
+                return slotType;
+        }
+    };
 
     QuestItemMap const& lootPlayerQuestItems = l.GetPlayerQuestItems();
     QuestItemMap::const_iterator q_itr = lootPlayerQuestItems.find(lv.viewer->GetGUID());
@@ -1106,6 +1134,7 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
             LootItem& item = l.quest_items[qi->index];
             if (!qi->is_looted && !item.is_looted)
             {
+                uint8 lootListId = uint8(l.items.size() + (qi - q_list->begin()));
                 bool showInLoot = true;
                 bool hasQuestForItem = lv.viewer->HasQuestForItem(item.itemid, 0, false, &showInLoot);
                 if (!hasQuestForItem)
@@ -1120,44 +1149,14 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
                         continue;
                     }
 
-                    b << uint8(l.items.size() + (qi - q_list->begin()));
-                    b << item;
-                    b << uint8(lv.permission == MASTER_PERMISSION ? LOOT_SLOT_TYPE_MASTER : LOOT_SLOT_TYPE_LOCKED);
+                    emit(lootListId, item, lv.permission == MASTER_PERMISSION ? LOOT_SLOT_TYPE_MASTER : LOOT_SLOT_TYPE_LOCKED);
                 }
+                else if (item.follow_loot_rules)
+                    emit(lootListId, item, ruledSlotType(item));
+                else if (!item.freeforall)
+                    emit(lootListId, item, partySlotType);
                 else
-                {
-                    b << uint8(l.items.size() + (qi - q_list->begin()));
-                    b << item;
-
-                    if (item.follow_loot_rules)
-                    {
-                        switch (lv.permission)
-                        {
-                            case MASTER_PERMISSION:
-                                b << uint8(LOOT_SLOT_TYPE_MASTER);
-                                break;
-                            case RESTRICTED_PERMISSION:
-                                b << (item.is_blocked ? uint8(LOOT_SLOT_TYPE_LOCKED) : uint8(slotType));
-                                break;
-                            case GROUP_PERMISSION:
-                            case ROUND_ROBIN_PERMISSION:
-                                if (!item.is_blocked)
-                                    b << uint8(LOOT_SLOT_TYPE_ALLOW_LOOT);
-                                else
-                                    b << uint8(LOOT_SLOT_TYPE_ROLL_ONGOING);
-                                break;
-                            default:
-                                b << uint8(slotType);
-                                break;
-                        }
-                    }
-                    else if (!item.freeforall)
-                        b << uint8(partySlotType);
-                    else
-                        b << uint8(slotType);
-                }
-
-                ++itemsShown;
+                    emit(lootListId, item, slotType);
             }
         }
     }
@@ -1170,14 +1169,9 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
         for (QuestItemList::const_iterator fi = ffa_list->begin(); fi != ffa_list->end(); ++fi)
         {
             LootItem& item = l.items[fi->index];
+            // Xinef: Here are FFA items, so dont use owner permision
             if (!fi->is_looted && !item.is_looted)
-            {
-                b << uint8(fi->index);
-                b << item;
-                // Xinef: Here are FFA items, so dont use owner permision
-                b << uint8(LOOT_SLOT_TYPE_ALLOW_LOOT /*slotType*/);
-                ++itemsShown;
-            }
+                emit(fi->index, item, LOOT_SLOT_TYPE_ALLOW_LOOT);
         }
     }
 
@@ -1191,42 +1185,17 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
             LootItem& item = l.items[ci->index];
             if (!ci->is_looted && !item.is_looted)
             {
-                b << uint8(ci->index);
-                b << item;
                 if (item.follow_loot_rules)
-                {
-                    switch (lv.permission)
-                    {
-                        case MASTER_PERMISSION:
-                            b << uint8(LOOT_SLOT_TYPE_MASTER);
-                            break;
-                        case RESTRICTED_PERMISSION:
-                            b << (item.is_blocked ? uint8(LOOT_SLOT_TYPE_LOCKED) : uint8(slotType));
-                            break;
-                        case GROUP_PERMISSION:
-                        case ROUND_ROBIN_PERMISSION:
-                            if (!item.is_blocked)
-                                b << uint8(LOOT_SLOT_TYPE_ALLOW_LOOT);
-                            else
-                                b << uint8(LOOT_SLOT_TYPE_ROLL_ONGOING);
-                            break;
-                        default:
-                            b << uint8(slotType);
-                            break;
-                    }
-                }
+                    emit(ci->index, item, ruledSlotType(item));
                 else if (!item.freeforall)
-                    b << uint8(partySlotType);
+                    emit(ci->index, item, partySlotType);
                 else
-                    b << uint8(slotType);
-                ++itemsShown;
+                    emit(ci->index, item, slotType);
             }
         }
     }
 
-    //update number of items shown
-    b.put<uint8>(count_pos, itemsShown);
-
+    finish(l.gold);
     return b;
 }
 

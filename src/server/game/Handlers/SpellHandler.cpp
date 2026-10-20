@@ -128,9 +128,12 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     if (pUser->m_mover != pUser)
         return;
 
-    // 3.4.3 (writer FUN_1407617d0): u8 PackSlot, u8 Slot, PackedGuid128 CastItem, SpellCastRequest
-    uint8 bagIndex = recvPacket.read<uint8>();
-    uint8 slot = recvPacket.read<uint8>();
+    // 3.4.3 (writer FUN_1407617d0): u8 PackSlot, u8 Slot (InvSlots numbering: ServerItemPos),
+    // PackedGuid128 CastItem, SpellCastRequest
+    uint8 clientBag = recvPacket.read<uint8>();
+    uint8 clientSlot = recvPacket.read<uint8>();
+    uint8 bagIndex, slot;
+    ServerItemPos(clientBag, clientSlot, bagIndex, slot);
     ObjectGuid itemGUID = Guid128::Read(recvPacket);
     SpellCastRequest request;
     SpellCastTargets targets;
@@ -275,9 +278,12 @@ void WorldSession::HandleOpenItemOpcode(WorldPacket& recvPacket)
     if (pUser->m_mover != pUser)
         return;
 
+    // 3.4.3 (writer FUN_14075eea0): u8 Slot (the container: a bag's InvSlots index, 0xFF the player), u8
+    // PackSlot
+    uint8 clientBag = recvPacket.read<uint8>();
+    uint8 clientSlot = recvPacket.read<uint8>();
     uint8 bagIndex, slot;
-
-    recvPacket >> bagIndex >> slot;
+    ServerItemPos(clientBag, clientSlot, bagIndex, slot);
 
     LOG_DEBUG("network.opcode", "bagIndex: {}, slot: {}", bagIndex, slot);
 

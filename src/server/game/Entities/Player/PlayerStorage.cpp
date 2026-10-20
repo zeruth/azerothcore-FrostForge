@@ -36,6 +36,7 @@
 #include "GroupMgr.h"
 #include "Guild.h"
 #include "InstanceSaveMgr.h"
+#include "ItemPackets.h"
 #include "LFGMgr.h"
 #include "Language.h"
 #include "Log.h"
@@ -46,6 +47,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "OutdoorPvP.h"
+#include "PacketGuid128.h"
 #include "Pet.h"
 #include "Player.h"
 #include "QueryHolder.h"
@@ -4131,42 +4133,42 @@ void Player::RemoveItemFromBuyBackSlot(uint32 slot, bool del)
 void Player::SendEquipError(InventoryResult msg, Item* pItem, Item* pItem2, uint32 itemid)
 {
     LOG_DEBUG("network", "WORLD: Sent SMSG_INVENTORY_CHANGE_FAILURE ({})", msg);
-    WorldPacket data(SMSG_INVENTORY_CHANGE_FAILURE, (msg == EQUIP_ERR_CANT_EQUIP_LEVEL_I ? 22 : 18));
-    data << uint8(msg);
+    // SMSG_INVENTORY_CHANGE_FAILURE, 3.4.3 (inline in switch FUN_140749f10, handler FUN_14170e1d0): u32
+    // BagResult (the client's numbering), PackedGuid128 Item[2], u8 ContainerBSlot (the bag type
+    // subclass for 16), then by result: 1 / 88 u32 Level; 82 PackedGuid128 SrcContainer, u32 SrcSlot,
+    // PackedGuid128 DstContainer; 85 / 86 / 90 u32 LimitCategory
+    WorldPacket data(SMSG_INVENTORY_CHANGE_FAILURE, 4 + 18 * 2 + 1 + 4);
+    data << uint32(ClientInventoryResult(msg));
+    Guid128::Write(data, pItem ? pItem->GetGUID() : ObjectGuid::Empty);
+    Guid128::Write(data, pItem2 ? pItem2->GetGUID() : ObjectGuid::Empty);
+    data << uint8(0);                                       // ContainerBSlot
 
-    if (msg != EQUIP_ERR_OK)
+    switch (msg)
     {
-        data << (pItem ? pItem->GetGUID() : ObjectGuid::Empty);
-        data << (pItem2 ? pItem2->GetGUID() : ObjectGuid::Empty);
-        data << uint8(0);                                   // bag type subclass, used with EQUIP_ERR_EVENT_AUTOEQUIP_BIND_CONFIRM and EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG2
-
-        switch (msg)
+        case EQUIP_ERR_CANT_EQUIP_LEVEL_I:
+        case EQUIP_ERR_PURCHASE_LEVEL_TOO_LOW:
         {
-            case EQUIP_ERR_CANT_EQUIP_LEVEL_I:
-            case EQUIP_ERR_PURCHASE_LEVEL_TOO_LOW:
-            {
-                ItemTemplate const* proto = pItem ? pItem->GetTemplate() : sObjectMgr->GetItemTemplate(itemid);
-                data << uint32(proto ? proto->RequiredLevel : 0);
-                break;
-            }
-            case EQUIP_ERR_EVENT_AUTOEQUIP_BIND_CONFIRM:    // no idea about this one...
-            {
-                data << ObjectGuid::Empty;  // item guid
-                data << uint32(0);          // slot
-                data << ObjectGuid::Empty;  // container
-                break;
-            }
-            case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED:
-            case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_SOCKETED_EXCEEDED:
-            case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_EQUIPPED_EXCEEDED:
-            {
-                ItemTemplate const* proto = pItem ? pItem->GetTemplate() : sObjectMgr->GetItemTemplate(itemid);
-                data << uint32(proto ? proto->ItemLimitCategory : 0);
-                break;
-            }
-            default:
-                break;
+            ItemTemplate const* proto = pItem ? pItem->GetTemplate() : sObjectMgr->GetItemTemplate(itemid);
+            data << uint32(proto ? proto->RequiredLevel : 0);
+            break;
         }
+        case EQUIP_ERR_EVENT_AUTOEQUIP_BIND_CONFIRM:
+        {
+            Guid128::Write(data, ObjectGuid::Empty);        // SrcContainer
+            data << uint32(0);                              // SrcSlot
+            Guid128::Write(data, ObjectGuid::Empty);        // DstContainer
+            break;
+        }
+        case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED:
+        case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_SOCKETED_EXCEEDED:
+        case EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_EQUIPPED_EXCEEDED:
+        {
+            ItemTemplate const* proto = pItem ? pItem->GetTemplate() : sObjectMgr->GetItemTemplate(itemid);
+            data << uint32(proto ? proto->ItemLimitCategory : 0);
+            break;
+        }
+        default:
+            break;
     }
     SendDirectMessage(&data);
 }
@@ -4174,11 +4176,13 @@ void Player::SendEquipError(InventoryResult msg, Item* pItem, Item* pItem2, uint
 void Player::SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32 param)
 {
     LOG_DEBUG("network", "WORLD: Sent SMSG_BUY_FAILED");
-    WorldPacket data(SMSG_BUY_FAILED, (8 + 4 + 4 + 1));
-    data << (creature ? creature->GetGUID() : ObjectGuid::Empty);
+    // SMSG_BUY_FAILED, 3.4.3 (FUN_1406b9b90, handler FUN_14173f3f0): PackedGuid128 VendorGUID, u32 Muid,
+    // u8 Reason (BuyResult, 3.3.5's numbering). AC names the item, not its vendor slot: the client uses
+    // Muid only to refresh a sold-out slot (reason 1).
+    (void)param;
+    WorldPacket data(SMSG_BUY_FAILED, 18 + 4 + 1);
+    Guid128::Write(data, creature ? creature->GetGUID() : ObjectGuid::Empty);
     data << uint32(item);
-    if (param > 0)
-        data << uint32(param);
     data << uint8(msg);
     SendDirectMessage(&data);
 }
@@ -4186,12 +4190,16 @@ void Player::SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32
 void Player::SendSellError(SellResult msg, Creature* creature, ObjectGuid guid, uint32 param)
 {
     LOG_DEBUG("network", "WORLD: Sent SMSG_SELL_RESPONSE");
-    WorldPacket data(SMSG_SELL_RESPONSE, (8 + 8 + (param ? 4 : 0) + 1)); // last check 2.0.10
-    data << (creature ? creature->GetGUID() : ObjectGuid::Empty);
-    data << guid;
-    if (param > 0)
-        data << uint32(param);
-    data << uint8(msg);
+    // SMSG_SELL_RESPONSE, 3.4.3 (FUN_1406c9fd0, handler FUN_141714e10): PackedGuid128 VendorGUID, u32 item
+    // count, u32 Reason, the item GUIDs (the client unlocks them). SellResult keeps 3.3.5's 1-8; the
+    // internal bag error is 10 (9 is silent).
+    (void)param;
+    WorldPacket data(SMSG_SELL_RESPONSE, 18 + 8 + 18);
+    Guid128::Write(data, creature ? creature->GetGUID() : ObjectGuid::Empty);
+    data << uint32(guid ? 1 : 0);
+    data << uint32(msg == SELL_INTERNAL_BAG_ERROR ? 10 : uint32(msg));
+    if (guid)
+        Guid128::Write(data, guid);
     SendDirectMessage(&data);
 }
 
@@ -4857,20 +4865,32 @@ void Player::SendNewItem(Item* item, uint32 count, bool received, bool created, 
     if (!item)                                               // prevent crash
         return;
 
-    // last check 2.0.10
-    WorldPacket data(SMSG_ITEM_PUSH_RESULT, (8 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4));
-    data << GetGUID();                                      // player GUID
-    data << uint32(received);                               // 0=looted, 1=from npc
-    data << uint32(created);                                // 0=received, 1=created
-    data << uint32(sendChatMessage);                        // bool print message to chat
-    data << uint8(item->GetBagSlot());                      // bagslot
-    // item slot, but when added to stack: 0xFFFFFFFF
-    data << uint32((item->GetCount() == count) ? item->GetSlot() : -1);
-    data << uint32(item->GetEntry());                       // item id
-    data << uint32(item->GetItemSuffixFactor());            // SuffixFactor
-    data << int32(item->GetItemRandomPropertyId());         // random item property id
-    data << uint32(count);                                  // count of items
-    data << uint32(GetItemCount(item->GetEntry()));         // count of items in inventory
+    // SMSG_ITEM_PUSH_RESULT, 3.4.3 (FUN_1406c30e0, handler FUN_141927c00): PackedGuid128 PlayerGUID, u8
+    // Slot (the bag's InvSlots index, 0xFF the player), i32 SlotInBag (-1 when added to a stack), u32
+    // QuestLogItemID, u32 Quantity, u32 QuantityInInventory, i32 DungeonEncounterID, i32
+    // BattlePetSpeciesID, BreedID, u32 BreedQuality, i32 BattlePetLevel, PackedGuid128 ItemGUID, bits
+    // Pushed, Created, FakeQuestItem, 3-bit DisplayText (0 prints nothing), IsBonusRoll,
+    // IsEncounterLoot, then the ItemInstance
+    uint8 clientBag, clientSlot;
+    ClientItemPos(item->GetBagSlot(), item->GetSlot(), clientBag, clientSlot);
+    WorldPacket data(SMSG_ITEM_PUSH_RESULT, 18 + 1 + 4 * 10 + 18 + 1 + 16);
+    Guid128::Write(data, GetGUID());
+    data << uint8(clientBag);
+    data << int32(item->GetCount() == count ? int32(clientSlot) : -1);
+    data << uint32(0);                                      // QuestLogItemID
+    data << uint32(count);
+    data << uint32(GetItemCount(item->GetEntry()));
+    data << int32(0);                                       // DungeonEncounterID
+    data << int32(0) << int32(0) << uint32(0) << int32(0);  // battle pet
+    Guid128::Write(data, item->GetGUID());
+    data.WriteBit(received);                                // Pushed: from an NPC, not looted
+    data.WriteBit(created);
+    data.WriteBit(false);                                   // FakeQuestItem
+    data.WriteBits(sendChatMessage ? 1 : 0, 3);             // DisplayText
+    data.WriteBit(false);                                   // IsBonusRoll
+    data.WriteBit(false);                                   // IsEncounterLoot
+    data.FlushBits();
+    WorldPackets::Item::WriteItemInstance(data, item->GetEntry(), int32(item->GetItemSuffixFactor()), item->GetItemRandomPropertyId());
 
     if (broadcast && GetGroup())
         GetGroup()->BroadcastPacket(&data, true);

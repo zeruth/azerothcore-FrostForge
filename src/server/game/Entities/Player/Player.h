@@ -770,6 +770,83 @@ enum CurrencyTokenSlots                                     // 32 slots
     CURRENCYTOKEN_SLOT_END      = 150
 };
 
+/// AC's inventory slots (3.3.5's layout) as the 3.4.3 client's ActivePlayer InvSlots indices: equipment
+/// 0-18, bags 30-33, backpack 35-50, bank 59-86, bank bags 87-93, buyback 94-105, keyring 106-137 (Lua
+/// BankButtonIDToInvSlotID 0x3b / 0x57, KeyRingButtonIDToInvSlotID 0x6a, container ids FUN_141c5df80
+/// 0x1e / 0x53). 3.3.5's currency token slots have no place: -1.
+inline int32 ClientInventorySlot(uint8 slot)
+{
+    if (slot < EQUIPMENT_SLOT_END)
+        return slot;
+    if (slot >= INVENTORY_SLOT_BAG_START && slot < INVENTORY_SLOT_BAG_END)
+        return 30 + (slot - INVENTORY_SLOT_BAG_START);
+    if (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END)
+        return 35 + (slot - INVENTORY_SLOT_ITEM_START);
+    if (slot >= BANK_SLOT_ITEM_START && slot < BANK_SLOT_ITEM_END)
+        return 59 + (slot - BANK_SLOT_ITEM_START);
+    if (slot >= BANK_SLOT_BAG_START && slot < BANK_SLOT_BAG_END)
+        return 87 + (slot - BANK_SLOT_BAG_START);
+    if (slot >= BUYBACK_SLOT_START && slot < BUYBACK_SLOT_END)
+        return 94 + (slot - BUYBACK_SLOT_START);
+    if (slot >= KEYRING_SLOT_START && slot < KEYRING_SLOT_END)
+        return 106 + (slot - KEYRING_SLOT_START);
+    return -1;
+}
+
+/// The other way: a 3.4.3 InvSlots index from the client as AC's slot. An index AC has no slot for comes
+/// back as 0xFE, which no lookup finds (not NULL_SLOT, which asks for any free slot).
+inline uint8 ServerInventorySlot(uint8 clientSlot)
+{
+    if (clientSlot < EQUIPMENT_SLOT_END)
+        return clientSlot;
+    if (clientSlot >= 30 && clientSlot < 30 + (INVENTORY_SLOT_BAG_END - INVENTORY_SLOT_BAG_START))
+        return INVENTORY_SLOT_BAG_START + (clientSlot - 30);
+    if (clientSlot >= 35 && clientSlot < 35 + (INVENTORY_SLOT_ITEM_END - INVENTORY_SLOT_ITEM_START))
+        return INVENTORY_SLOT_ITEM_START + (clientSlot - 35);
+    if (clientSlot >= 59 && clientSlot < 59 + (BANK_SLOT_ITEM_END - BANK_SLOT_ITEM_START))
+        return BANK_SLOT_ITEM_START + (clientSlot - 59);
+    if (clientSlot >= 87 && clientSlot < 87 + (BANK_SLOT_BAG_END - BANK_SLOT_BAG_START))
+        return BANK_SLOT_BAG_START + (clientSlot - 87);
+    if (clientSlot >= 94 && clientSlot < 94 + (BUYBACK_SLOT_END - BUYBACK_SLOT_START))
+        return BUYBACK_SLOT_START + (clientSlot - 94);
+    if (clientSlot >= 106 && clientSlot < 106 + (KEYRING_SLOT_END - KEYRING_SLOT_START))
+        return KEYRING_SLOT_START + (clientSlot - 106);
+    return 0xFE;
+}
+
+/// A (container, slot) pair from the client as AC's (bag, slot): the container is the bag's InvSlots
+/// index, or 0xFF for the player itself (INVENTORY_SLOT_BAG_0), and only then is the slot an InvSlots
+/// index too.
+inline void ServerItemPos(uint8 clientBag, uint8 clientSlot, uint8& bag, uint8& slot)
+{
+    if (clientBag == INVENTORY_SLOT_BAG_0)
+    {
+        bag = INVENTORY_SLOT_BAG_0;
+        slot = ServerInventorySlot(clientSlot);
+    }
+    else
+    {
+        bag = ServerInventorySlot(clientBag);
+        slot = clientSlot;
+    }
+}
+
+/// AC's (bag, slot) as the client's (container, slot).
+inline void ClientItemPos(uint8 bag, uint8 slot, uint8& clientBag, uint8& clientSlot)
+{
+    int32 s = ClientInventorySlot(bag == INVENTORY_SLOT_BAG_0 ? slot : bag);
+    if (bag == INVENTORY_SLOT_BAG_0)
+    {
+        clientBag = INVENTORY_SLOT_BAG_0;
+        clientSlot = s < 0 ? 0xFF : uint8(s);
+    }
+    else
+    {
+        clientBag = s < 0 ? 0xFF : uint8(s);
+        clientSlot = slot;
+    }
+}
+
 enum EquipmentSetUpdateState
 {
     EQUIPMENT_SET_UNCHANGED = 0,

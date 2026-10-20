@@ -25,6 +25,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
@@ -33,12 +34,30 @@
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_LOOT_ITEM");
+
+    // 3.4.3 (writer FUN_14075e7e0): u32 count, {PackedGuid128 LootObj, u8 LootListID}, bit IsSoftInteract.
+    // One click asks for that slot on every object of the AE-loot list; AC loots one object at a time,
+    // so the requests for the player's current loot are served in turn.
+    uint32 count = recvData.read<uint32>();
+    std::vector<uint8> lootSlots;
+    for (uint32 i = 0; i < count && i < 64; ++i)
+    {
+        ObjectGuid lootObj = Guid128::Read(recvData);
+        uint8 lootListId = recvData.read<uint8>();
+        if (lootObj == GetPlayer()->GetLootGUID())
+            lootSlots.push_back(lootListId);
+    }
+    recvData.rfinish();
+
+    for (uint8 lootSlot : lootSlots)
+        AutostoreLootItem(lootSlot);
+}
+
+void WorldSession::AutostoreLootItem(uint8 lootSlot)
+{
     Player* player = GetPlayer();
     ObjectGuid lguid = player->GetLootGUID();
     Loot* loot = nullptr;
-    uint8 lootSlot = 0;
-
-    recvData >> lootSlot;
 
     // full CAIS restriction blocks item pickup from every loot source (GO/gather/item/corpse),
     // not just the creature-corpse window guarded in HandleLootOpcode
@@ -119,9 +138,12 @@ void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
         DoLootRelease(lguid);
 }
 
-void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
+void WorldSession::HandleLootMoneyOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_LOOT_MONEY");
+
+    // 3.4.3 (writer FUN_14075e8b0): bit IsSoftInteract; the money is the current loot's
+    recvData.rfinish();
 
     Player* player = GetPlayer();
     ObjectGuid guid = player->GetLootGUID();
@@ -234,9 +256,13 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
                 (*i)->ModifyMoney(finalGold);
                 (*i)->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, finalGold);
 
-                WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
-                data << uint32(finalGold);
-                data << uint8(playersNear.size() > 1 ? 0 : 1);     // Controls the text displayed in chat. 0 is "Your share is..." and 1 is "You loot..."
+                // SMSG_LOOT_MONEY_NOTIFY, 3.4.3 (FUN_1406c44f0): u64 Money, u64 MoneyMod, bit SoleLooter
+                // (0 "Your share is...", 1 "You loot...")
+                WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 17);
+                data << uint64(finalGold);
+                data << uint64(0);
+                data.WriteBit(playersNear.size() <= 1);
+                data.FlushBits();
                 (*i)->SendDirectMessage(&data);
             }
         }
@@ -261,9 +287,11 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
                 player->ModifyMoney(finalGold);
                 player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, finalGold);
 
-                WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
-                data << uint32(finalGold);
-                data << uint8(1);   // "You loot..."
+                WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 17);
+                data << uint64(finalGold);
+                data << uint64(0);
+                data.WriteBit(true);                        // "You loot..."
+                data.FlushBits();
                 SendPacket(&data);
             }
         }
@@ -288,8 +316,8 @@ void WorldSession::HandleLootOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_LOOT_UNIT");
 
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075e9a0): PackedGuid128 Unit
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Player* player = GetPlayer();
 
@@ -316,8 +344,8 @@ void WorldSession::HandleLootReleaseOpcode(WorldPacket& recvData)
 
     // cheaters can modify lguid to prevent correct apply loot release code and re-loot
     // use internal stored guid
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075e910): PackedGuid128 Unit, the LootObj of SMSG_LOOT_RESPONSE
+    ObjectGuid guid = Guid128::Read(recvData);
 
     if (ObjectGuid lguid = GetPlayer()->GetLootGUID())
         if (lguid == guid)

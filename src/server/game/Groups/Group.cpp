@@ -31,6 +31,7 @@
 #include "MiscPackets.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
@@ -1086,18 +1087,19 @@ void Group::SendLooter(Creature* creature, Player* groupLooter)
 {
     ASSERT(creature);
 
-    WorldPacket data(SMSG_LOOT_LIST, (8 + 8));
-    data << creature->GetGUID();
-
-    if (GetLootMethod() == MASTER_LOOT && creature->loot.hasOverThresholdItem())
-        data << GetMasterLooterGuid().WriteAsPacked();
-    else
-        data << uint8(0);
-
+    // SMSG_LOOT_LIST, 3.4.3 (FUN_1406c4420): PackedGuid128 Owner, PackedGuid128 LootObj, bits HasMaster,
+    // HasRoundRobinWinner, flush, [Master], [RoundRobinWinner]
+    bool hasMaster = GetLootMethod() == MASTER_LOOT && creature->loot.hasOverThresholdItem();
+    WorldPacket data(SMSG_LOOT_LIST, 18 * 4 + 1);
+    Guid128::Write(data, creature->GetGUID());
+    Guid128::Write(data, creature->GetGUID());
+    data.WriteBit(hasMaster);
+    data.WriteBit(groupLooter != nullptr);
+    data.FlushBits();
+    if (hasMaster)
+        Guid128::Write(data, GetMasterLooterGuid());
     if (groupLooter)
-        data << groupLooter->GetPackGUID();
-    else
-        data << uint8(0);
+        Guid128::Write(data, groupLooter->GetGUID());
 
     BroadcastPacket(&data, false);
 }

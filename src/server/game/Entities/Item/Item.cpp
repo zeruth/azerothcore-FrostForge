@@ -28,6 +28,7 @@
 #include "StringConvert.h"
 #include "TC9Sidecar.h"
 #include "Tokenize.h"
+#include "PacketGuid128.h"
 #include "WorldPacket.h"
 
 void AddItemsSetItem(Player* player, Item* item)
@@ -927,10 +928,10 @@ void Item::SetEnchantment(EnchantmentSlot slot, uint32 id, uint32 duration, uint
     if (slot < MAX_INSPECTED_ENCHANTMENT_SLOT)
     {
         if (uint32 oldEnchant = GetEnchantmentId(slot))
-            owner->GetSession()->SendEnchantmentLog(GetOwnerGUID(), ObjectGuid::Empty, GetEntry(), oldEnchant);
+            owner->GetSession()->SendEnchantmentLog(GetOwnerGUID(), ObjectGuid::Empty, GetGUID(), GetEntry(), oldEnchant, slot);
 
         if (id)
-            owner->GetSession()->SendEnchantmentLog(GetOwnerGUID(), caster, GetEntry(), id);
+            owner->GetSession()->SendEnchantmentLog(GetOwnerGUID(), caster, GetGUID(), GetEntry(), id, slot);
     }
 
     SetUInt32Value(ITEM_FIELD_ENCHANTMENT_1_1 + slot * MAX_ENCHANTMENT_OFFSET + ENCHANTMENT_ID_OFFSET, id);
@@ -1084,8 +1085,9 @@ void Item::SendTimeUpdate(Player* owner)
     if (!duration)
         return;
 
-    WorldPacket data(SMSG_ITEM_TIME_UPDATE, (8 + 4));
-    data << GetGUID();
+    // 3.4.3 (FUN_1406b5650): PackedGuid128 ItemGuid, u32 DurationLeft
+    WorldPacket data(SMSG_ITEM_TIME_UPDATE, 18 + 4);
+    Guid128::Write(data, GetGUID());
     data << uint32(duration);
     owner->SendDirectMessage(&data);
 }
