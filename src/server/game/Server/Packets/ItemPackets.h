@@ -26,6 +26,41 @@ namespace WorldPackets
 {
     namespace Item
     {
+        /// ItemInstance, 3.4.3 (reader FUN_1407134f0, writer FUN_14074e570): u32 ItemID, u32
+        /// RandomPropertiesSeed, u32 RandomPropertiesID, bit HasItemBonus, flush, 6-bit modification count,
+        /// flush, {u32 Value, u8 Type}, [u8 Context, u32 count, u32 BonusListIDs]. AC's items carry no
+        /// bonuses or modifications.
+        inline void WriteItemInstance(ByteBuffer& data, uint32 itemId, int32 randomPropertiesSeed = 0, int32 randomPropertiesId = 0)
+        {
+            data << uint32(itemId);
+            data << int32(randomPropertiesSeed);
+            data << int32(randomPropertiesId);
+            data.WriteBit(false);
+            data.FlushBits();
+            data.WriteBits(0, 6);
+            data.FlushBits();
+        }
+
+        /// An ItemInstance from the client: its item id, the rest skipped.
+        inline uint32 ReadItemInstance(ByteBuffer& data)
+        {
+            uint32 itemId = data.read<uint32>();
+            data.read_skip<int32>();
+            data.read_skip<int32>();
+            bool hasBonus = data.ReadBit();
+            data.ResetBitReader();
+            uint32 modifications = data.ReadBits(6);
+            data.ResetBitReader();
+            data.read_skip(std::size_t(modifications) * 5);
+            if (hasBonus)
+            {
+                data.read_skip<uint8>();
+                uint32 bonuses = data.read<uint32>();
+                data.read_skip(std::size_t(std::min<uint32>(bonuses, 32)) * 4);
+            }
+            return itemId;
+        }
+
         class SplitItem final : public ClientPacket
         {
         public:

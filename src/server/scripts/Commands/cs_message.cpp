@@ -105,8 +105,8 @@ public:
         std::string str = handler->GetAcoreString(LANG_GLOBAL_NOTIFY);
         str += message;
 
-        WorldPacket data(SMSG_PRINT_NOTIFICATION, (str.size() + 1));
-        data << str;
+        WorldPacket data;
+        ChatHandler::BuildNotificationPacket(data, str);
         sWorldSessionMgr->SendGlobalMessage(&data);
 
         return true;
@@ -121,8 +121,8 @@ public:
         std::string str = handler->GetAcoreString(LANG_GM_NOTIFY);
         str += message;
 
-        WorldPacket data(SMSG_PRINT_NOTIFICATION, (str.size() + 1));
-        data << str;
+        WorldPacket data;
+        ChatHandler::BuildNotificationPacket(data, str);
         sWorldSessionMgr->SendGlobalGMMessage(&data);
 
         return true;

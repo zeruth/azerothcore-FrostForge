@@ -330,6 +330,13 @@ namespace UF
         else
             WriteBlocks(data, mask, info.MaskBlocks);
 
+        // PlayerData's reader (FUN_142511490) takes one more bit right after the mask words, through
+        // the single-bit reader FUN_1425071a0 the traced programs do not see: 1 sends each changed
+        // QuestLog element whole (FUN_142500e80), 0 with its own change mask (FUN_1425138c0), which
+        // is what the Nested program below writes.
+        if (id == STRUCT_PLAYER)
+            data.WriteBit(false);
+
         for (std::size_t idx = 0; idx < info.UpdateCount; ++idx)
         {
             UFInstr const& ins = info.Update[idx];
@@ -362,6 +369,9 @@ namespace UF
                         if (!mask.Get(ins.Bit + i))
                             continue;
                         Mask elem = NestedMask(diff, ins, members, i);
+                        // an element's reader (FUN_1425138c0, ...) starts its own bit reader on the
+                        // stream: its mask begins on a fresh byte, whatever the outer bits left over
+                        data.FlushBits();
                         if (ins.Mask & 0x8000)
                             WriteBlocks(data, elem, ins.Mask & 0xFF);
                         else

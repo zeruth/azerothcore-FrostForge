@@ -410,9 +410,8 @@ void WorldSession::HandleCorpseMapPositionQuery(WorldPackets::Query::CorpseMapPo
 
 void WorldSession::HandleQuestPOIQuery(WorldPacket& recvData)
 {
-    uint32 count;
-    recvData >> count; // quest count, max=25
-
+    // 3.4.3 (writer FUN_1407689c0): u32 count, then always 25 u32 quest ids of which the first `count` count
+    uint32 count = recvData.read<uint32>();
     if (count > MAX_QUEST_LOG_SIZE)
     {
         recvData.rfinish();
@@ -423,57 +422,53 @@ void WorldSession::HandleQuestPOIQuery(WorldPacket& recvData)
     std::unordered_set<uint32> questIds;
     for (uint32 i = 0; i < count; ++i)
         questIds.insert(recvData.read<uint32>()); // quest id
+    recvData.rfinish();                                     // the unused slots
 
-    WorldPacket data(SMSG_QUEST_POI_QUERY_RESPONSE, 4 + (4 + 4)*questIds.size());
-    data << uint32(questIds.size()); // count
+    // SMSG_QUEST_POI_QUERY_RESPONSE, 3.4.3 (quest switch, inline): u32 NumPOIs, u32 quest count, per quest
+    // {u32 QuestID, u32 blob count, blobs (FUN_140718380): u32 BlobIndex, ObjectiveIndex, QuestObjectiveID,
+    // QuestObjectID, MapID, UiMapID, Priority, Flags, WorldEffectID, PlayerConditionID,
+    // NavigationPlayerConditionID, SpawnTrackingID, u32 point count, {i16 X, Y, Z}, bit
+    // AlwaysAllowMergingBlobs, flush}. AC's POIs name a 3.3.5 WorldMapArea, which 3.4.3 replaced by UiMap
+    // [TODO: map AreaId/FloorId to a UiMap id; the client shows no blob without one]
+    WorldPacket data(SMSG_QUEST_POI_QUERY_RESPONSE, 8 + (8 + 64) * questIds.size());
+    data << uint32(questIds.size());                        // NumPOIs
+    data << uint32(questIds.size());
 
-    for (std::unordered_set<uint32>::const_iterator itr = questIds.begin(); itr != questIds.end(); ++itr)
+    for (uint32 questId : questIds)
     {
-        uint32 questId = *itr;
-        bool questOk = false;
-
+        QuestPOIVector const* POI = nullptr;
         uint16 questSlot = _player->FindQuestSlot(questId);
+        if (questSlot != MAX_QUEST_LOG_SIZE && _player->GetQuestSlotQuestId(questSlot) == questId)
+            POI = sObjectMgr->GetQuestPOIVector(questId);
 
-        if (questSlot != MAX_QUEST_LOG_SIZE)
-            questOk = _player->GetQuestSlotQuestId(questSlot) == questId;
+        data << uint32(questId);
+        data << uint32(POI ? POI->size() : 0);
+        if (!POI)
+            continue;
 
-        if (questOk)
+        for (QuestPOI const& poi : *POI)
         {
-            QuestPOIVector const* POI = sObjectMgr->GetQuestPOIVector(questId);
-
-            if (POI)
+            data << uint32(poi.Id);                         // BlobIndex
+            data << int32(poi.ObjectiveIndex);
+            data << uint32(0);                              // QuestObjectiveID
+            data << uint32(0);                              // QuestObjectID
+            data << uint32(poi.MapId);
+            data << uint32(0);                              // UiMapID
+            data << uint32(poi.Unk3);                       // Priority
+            data << uint32(poi.Unk4);                       // Flags
+            data << uint32(0);                              // WorldEffectID
+            data << uint32(0);                              // PlayerConditionID
+            data << uint32(0);                              // NavigationPlayerConditionID
+            data << uint32(0);                              // SpawnTrackingID
+            data << uint32(poi.points.size());
+            for (QuestPOIPoint const& point : poi.points)
             {
-                data << uint32(questId); // quest ID
-                data << uint32(POI->size()); // POI count
-
-                for (QuestPOIVector::const_iterator itr = POI->begin(); itr != POI->end(); ++itr)
-                {
-                    data << uint32(itr->Id);                // POI index
-                    data << int32(itr->ObjectiveIndex);     // objective index
-                    data << uint32(itr->MapId);             // mapid
-                    data << uint32(itr->AreaId);            // areaid
-                    data << uint32(itr->FloorId);           // floorid
-                    data << uint32(itr->Unk3);              // unknown
-                    data << uint32(itr->Unk4);              // unknown
-                    data << uint32(itr->points.size());     // POI points count
-
-                    for (std::vector<QuestPOIPoint>::const_iterator itr2 = itr->points.begin(); itr2 != itr->points.end(); ++itr2)
-                    {
-                        data << int32(itr2->x); // POI point x
-                        data << int32(itr2->y); // POI point y
-                    }
-                }
+                data << int16(point.x);
+                data << int16(point.y);
+                data << int16(0);
             }
-            else
-            {
-                data << uint32(questId); // quest ID
-                data << uint32(0); // POI count
-            }
-        }
-        else
-        {
-            data << uint32(questId); // quest ID
-            data << uint32(0); // POI count
+            data.WriteBit(false);                           // AlwaysAllowMergingBlobs
+            data.FlushBits();
         }
     }
 

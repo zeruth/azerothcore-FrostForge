@@ -126,6 +126,7 @@ namespace WorldPackets
             uint32 CurrentCount = 0;
             uint32 RequiredCount = 0;
             ObjectGuid ObjectiveGuid;
+            uint8 ObjectiveType = 0;                // 3.4.3 QuestObjectiveType: 0 creature, 2 game object
         };
 
         class QuestUpdateAddPvPKill final : public ServerPacket

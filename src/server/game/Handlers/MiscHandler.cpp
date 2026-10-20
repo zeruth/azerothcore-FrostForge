@@ -92,12 +92,12 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recv_data)
 {
     LOG_DEBUG("network", "WORLD: CMSG_GOSSIP_SELECT_OPTION");
 
-    uint32 gossipListId;
-    uint32 menuId;
-    ObjectGuid guid;
-    std::string code = "";
-
-    recv_data >> guid >> menuId >> gossipListId;
+    // 3.4.3 (writer FUN_14075d670): PackedGuid128 GossipUnit, u32 GossipID, u32 GossipOptionID, u8 code
+    // length, the code (sent for every option, empty for those that ask for none)
+    ObjectGuid guid = Guid128::Read(recv_data);
+    uint32 menuId = recv_data.read<uint32>();
+    uint32 gossipListId = recv_data.read<uint32>();
+    std::string code = recv_data.ReadString(recv_data.read<uint8>());
 
     if (!_player->PlayerTalkClass->GetGossipMenu().GetItem(gossipListId))
     {
@@ -105,8 +105,8 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recv_data)
         return;
     }
 
-    if (_player->PlayerTalkClass->IsGossipOptionCoded(gossipListId))
-        recv_data >> code;
+    if (!_player->PlayerTalkClass->IsGossipOptionCoded(gossipListId))
+        code.clear();
 
     // Prevent cheating on C++ scripted menus
     if (_player->PlayerTalkClass->GetGossipMenu().GetSenderGUID() != guid)

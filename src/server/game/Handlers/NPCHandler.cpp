@@ -24,6 +24,7 @@
 #include "NPCPackets.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ReputationMgr.h"
@@ -136,8 +137,8 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPackets::NPC::TrainerBuySpel
 
 void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 CMSG_TALK_TO_GOSSIP (writer FUN_1407610c0): PackedGuid128 Unit
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_NONE);
     if (!unit)

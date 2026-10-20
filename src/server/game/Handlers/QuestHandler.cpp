@@ -25,6 +25,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "ItemPackets.h"
 #include "PacketGuid128.h"
 #include "Player.h"
 #include "QuestDef.h"
@@ -79,8 +80,8 @@ void WorldSession::HandleQuestgiverStatusQueryOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleQuestgiverHelloOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075f9b0): PackedGuid128 QuestGiverGUID
+    ObjectGuid guid = Guid128::Read(recvData);
 
     LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_HELLO npc {}", guid.ToString());
 
@@ -113,10 +114,10 @@ void WorldSession::HandleQuestgiverHelloOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleQuestgiverAcceptQuestOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    uint32 questId;
-    uint32 unk1;
-    recvData >> guid >> questId >> unk1;
+    // 3.4.3 (writer FUN_14075f880): PackedGuid128 QuestGiverGUID, u32 QuestID, bit StartCheat, flush
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 questId = recvData.read<uint32>();
+    uint32 unk1 = recvData.ReadBit();
 
     LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_ACCEPT_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
 
@@ -203,10 +204,10 @@ void WorldSession::HandleQuestgiverAcceptQuestOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleQuestgiverQueryQuestOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    uint32 questId;
-    uint8 unk1;
-    recvData >> guid >> questId >> unk1;
+    // 3.4.3 (writer FUN_14075f9f0): PackedGuid128 QuestGiverGUID, u32 QuestID, bit RespondToGiver, flush
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 questId = recvData.read<uint32>();
+    uint8 unk1 = recvData.ReadBit();
     LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_QUERY_QUEST npc {}, quest = {}, unk1 = {}", guid.ToString(), questId, unk1);
 
     // Verify that the guid is valid and is a questgiver or involved in the requested quest
@@ -240,8 +241,9 @@ void WorldSession::HandleQuestQueryOpcode(WorldPacket& recvData)
     if (!_player)
         return;
 
-    uint32 questId;
-    recvData >> questId;
+    // 3.4.3 (writer FUN_14075f6d0): u32 QuestID, PackedGuid128 QuestGiver
+    uint32 questId = recvData.read<uint32>();
+    Guid128::Skip(recvData);
     LOG_DEBUG("network", "WORLD: Received CMSG_QUERY_QUEST_INFO quest = {}", questId);
 
     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
@@ -250,9 +252,25 @@ void WorldSession::HandleQuestQueryOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleQuestgiverChooseRewardOpcode(WorldPacket& recvData)
 {
-    uint32 questId, reward;
-    ObjectGuid guid;
-    recvData >> guid >> questId >> reward;
+    // 3.4.3 (writer FUN_14075f8f0): PackedGuid128 QuestGiverGUID, u32 QuestID, QuestChoiceItem {2-bit
+    // LootItemType, flush, ItemInstance, u32 Quantity}: the chosen item, not its slot
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 questId = recvData.read<uint32>();
+    recvData.ReadBits(2);
+    recvData.ResetBitReader();
+    uint32 itemId = WorldPackets::Item::ReadItemInstance(recvData);
+    recvData.read_skip<uint32>();
+
+    uint32 reward = 0;
+    if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+    {
+        reward = QUEST_REWARD_CHOICES_COUNT;
+        if (!itemId && !quest->GetRewChoiceItemsCount())
+            reward = 0;                                     // no choice to make
+        for (uint32 i = 0; i < QUEST_REWARD_CHOICES_COUNT; ++i)
+            if (itemId && quest->RewardChoiceItemId[i] == itemId)
+                reward = i;
+    }
 
     if (reward >= QUEST_REWARD_CHOICES_COUNT)
     {
@@ -355,9 +373,9 @@ void WorldSession::HandleQuestgiverChooseRewardOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleQuestgiverRequestRewardOpcode(WorldPacket& recvData)
 {
-    uint32 questId;
-    ObjectGuid guid;
-    recvData >> guid >> questId;
+    // 3.4.3 (writer FUN_14075fa60): PackedGuid128 QuestGiverGUID, u32 QuestID
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 questId = recvData.read<uint32>();
 
     LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_REQUEST_REWARD npc {}, quest = {}", guid.ToString(), questId);
 
@@ -468,10 +486,10 @@ void WorldSession::HandleQuestConfirmAccept(WorldPackets::Quest::QuestConfirmAcc
 
 void WorldSession::HandleQuestgiverCompleteQuest(WorldPacket& recvData)
 {
-    uint32 questId;
-    ObjectGuid guid;
-
-    recvData >> guid >> questId;
+    // 3.4.3 (writer FUN_14075f940): PackedGuid128 QuestGiverGUID, u32 QuestID, bit FromScript, flush
+    ObjectGuid guid = Guid128::Read(recvData);
+    uint32 questId = recvData.read<uint32>();
+    recvData.ReadBit();
 
     LOG_DEBUG("network", "WORLD: Received CMSG_QUEST_GIVER_COMPLETE_QUEST npc {}, quest = {}", guid.ToString(), questId);
 

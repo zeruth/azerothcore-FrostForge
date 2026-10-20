@@ -135,6 +135,13 @@ enum InventoryResult : uint8
     EQUIP_ERR_ITEM_MAX_LIMIT_CATEGORY_EQUIPPED_EXCEEDED  = 89
 };
 
+/// The 3.4.3 client's number for an InventoryResult (its result-to-error map, FUN_141893710): the same
+/// up to 28; 3.4.3 inserts 29 (ERR_CANT_TRADE_GOLD), so everything from 3.3.5's 29 on is one higher.
+inline uint32 ClientInventoryResult(InventoryResult result)
+{
+    return result < 29 ? uint32(result) : uint32(result) + 1;
+}
+
 // EnumUtils: DESCRIBE THIS
 enum BuyResult
 {
