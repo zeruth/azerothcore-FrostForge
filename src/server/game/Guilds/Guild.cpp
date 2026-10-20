@@ -19,6 +19,7 @@
 #include "Bag.h"
 #include "CalendarMgr.h"
 #include "CharacterCache.h"
+#include "PacketGuid128.h"
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -514,8 +515,10 @@ void Guild::BankTab::SendText(Guild const* guild, WorldSession* session) const
     }
     else
     {
-        LOG_DEBUG("guild", "CMSG_GUILD_BANK_TEXT_QUERY [Broadcast]: Tabid: {}, Text: {}", m_tabId, m_text);
-        guild->BroadcastPacket(textQuery.Write());
+        // 3.4.3: SMSG_GUILD_EVENT_TAB_TEXT_CHANGED (raw u32 Tab); the clients ask for the text themselves
+        WorldPacket data(SMSG_GUILD_EVENT_TAB_TEXT_CHANGED, 4);
+        data << uint32(m_tabId);
+        guild->BroadcastPacket(&data);
     }
 }
 
@@ -1211,20 +1214,8 @@ bool Guild::SetName(std::string_view const& name)
 void Guild::HandleRoster(WorldSession* session)
 {
     WorldPackets::Guild::GuildRoster roster;
-
-    roster.RankData.reserve(m_ranks.size());
-    for (RankInfo const& rank : m_ranks)
-    {
-        WorldPackets::Guild::GuildRankData& rankData =  roster.RankData.emplace_back();
-
-        rankData.Flags = rank.GetRights();
-        rankData.WithdrawGoldLimit = rank.GetBankMoneyPerDay();
-        for (uint8 i = 0; i < GUILD_BANK_MAX_TABS; ++i)
-        {
-            rankData.TabFlags[i] = rank.GetBankTabRights(i);
-            rankData.TabWithdrawItemLimit[i] = rank.GetBankTabSlotsPerDay(i);
-        }
-    }
+    roster.NumAccounts = m_accountsNumber;
+    roster.CreateDate = m_createdDate;
 
     bool sendOfficerNote = _HasRankRight(session->GetPlayer(), GR_RIGHT_VIEWOFFNOTE);
     roster.MemberData.reserve(m_members.size());
@@ -1235,12 +1226,14 @@ void Guild::HandleRoster(WorldSession* session)
         memberData.Guid = member.GetGUID();
         memberData.RankID = int32(member.GetRankId());
         memberData.AreaID = int32(member.GetZoneId());
-        memberData.LastSave = float(float(GameTime::GetGameTime().count() - member.GetLogoutTime()) / DAY);
+        memberData.LastSave = member.GetFlags() & GUILDMEMBER_STATUS_ONLINE ? 0.0f : float(float(GameTime::GetGameTime().count() - member.GetLogoutTime()) / DAY);
 
         memberData.Status = member.GetFlags();
         memberData.Level = member.GetLevel();
         memberData.ClassID = member.GetClass();
         memberData.Gender = member.GetGender();
+        if (CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(member.GetGUID()))
+            memberData.RaceID = cache->Race;
 
         memberData.Name = member.GetName();
         memberData.Note = member.GetPublicNote();
@@ -1255,10 +1248,35 @@ void Guild::HandleRoster(WorldSession* session)
     session->SendPacket(roster.Write());
 }
 
+/// SMSG_GUILD_RANKS (3.4.3): the client builds its rank table (names, rights, bank tab rights) only from this,
+/// asked for with CMSG_GUILD_GET_RANKS. AC's rank ids are their order.
+void Guild::SendRanks(WorldSession* session) const
+{
+    WorldPackets::Guild::GuildRanks ranks;
+    ranks.Ranks.reserve(m_ranks.size());
+    for (RankInfo const& rank : m_ranks)
+    {
+        WorldPackets::Guild::GuildRankData& rankData = ranks.Ranks.emplace_back();
+        rankData.RankID = rank.GetId();
+        rankData.RankOrder = rank.GetId();
+        rankData.Flags = rank.GetRights();
+        rankData.WithdrawGoldLimit = rank.GetBankMoneyPerDay();
+        rankData.RankName = rank.GetName();
+        for (uint8 i = 0; i < GUILD_BANK_MAX_TABS; ++i)
+        {
+            rankData.TabFlags[i] = rank.GetBankTabRights(i);
+            rankData.TabWithdrawItemLimit[i] = rank.GetBankTabSlotsPerDay(i);
+        }
+    }
+
+    session->SendPacket(ranks.Write());
+}
+
 void Guild::HandleQuery(WorldSession* session)
 {
     WorldPackets::Guild::QueryGuildInfoResponse response;
     response.GuildId = m_id;
+    response.HasGuildInfo = true;
 
     response.Info.EmblemStyle = m_emblemInfo.GetStyle();
     response.Info.EmblemColor = m_emblemInfo.GetColor();
@@ -1529,6 +1547,12 @@ void Guild::HandleInviteMember(WorldSession* session, std::string const& name)
 
     invite.InviterName = player->GetName();
     invite.GuildName = GetName();
+    invite.GuildId = m_id;
+    invite.EmblemStyle = m_emblemInfo.GetStyle();
+    invite.EmblemColor = m_emblemInfo.GetColor();
+    invite.BorderStyle = m_emblemInfo.GetBorderStyle();
+    invite.BorderColor = m_emblemInfo.GetBorderColor();
+    invite.BackgroundColor = m_emblemInfo.GetBackgroundColor();
 
     pInvitee->SendDirectMessage(invite.Write());
     LOG_DEBUG("guild", "SMSG_GUILD_INVITE [{}]", pInvitee->GetName());
@@ -1605,7 +1629,7 @@ void Guild::HandleRemoveMember(WorldSession* session, std::string_view name)
                 // After call to DeleteMember pointer to member becomes invalid
                 DeleteMember(guid, false, true);
                 _LogEvent(GUILD_EVENT_LOG_UNINVITE_PLAYER, player->GetGUID(), guid);
-                _BroadcastEvent(GE_REMOVED, ObjectGuid::Empty, memberName, player->GetName());
+                _BroadcastEvent(GE_REMOVED, guid, memberName, player->GetName());
             }
         }
     }
@@ -1914,7 +1938,7 @@ void Guild::SendMoneyInfo(WorldSession* session) const
     if (!member)
         return;
 
-    int32 amount = _GetMemberRemainingMoney(*member);
+    int64 amount = _GetMemberRemainingMoney(*member);
 
     WorldPackets::Guild::GuildBankRemainingWithdrawMoney packet;
     packet.RemainingWithdrawMoney = amount;
@@ -1925,11 +1949,9 @@ void Guild::SendMoneyInfo(WorldSession* session) const
 
 void Guild::SendLoginInfo(WorldSession* session)
 {
-    // the guild MOTD went out as SMSG_GUILD_EVENT, which the 3.4.3 client splits into SMSG_GUILD_EVENT_MOTD
-    // and the others; not sent until ported
-
     Player* player = session->GetPlayer();
 
+    session->SendPacket(BuildEventMotd());
     HandleRoster(session);
     _BroadcastEvent(GE_SIGNED_ON, player->GetGUID(), player->GetName());
 
@@ -2823,11 +2845,189 @@ void Guild::_SendBankContentUpdate(uint8 tabId, SlotIds slots) const
     _SendBankList(nullptr, tabId, false, &slots);
 }
 
-void Guild::_BroadcastEvent(GuildEvents guildEvent, ObjectGuid guid,
-                            Optional<std::string_view> /*param1 = {}*/, Optional<std::string_view> /*param2 = {}*/, Optional<std::string_view> /*param3 = {}*/) const
+/// SMSG_GUILD_EVENT_MOTD, 3.4.3 (inline, handler FUN_141c21120): 11-bit length, flush, the text
+WorldPacket const* Guild::BuildEventMotd() const
 {
-    // the 3.4.3 client splits SMSG_GUILD_EVENT into SMSG_GUILD_EVENT_*; not sent until ported
-    LOG_DEBUG("guild", "Guild event {} for {} not sent (no 3.4.3 equivalent yet)", guildEvent, guid.ToString());
+    static thread_local WorldPacket data;
+    std::string_view motd = std::string_view(m_motd).substr(0, 0x7FF);
+    data.Initialize(SMSG_GUILD_EVENT_MOTD, 2 + motd.size());
+    data.WriteBits(motd.size(), 11);
+    data.FlushBits();
+    data.WriteString(motd);
+    return &data;
+}
+
+/// 3.4.3 has one message per guild event (SMSG_GUILD_EVENT_*, spec_guild.md 3), carrying GUIDs and realm addresses
+/// where 3.3.5's SMSG_GUILD_EVENT carried names. The members' GUIDs are found by the names AC passes.
+void Guild::_BroadcastEvent(GuildEvents guildEvent, ObjectGuid guid,
+                            Optional<std::string_view> param1 /*= {}*/, Optional<std::string_view> param2 /*= {}*/, Optional<std::string_view> param3 /*= {}*/) const
+{
+    auto memberGuid = [this](Optional<std::string_view> name) -> ObjectGuid
+    {
+        if (!name)
+            return ObjectGuid::Empty;
+        for (auto const& [low, member] : m_members)
+            if (member.GetName() == *name)
+                return member.GetGUID();
+        return sCharacterCache->GetCharacterGuidByName(std::string(*name));
+    };
+    auto str = [](Optional<std::string_view> s, std::size_t max) { return s ? s->substr(0, max) : std::string_view(); };
+
+    WorldPacket data;
+    switch (guildEvent)
+    {
+        case GE_PROMOTION:
+        case GE_DEMOTION:
+        {
+            // SMSG_GUILD_SEND_RANK_CHANGE (handler FUN_14170e090): PackedGuid128 Officer, PackedGuid128 Other, u32
+            // RankID, bit Promote, flush
+            ObjectGuid other = memberGuid(param2);
+            Member const* member = GetMember(other);
+            data.Initialize(SMSG_GUILD_SEND_RANK_CHANGE, 40);
+            Guid128::WritePlayer(data, memberGuid(param1));
+            Guid128::WritePlayer(data, other);
+            data << uint32(member ? member->GetRankId() : 0);
+            data.WriteBit(guildEvent == GE_PROMOTION);
+            data.FlushBits();
+            break;
+        }
+        case GE_MOTD:
+            BroadcastPacket(BuildEventMotd());
+            return;
+        case GE_JOINED:
+        {
+            // SMSG_GUILD_EVENT_PLAYER_JOINED (handler FUN_141c21280): PackedGuid128, u32 realm, 6-bit name, flush, name
+            std::string_view name = str(param1, 63);
+            data.Initialize(SMSG_GUILD_EVENT_PLAYER_JOINED, 24 + name.size());
+            Guid128::WritePlayer(data, guid);
+            data << uint32(Guid128::VirtualRealmAddress());
+            data.WriteBits(name.size(), 6);
+            data.FlushBits();
+            data.WriteString(name);
+            break;
+        }
+        case GE_LEFT:
+        case GE_REMOVED:
+        {
+            // SMSG_GUILD_EVENT_PLAYER_LEFT (handler FUN_141c21300): bit Removed, 6-bit leaver name length, [6-bit remover
+            // name length, flush, PackedGuid128 remover, u32 realm, the remover's name], flush, PackedGuid128 leaver,
+            // u32 realm, the leaver's name
+            bool removed = guildEvent == GE_REMOVED;
+            std::string_view leaver = str(param1, 63);
+            ObjectGuid leaverGuid = guid ? guid : memberGuid(param1);
+            data.Initialize(SMSG_GUILD_EVENT_PLAYER_LEFT, 64);
+            data.WriteBit(removed);
+            data.WriteBits(leaver.size(), 6);
+            if (removed)
+            {
+                std::string_view remover = str(param2, 63);
+                data.WriteBits(remover.size(), 6);
+                data.FlushBits();
+                Guid128::WritePlayer(data, memberGuid(param2));
+                data << uint32(Guid128::VirtualRealmAddress());
+                data.WriteString(remover);
+            }
+            else
+                data.FlushBits();
+            Guid128::WritePlayer(data, leaverGuid);
+            data << uint32(Guid128::VirtualRealmAddress());
+            data.WriteString(leaver);
+            // the one who left is no longer a member, but its client clears its guild on this
+            if (Player* leaverPlayer = ObjectAccessor::FindConnectedPlayer(leaverGuid))
+                if (!GetMember(leaverGuid))
+                    leaverPlayer->SendDirectMessage(&data);
+            break;
+        }
+        case GE_LEADER_IS:
+        case GE_LEADER_CHANGED:
+        {
+            // SMSG_GUILD_EVENT_NEW_LEADER (handler FUN_141c211c0): bit SelfPromoted, 6-bit old and new name lengths,
+            // flush, PackedGuid128 old, u32 realm, PackedGuid128 new, u32 realm, the names
+            std::string_view oldLeader = guildEvent == GE_LEADER_CHANGED ? str(param1, 63) : std::string_view();
+            std::string_view newLeader = guildEvent == GE_LEADER_CHANGED ? str(param2, 63) : str(param1, 63);
+            data.Initialize(SMSG_GUILD_EVENT_NEW_LEADER, 64);
+            data.WriteBit(false);
+            data.WriteBits(oldLeader.size(), 6);
+            data.WriteBits(newLeader.size(), 6);
+            data.FlushBits();
+            Guid128::WritePlayer(data, oldLeader.empty() ? ObjectGuid::Empty : memberGuid(oldLeader));
+            data << uint32(Guid128::VirtualRealmAddress());
+            Guid128::WritePlayer(data, memberGuid(newLeader));
+            data << uint32(Guid128::VirtualRealmAddress());
+            data.WriteString(oldLeader);
+            data.WriteString(newLeader);
+            break;
+        }
+        case GE_DISBANDED:
+            data.Initialize(SMSG_GUILD_EVENT_DISBANDED, 0);  // raw, empty
+            break;
+        case GE_RANK_UPDATED:
+        case GE_RANK_DELETED:
+        {
+            // SMSG_GUILD_EVENT_RANKS_UPDATED (raw, empty): the clients ask for the ranks again. A rank's rights changing
+            // also gets SMSG_GUILD_EVENT_RANK_CHANGED (raw u32 RankID), which makes that rank re-ask its permissions.
+            if (guildEvent == GE_RANK_UPDATED && param1)
+            {
+                WorldPacket changed(SMSG_GUILD_EVENT_RANK_CHANGED, 4);
+                changed << uint32(std::strtoul(std::string(*param1).c_str(), nullptr, 10));
+                BroadcastPacket(&changed);
+            }
+            data.Initialize(SMSG_GUILD_EVENT_RANKS_UPDATED, 0);
+            break;
+        }
+        case GE_SIGNED_ON:
+        case GE_SIGNED_OFF:
+        {
+            // SMSG_GUILD_EVENT_PRESENCE_CHANGE (handler FUN_141c213e0): PackedGuid128, u32 realm, 6-bit name length,
+            // bits LoggedOn, Mobile, flush, the name
+            std::string_view name = str(param1, 63);
+            data.Initialize(SMSG_GUILD_EVENT_PRESENCE_CHANGE, 24 + name.size());
+            Guid128::WritePlayer(data, guid);
+            data << uint32(Guid128::VirtualRealmAddress());
+            data.WriteBits(name.size(), 6);
+            data.WriteBit(guildEvent == GE_SIGNED_ON);
+            data.WriteBit(false);
+            data.FlushBits();
+            data.WriteString(name);
+            break;
+        }
+        case GE_BANK_TAB_PURCHASED:
+            data.Initialize(SMSG_GUILD_EVENT_TAB_ADDED, 0);  // raw, empty
+            break;
+        case GE_BANK_TAB_UPDATED:
+        {
+            // SMSG_GUILD_EVENT_TAB_MODIFIED (handler FUN_141c217f0): u32 Tab, 7-bit name and 9-bit icon lengths, the strings
+            std::string_view name = str(param2, 127);
+            std::string_view icon = str(param3, 511);
+            data.Initialize(SMSG_GUILD_EVENT_TAB_MODIFIED, 6 + name.size() + icon.size());
+            data << uint32(param1 ? std::strtoul(std::string(*param1).c_str(), nullptr, 10) : 0);
+            data.WriteBits(name.size(), 7);
+            data.WriteBits(icon.size(), 9);
+            data.FlushBits();
+            data.WriteString(name);
+            data.WriteString(icon);
+            break;
+        }
+        case GE_BANK_MONEY_SET:
+            data.Initialize(SMSG_GUILD_EVENT_BANK_MONEY_CHANGED, 8);   // raw u64 Money
+            data << uint64(m_bankMoney);
+            break;
+        case GE_BANK_TAB_AND_MONEY_UPDATED:
+            data.Initialize(SMSG_GUILD_MEMBER_DAILY_RESET, 0);  // raw, empty
+            break;
+        case GE_GUILDBANKBAGSLOTS_CHANGED:
+            data.Initialize(SMSG_GUILD_EVENT_BANK_CONTENTS_CHANGED, 0);
+            break;
+        case GE_BANK_TEXT_CHANGED:
+            data.Initialize(SMSG_GUILD_EVENT_TAB_TEXT_CHANGED, 4);
+            data << uint32(param1 ? std::strtoul(std::string(*param1).c_str(), nullptr, 10) : 0);
+            break;
+        default:
+            LOG_DEBUG("guild", "Guild event {} has no 3.4.3 message", guildEvent);
+            return;
+    }
+
+    BroadcastPacket(&data);
 }
 
 void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 0*/, bool sendAllSlots /*= false*/, SlotIds *slots /*= nullptr*/) const
@@ -2841,12 +3041,14 @@ void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 
     packet.Tab = int32(tabId);
     packet.FullUpdate = sendAllSlots;
 
-    if (sendAllSlots && !tabId)
+    // 3.4.3 takes its purchased tab count from TabInfo: every full update carries it
+    if (sendAllSlots)
     {
         packet.TabInfo.reserve(_GetPurchasedTabsSize());
         for (uint8 i = 0; i < _GetPurchasedTabsSize(); ++i)
         {
             WorldPackets::Guild::GuildBankTabInfo tabInfo;
+            tabInfo.TabIndex = i;
             tabInfo.Name = m_bankTabs[i].GetName();
             tabInfo.Icon = m_bankTabs[i].GetIcon();
             packet.TabInfo.push_back(tabInfo);
@@ -2876,9 +3078,12 @@ void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 
                     {
                         if (uint32 enchId = tabItem->GetEnchantmentId(EnchantmentSlot(SOCK_ENCHANTMENT_SLOT + socketSlot)))
                         {
+                            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(enchId);
+                            if (!enchant || !enchant->GemID)
+                                continue;
                             WorldPackets::Guild::GuildBankSocketEnchant gem;
                             gem.SocketIndex = socketSlot;
-                            gem.SocketEnchantID = int32(enchId);
+                            gem.GemItemID = int32(enchant->GemID);  // 3.4.3 names the gem item
                             itemInfo.SocketEnchant.push_back(gem);
                         }
                     }

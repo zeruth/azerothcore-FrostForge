@@ -24,6 +24,8 @@
 #include <array>
 #include <boost/container/static_vector.hpp>
 
+// The guild messages in the 3.4.3.54261 client's layouts. Guild GUIDs are Guid128::WriteGuild / ReadGuild (type 28,
+// the same GUID the update fields carry); the parsers and writers are named at each Read / Write.
 namespace WorldPackets
 {
     namespace Guild
@@ -36,6 +38,8 @@ namespace WorldPackets
             void Read() override;
 
             uint32 GuildId = 0;
+            uint64 GuildGuidLow = 0;
+            uint64 GuildGuidHigh = 0;
         };
 
         struct GuildInfo
@@ -60,6 +64,9 @@ namespace WorldPackets
             WorldPacket const* Write() override;
 
             uint32 GuildId = 0;
+            bool HasGuildInfo = true;
+            uint64 GuildGuidLow = 0;                        // a guild the server does not know: echoed as asked
+            uint64 GuildGuidHigh = 0;
             GuildInfo Info;
         };
 
@@ -74,8 +81,6 @@ namespace WorldPackets
         struct GuildRosterMemberData
         {
             ObjectGuid Guid;
-            int64 WeeklyXP = 0;
-            int64 TotalXP = 0;
             int32 RankID = 0;
             int32 AreaID = 0;
             float LastSave = 0.0f;
@@ -86,14 +91,7 @@ namespace WorldPackets
             uint8 Level = 0;
             uint8 ClassID = 0;
             uint8 Gender = 0;
-        };
-
-        struct GuildRankData
-        {
-            uint32 Flags = 0;
-            uint32 WithdrawGoldLimit = 0;
-            uint32 TabFlags[GUILD_BANK_MAX_TABS];
-            uint32 TabWithdrawItemLimit[GUILD_BANK_MAX_TABS];
+            uint8 RaceID = 0;
         };
 
         class GuildRoster final : public ServerPacket
@@ -104,9 +102,42 @@ namespace WorldPackets
             WorldPacket const* Write() override;
 
             std::vector<GuildRosterMemberData> MemberData;
-            std::vector<GuildRankData> RankData;
+            uint32 NumAccounts = 0;
+            time_t CreateDate = 0;
+            uint32 GuildFlags = 0;
             std::string WelcomeText;
             std::string InfoText;
+        };
+
+        struct GuildRankData
+        {
+            uint8 RankID = 0;
+            uint32 RankOrder = 0;
+            uint32 Flags = 0;
+            uint32 WithdrawGoldLimit = 0;
+            uint32 TabFlags[GUILD_BANK_MAX_TABS] = { };
+            uint32 TabWithdrawItemLimit[GUILD_BANK_MAX_TABS] = { };
+            std::string RankName;
+        };
+
+        class GuildGetRanks final : public ClientPacket
+        {
+        public:
+            GuildGetRanks(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_GET_RANKS, std::move(packet)) { }
+
+            void Read() override;
+
+            uint32 GuildId = 0;
+        };
+
+        class GuildRanks final : public ServerPacket
+        {
+        public:
+            GuildRanks() : ServerPacket(SMSG_GUILD_RANKS, 4 + GUILD_RANKS_MAX_COUNT * 70) { }
+
+            WorldPacket const* Write() override;
+
+            std::vector<GuildRankData> Ranks;
         };
 
         class GuildUpdateMotdText final : public ClientPacket
@@ -116,7 +147,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            String<128, Strings::NoHyperlinks> MotdText;
+            std::string MotdText;
         };
 
         class GuildCommandResult final : public ServerPacket
@@ -142,7 +173,7 @@ namespace WorldPackets
         class GuildDeclineInvitation final : public ClientPacket
         {
         public:
-            GuildDeclineInvitation(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_DECLINE_INVITATION, std::move(packet)) { }
+            GuildDeclineInvitation(WorldPacket&& packet) : ClientPacket(std::move(packet)) { }
 
             void Read() override { }
         };
@@ -154,7 +185,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            String<48> Name;
+            std::string Name;
         };
 
         class GuildInvite final : public ServerPacket
@@ -166,6 +197,12 @@ namespace WorldPackets
 
             std::string InviterName;
             std::string GuildName;
+            uint32 GuildId = 0;
+            uint32 EmblemStyle = 0;
+            uint32 EmblemColor = 0;
+            uint32 BorderStyle = 0;
+            uint32 BorderColor = 0;
+            uint32 BackgroundColor = 0;
         };
 
         struct GuildEventEntry
@@ -212,11 +249,11 @@ namespace WorldPackets
                 int32 WithdrawItemLimit = 0;
             };
 
-            GuildPermissionsQueryResults() : ServerPacket(SMSG_GUILD_PERMISSIONS_QUERY_RESULTS, 20) { }
+            GuildPermissionsQueryResults() : ServerPacket(SMSG_GUILD_PERMISSIONS_QUERY_RESULTS, 20 + GUILD_BANK_MAX_TABS * 8) { }
 
             WorldPacket const* Write() override;
 
-            int8 NumTabs = 0;
+            int32 NumTabs = 0;
             int32 WithdrawGoldLimit = 0;
             int32 Flags = 0;
             uint32 RankID = 0;
@@ -231,11 +268,13 @@ namespace WorldPackets
             void Read() override;
 
             uint32 RankID = 0;
+            uint32 RankOrder = 0;
             uint32 WithdrawGoldLimit = 0;
             uint32 Flags = 0;
+            uint32 OldFlags = 0;
             uint32 TabFlags[GUILD_BANK_MAX_TABS];
             uint32 TabWithdrawItemLimit[GUILD_BANK_MAX_TABS];
-            String<15, Strings::NoHyperlinks> RankName;
+            std::string RankName;
         };
 
         class GuildAddRank final : public ClientPacket
@@ -245,7 +284,8 @@ namespace WorldPackets
 
             void Read() override;
 
-            String<15, Strings::NoHyperlinks> Name;
+            std::string Name;
+            uint32 RankOrder = 0;
         };
 
         class GuildDeleteRank final : public ClientPacket
@@ -253,7 +293,9 @@ namespace WorldPackets
         public:
             GuildDeleteRank(WorldPacket&& packet) : ClientPacket(CMSG_GUILD_DELETE_RANK, std::move(packet)) { }
 
-            void Read() override { }
+            void Read() override;
+
+            uint32 RankOrder = 0;
         };
 
         class GuildUpdateInfoText final : public ClientPacket
@@ -263,7 +305,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            String<500, Strings::NoHyperlinks> InfoText;
+            std::string InfoText;
         };
 
         class GuildSetMemberNote final : public ClientPacket
@@ -273,8 +315,9 @@ namespace WorldPackets
 
             void Read() override;
 
-            std::string NoteeName;
-            String<31, Strings::NoHyperlinks> Note;
+            ObjectGuid NoteeGUID;
+            bool IsPublic = false;
+            std::string Note;
         };
 
         class GuildDelete final : public ClientPacket
@@ -292,7 +335,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            std::string Demotee;
+            ObjectGuid Demotee;
         };
 
         class GuildPromoteMember final : public ClientPacket
@@ -302,7 +345,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            std::string Promotee;
+            ObjectGuid Promotee;
         };
 
         class GuildOfficerRemoveMember : public ClientPacket
@@ -312,7 +355,7 @@ namespace WorldPackets
 
             void Read() override;
 
-            std::string Removee;
+            ObjectGuid Removee;
         };
 
         class GuildLeave final : public ClientPacket
@@ -354,8 +397,8 @@ namespace WorldPackets
 
             ObjectGuid Banker;
             uint8 BankTab = 0;
-            String<16, Strings::NoHyperlinks> Name;
-            String<100> Icon;
+            std::string Name;
+            std::string Icon;
         };
 
         class GuildBankDepositMoney final : public ClientPacket
@@ -396,7 +439,7 @@ namespace WorldPackets
 
             WorldPacket const* Write() override;
 
-            int32 RemainingWithdrawMoney = 0;
+            int64 RemainingWithdrawMoney = 0;
         };
 
         class GuildBankWithdrawMoney final : public ClientPacket
@@ -413,7 +456,7 @@ namespace WorldPackets
         struct GuildBankSocketEnchant
         {
             uint8 SocketIndex = 0;
-            int32 SocketEnchantID = 0;
+            int32 GemItemID = 0;
         };
 
         struct GuildBankItemInfo
@@ -431,6 +474,7 @@ namespace WorldPackets
 
         struct GuildBankTabInfo
         {
+            uint32 TabIndex = 0;
             std::string Name;
             std::string Icon;
         };
@@ -470,7 +514,7 @@ namespace WorldPackets
             ObjectGuid PlayerGUID;
             uint32 TimeOffset = 0;
             int8 EntryType = 0;
-            uint32 Money = 0;
+            uint64 Money = 0;
             int32 ItemID = 0;
             int32 Count = 0;
             int8 OtherTab = 0;
@@ -516,7 +560,7 @@ namespace WorldPackets
             void Read() override;
 
             uint8 Tab = 0;
-            String<500, Strings::NoHyperlinks> TabText;
+            std::string TabText;
         };
 
         class GuildSetGuildMaster final : public ClientPacket

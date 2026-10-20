@@ -19,6 +19,8 @@
 #include "GuildMgr.h"
 #include "GuildPackets.h"
 #include "Log.h"
+#include "PacketGuid128.h"
+#include "Player.h"
 #include "ObjectMgr.h"
 #include "SocialMgr.h"
 #include "World.h"
@@ -27,11 +29,18 @@
 void WorldSession::HandleGuildQueryOpcode(WorldPackets::Guild::QueryGuildInfo& query)
 {
     LOG_DEBUG("guild", "CMSG_QUERY_GUILD_INFO [{}]: Guild: {}", GetPlayerInfo(), query.GuildId);
-    if (!query.GuildId)
-        return;
-
-    if (Guild* guild = sGuildMgr->GetGuildById(query.GuildId))
+    if (Guild* guild = query.GuildId ? sGuildMgr->GetGuildById(query.GuildId) : nullptr)
+    {
         guild->HandleQuery(this);
+        return;
+    }
+
+    // unknown: the client caches "no such guild" for that GUID
+    WorldPackets::Guild::QueryGuildInfoResponse response;
+    response.HasGuildInfo = false;
+    response.GuildGuidLow = query.GuildGuidLow;
+    response.GuildGuidHigh = query.GuildGuidHigh;
+    SendPacket(response.Write());
 }
 
 void WorldSession::HandleGuildInviteOpcode(WorldPackets::Guild::GuildInviteByName& packet)
@@ -44,11 +53,11 @@ void WorldSession::HandleGuildInviteOpcode(WorldPackets::Guild::GuildInviteByNam
 
 void WorldSession::HandleGuildRemoveOpcode(WorldPackets::Guild::GuildOfficerRemoveMember& packet)
 {
-    LOG_DEBUG("guild", "CMSG_GUILD_OFFICER_REMOVE_MEMBER [{}]: Target: {}", GetPlayerInfo(), packet.Removee);
+    LOG_DEBUG("guild", "CMSG_GUILD_OFFICER_REMOVE_MEMBER [{}]: Target: {}", GetPlayerInfo(), packet.Removee.ToString());
 
-    if (normalizePlayerName(packet.Removee))
-        if (Guild* guild = GetPlayer()->GetGuild())
-            guild->HandleRemoveMember(this, packet.Removee);
+    if (Guild* guild = GetPlayer()->GetGuild())
+        if (Guild::Member const* member = guild->GetMember(packet.Removee))
+            guild->HandleRemoveMember(this, member->GetName());
 }
 
 void WorldSession::HandleGuildAcceptOpcode(WorldPackets::Guild::AcceptGuildInvite& /*invite*/)
@@ -77,8 +86,17 @@ void WorldSession::HandleGuildDeclineOpcode(WorldPackets::Guild::GuildDeclineInv
         return;
     }
 
+    // SMSG_GUILD_INVITE_DECLINED to the inviter is not sent: AC does not remember who invited
     GetPlayer()->SetGuildIdInvited(0);
     GetPlayer()->SetInGuild(0);
+}
+
+void WorldSession::HandleGuildGetRanksOpcode(WorldPackets::Guild::GuildGetRanks& packet)
+{
+    // CMSG_GUILD_GET_RANKS (sent with every roster request): the player's own guild only
+    if (Guild* guild = GetPlayer()->GetGuild())
+        if (!packet.GuildId || packet.GuildId == guild->GetId())
+            guild->SendRanks(this);
 }
 
 void WorldSession::HandleGuildRosterOpcode(WorldPackets::Guild::GuildGetRoster& /*packet*/)
@@ -93,20 +111,20 @@ void WorldSession::HandleGuildRosterOpcode(WorldPackets::Guild::GuildGetRoster& 
 
 void WorldSession::HandleGuildPromoteOpcode(WorldPackets::Guild::GuildPromoteMember& promote)
 {
-    LOG_DEBUG("guild", "CMSG_GUILD_PROMOTE_MEMBER [{}]: Target: {}", GetPlayerInfo(), promote.Promotee);
+    LOG_DEBUG("guild", "CMSG_GUILD_PROMOTE_MEMBER [{}]: Target: {}", GetPlayerInfo(), promote.Promotee.ToString());
 
-    if (normalizePlayerName(promote.Promotee))
-        if (Guild* guild = GetPlayer()->GetGuild())
-            guild->HandleUpdateMemberRank(this, promote.Promotee, false);
+    if (Guild* guild = GetPlayer()->GetGuild())
+        if (Guild::Member const* member = guild->GetMember(promote.Promotee))
+            guild->HandleUpdateMemberRank(this, member->GetName(), false);
 }
 
 void WorldSession::HandleGuildDemoteOpcode(WorldPackets::Guild::GuildDemoteMember& demote)
 {
-    LOG_DEBUG("guild", "CMSG_GUILD_DEMOTE_MEMBER [{}]: Target: {}", GetPlayerInfo(), demote.Demotee);
+    LOG_DEBUG("guild", "CMSG_GUILD_DEMOTE_MEMBER [{}]: Target: {}", GetPlayerInfo(), demote.Demotee.ToString());
 
-    if (normalizePlayerName(demote.Demotee))
-        if (Guild* guild = GetPlayer()->GetGuild())
-            guild->HandleUpdateMemberRank(this, demote.Demotee, true);
+    if (Guild* guild = GetPlayer()->GetGuild())
+        if (Guild::Member const* member = guild->GetMember(demote.Demotee))
+            guild->HandleUpdateMemberRank(this, member->GetName(), true);
 }
 
 void WorldSession::HandleGuildLeaveOpcode(WorldPackets::Guild::GuildLeave& /*leave*/)
@@ -144,21 +162,12 @@ void WorldSession::HandleGuildMOTDOpcode(WorldPackets::Guild::GuildUpdateMotdTex
 
 void WorldSession::HandleGuildSetPublicNoteOpcode(WorldPackets::Guild::GuildSetMemberNote& packet)
 {
-    LOG_DEBUG("guild", "CMSG_GUILD_SET_MEMBER_NOTE [{}]: Target: {}, Note: {}", GetPlayerInfo(), packet.NoteeName, packet.Note);
+    LOG_DEBUG("guild", "CMSG_GUILD_SET_MEMBER_NOTE [{}]: Target: {}, Note: {}, public {}", GetPlayerInfo(), packet.NoteeGUID.ToString(), packet.Note, packet.IsPublic);
 
-    if (normalizePlayerName(packet.NoteeName))
-        if (Guild* guild = GetPlayer()->GetGuild())
-            guild->HandleSetMemberNote(this, packet.NoteeName, packet.Note, true);
-}
-
-void WorldSession::HandleGuildSetOfficerNoteOpcode(WorldPackets::Guild::GuildSetMemberNote& packet)
-{
-    LOG_DEBUG("guild", "CMSG_GUILD_SET_OFFICER_NOTE [{}]: Target: {}, Note: {}",
-              GetPlayerInfo(), packet.NoteeName, packet.Note);
-
-    if (normalizePlayerName(packet.NoteeName))
-        if (Guild* guild = GetPlayer()->GetGuild())
-            guild->HandleSetMemberNote(this, packet.NoteeName, packet.Note, false);
+    // 3.4.3: one message for both notes
+    if (Guild* guild = GetPlayer()->GetGuild())
+        if (Guild::Member const* member = guild->GetMember(packet.NoteeGUID))
+            guild->HandleSetMemberNote(this, member->GetName(), packet.Note, packet.IsPublic);
 }
 
 void WorldSession::HandleGuildRankOpcode(WorldPackets::Guild::GuildSetRankPermissions& packet)
@@ -201,12 +210,13 @@ void WorldSession::HandleGuildAddRankOpcode(WorldPackets::Guild::GuildAddRank& p
         guild->HandleAddNewRank(this, packet.Name);
 }
 
-void WorldSession::HandleGuildDelRankOpcode(WorldPackets::Guild::GuildDeleteRank& /*packet*/)
+void WorldSession::HandleGuildDelRankOpcode(WorldPackets::Guild::GuildDeleteRank& packet)
 {
-    LOG_DEBUG("guild", "CMSG_GUILD_DELETE_RANK [{}]", GetPlayerInfo());
+    LOG_DEBUG("guild", "CMSG_GUILD_DELETE_RANK [{}]: {}", GetPlayerInfo(), packet.RankOrder);
 
+    // 3.4.3 names the rank (AC's rank ids are their order)
     if (Guild* guild = GetPlayer()->GetGuild())
-        guild->HandleRemoveLowestRank(this);
+        guild->HandleRemoveRank(this, uint8(packet.RankOrder));
 }
 
 void WorldSession::HandleGuildChangeInfoTextOpcode(WorldPackets::Guild::GuildUpdateInfoText& packet)
@@ -356,4 +366,90 @@ void WorldSession::HandleSetGuildBankTabText(WorldPackets::Guild::GuildBankSetTa
 
     if (Guild* guild = GetPlayer()->GetGuild())
         guild->SetBankTabText(packet.Tab, packet.TabText);
+}
+
+/// The 3.4.3 client splits 3.3.5's CMSG_GUILD_BANK_SWAP_ITEMS into eleven messages (spec_guild.md 6.3), each led by
+/// PackedGuid128 Banker. Bank to bank: u8 tab, u8 slot, u8 tab1, u8 slot1, [u32 StackCount] (merge and split); the
+/// first pair is the source. Bank and inventory: u8 BankTab, u8 BankSlot, u8 ContainerItemSlot, [u32 StackCount],
+/// bit HasContainerSlot, flush, [u8 ContainerSlot] (InvSlots numbering; none: the backpack).
+void WorldSession::HandleGuildBankMoveItem(WorldPacket& recvData)
+{
+    ObjectGuid banker = Guid128::Read(recvData);
+    uint16 opcode = recvData.GetOpcode();
+
+    if (!GetPlayer()->GetGameObjectIfCanInteractWith(banker, GAMEOBJECT_TYPE_GUILD_BANK))
+    {
+        recvData.rfinish();
+        return;
+    }
+
+    Guild* guild = GetPlayer()->GetGuild();
+    if (!guild)
+    {
+        recvData.rfinish();
+        return;
+    }
+
+    switch (opcode)
+    {
+        case CMSG_SWAP_GUILD_BANK_ITEM_WITH_GUILD_BANK_ITEM:
+        case CMSG_MOVE_GUILD_BANK_ITEM:
+        case CMSG_MERGE_GUILD_BANK_ITEM_WITH_GUILD_BANK_ITEM:
+        case CMSG_SPLIT_GUILD_BANK_ITEM:
+        {
+            uint8 tab = recvData.read<uint8>();
+            uint8 slot = recvData.read<uint8>();
+            uint8 tab1 = recvData.read<uint8>();
+            uint8 slot1 = recvData.read<uint8>();
+            uint32 count = 0;
+            if (opcode == CMSG_MERGE_GUILD_BANK_ITEM_WITH_GUILD_BANK_ITEM || opcode == CMSG_SPLIT_GUILD_BANK_ITEM)
+                count = recvData.read<uint32>();
+            guild->SwapItems(GetPlayer(), tab, slot, tab1, slot1, count);
+            return;
+        }
+        case CMSG_AUTO_STORE_GUILD_BANK_ITEM:
+        {
+            uint8 tab = recvData.read<uint8>();
+            uint8 slot = recvData.read<uint8>();
+            guild->SwapItemsWithInventory(GetPlayer(), true, tab, slot, NULL_BAG, NULL_SLOT, 0);
+            return;
+        }
+        default:
+            break;
+    }
+
+    uint8 tab = recvData.read<uint8>();
+    uint8 slot = recvData.read<uint8>();
+    uint8 containerItemSlot = recvData.read<uint8>();
+    uint32 count = 0;
+    bool toChar = false;
+    switch (opcode)
+    {
+        case CMSG_MERGE_ITEM_WITH_GUILD_BANK_ITEM:
+        case CMSG_SPLIT_ITEM_TO_GUILD_BANK:
+            count = recvData.read<uint32>();
+            break;
+        case CMSG_MERGE_GUILD_BANK_ITEM_WITH_ITEM:
+        case CMSG_SPLIT_GUILD_BANK_ITEM_TO_INVENTORY:
+            count = recvData.read<uint32>();
+            toChar = true;
+            break;
+        case CMSG_STORE_GUILD_BANK_ITEM:
+            toChar = true;
+            break;
+        default:                                            // AUTO_GUILD_BANK_ITEM, SWAP_ITEM_WITH_GUILD_BANK_ITEM
+            break;
+    }
+    bool hasContainer = recvData.ReadBit();
+    recvData.ResetBitReader();
+    uint8 containerSlot = hasContainer ? recvData.read<uint8>() : uint8(0xFF);
+
+    uint8 playerBag, playerSlot;
+    ServerItemPos(containerSlot, containerItemSlot, playerBag, playerSlot);
+
+    // Player <-> Bank. Allow to work with inventory only
+    if (!Player::IsInventoryPos(playerBag, playerSlot))
+        GetPlayer()->SendEquipError(EQUIP_ERR_NONE, nullptr);
+    else
+        guild->SwapItemsWithInventory(GetPlayer(), toChar, tab, slot, playerBag, playerSlot, count);
 }

@@ -130,6 +130,7 @@ namespace WorldPackets
         class AcceptGuildInvite;
         class GuildDeclineInvitation;
         class GuildGetRoster;
+        class GuildGetRanks;
         class GuildPromoteMember;
         class GuildDemoteMember;
         class GuildOfficerRemoveMember;
@@ -330,6 +331,10 @@ enum PlayerInteractionType : uint32
     PLAYER_INTERACTION_BANKER           = 8,
     PLAYER_INTERACTION_MAIL_INFO        = 17,
     PLAYER_INTERACTION_SPIRIT_HEALER    = 18,
+    PLAYER_INTERACTION_GUILD_BANKER     = 10,
+    PLAYER_INTERACTION_REGISTRAR        = 11,
+    PLAYER_INTERACTION_PETITION_VENDOR  = 13,
+    PLAYER_INTERACTION_GUILD_TABARD_VENDOR = 14,
     PLAYER_INTERACTION_BINDER           = 20,
     PLAYER_INTERACTION_STABLE_MASTER    = 22
 };
@@ -892,6 +897,8 @@ public:                                                 // opcodes handlers
     void HandleGuildDeclineOpcode(WorldPackets::Guild::GuildDeclineInvitation& decline);
     void HandleGuildEventLogQueryOpcode(WorldPackets::Guild::GuildEventLogQuery& packet);
     void HandleGuildRosterOpcode(WorldPackets::Guild::GuildGetRoster& packet);
+    void HandleGuildGetRanksOpcode(WorldPackets::Guild::GuildGetRanks& packet);
+    void HandleGuildBankMoveItem(WorldPacket& recvData);
     void HandleGuildPromoteOpcode(WorldPackets::Guild::GuildPromoteMember& promote);
     void HandleGuildDemoteOpcode(WorldPackets::Guild::GuildDemoteMember& demote);
     void HandleGuildLeaveOpcode(WorldPackets::Guild::GuildLeave& leave);
@@ -899,7 +906,6 @@ public:                                                 // opcodes handlers
     void HandleGuildLeaderOpcode(WorldPackets::Guild::GuildSetGuildMaster& packet);
     void HandleGuildMOTDOpcode(WorldPackets::Guild::GuildUpdateMotdText& packet);
     void HandleGuildSetPublicNoteOpcode(WorldPackets::Guild::GuildSetMemberNote& packet);
-    void HandleGuildSetOfficerNoteOpcode(WorldPackets::Guild::GuildSetMemberNote& packet);
     void HandleGuildRankOpcode(WorldPackets::Guild::GuildSetRankPermissions& packet);
     void HandleGuildAddRankOpcode(WorldPackets::Guild::GuildAddRank& packet);
     void HandleGuildDelRankOpcode(WorldPackets::Guild::GuildDeleteRank& packet);

@@ -28,37 +28,57 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "PacketGuid128.h"
+
+/// SMSG_PETITION_SHOW_SIGNATURES, 3.4.3 (FUN_1406c73a0, handler FUN_141bd99a0): PackedGuid128 Item, PackedGuid128 Owner,
+/// PackedGuid128 OwnerAccountID, u32 PetitionID, u32 count, {PackedGuid128 Signer, u32 Choice}
+static void BuildPetitionSignatures(WorldPacket& data, ObjectGuid petitionGuid, ObjectGuid owner, uint32 petitionId, Signatures const* signatures)
+{
+    uint32 signs = signatures ? uint32(signatures->signatureMap.size()) : 0;
+    data.Initialize(SMSG_PETITION_SHOW_SIGNATURES, 18 * 3 + 8 + signs * 22);
+    Guid128::Write(data, petitionGuid);
+    Guid128::WritePlayer(data, owner);
+    Guid128::Write(data, ObjectGuid::Empty);            // OwnerAccountID
+    data << uint32(petitionId);
+    data << uint32(signs);
+    if (signatures)
+        for (auto const& [signer, account] : signatures->signatureMap)
+        {
+            Guid128::WritePlayer(data, signer);
+            data << uint32(0);                              // Choice
+        }
+}
+
+/// SMSG_PETITION_SIGN_RESULTS, 3.4.3 (FUN_1406c74d0, handler FUN_141bd9ab0): PackedGuid128 Item, PackedGuid128 Player,
+/// 4-bit Error (PetitionSigns), flush
+static void BuildPetitionSignResult(WorldPacket& data, ObjectGuid petitionGuid, ObjectGuid player, uint8 result)
+{
+    data.Initialize(SMSG_PETITION_SIGN_RESULTS, 18 * 2 + 1);
+    Guid128::Write(data, petitionGuid);
+    Guid128::WritePlayer(data, player);
+    data.WriteBits(result, 4);
+    data.FlushBits();
+}
+
+/// SMSG_TURN_IN_PETITION_RESULT, 3.4.3 (FUN_1406b6520, handler FUN_141bd9d70): 4-bit Result (PetitionTurns), flush
+static void SendTurnInPetitionResult(WorldSession* session, uint8 result)
+{
+    WorldPacket data(SMSG_TURN_IN_PETITION_RESULT, 1);
+    data.WriteBits(result, 4);
+    data.FlushBits();
+    session->SendPacket(&data);
+}
 
 void WorldSession::HandlePetitionBuyOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_PETITION_BUY");
 
-    ObjectGuid guidNPC;
-    uint32 clientIndex;                                     // 1 for guild and arenaslot+1 for arenas in client
-    std::string name;
-
-    recvData >> guidNPC;                                   // NPC GUID
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint64>();                          // 0
-    recvData >> name;                                      // name
-    recvData.read_skip<std::string>();                     // some string
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint16>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-    recvData.read_skip<uint32>();                          // 0
-
-    for (int i = 0; i < 10; ++i)
-        recvData.read_skip<std::string>();
-
-    recvData >> clientIndex;                               // index
-    recvData.read_skip<uint32>();                          // 0
+    // 3.4.3 (writer FUN_14075f230): 7-bit title length, flush, PackedGuid128 Unit, u32 Index (SHOW_LIST's), the title
+    uint32 titleLength = recvData.ReadBits(7);
+    recvData.ResetBitReader();
+    ObjectGuid guidNPC = Guid128::Read(recvData);
+    uint32 clientIndex = recvData.read<uint32>();           // 1 for guild and arenaslot+1 for arenas in client
+    std::string name = recvData.ReadString(titleLength);
 
     LOG_DEBUG("network", "Petitioner ({}) tried sell petition: name {}", guidNPC.ToString(), name);
 
@@ -237,8 +257,8 @@ void WorldSession::HandlePetitionShowSignOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_PETITION_SHOW_SIGNATURES");
 
-    ObjectGuid petitionguid;
-    recvData >> petitionguid;                              // petition guid
+    // 3.4.3 (writer FUN_14075f330): PackedGuid128 Item
+    ObjectGuid petitionguid = Guid128::Read(recvData);
 
     // solve (possible) some strange compile problems with explicit use petition low guid at some GCC versions (wrong code optimization in compiler?)
     Petition const* petition = sPetitionMgr->GetPetition(petitionguid);
@@ -256,19 +276,9 @@ void WorldSession::HandlePetitionShowSignOpcode(WorldPacket& recvData)
 
     LOG_DEBUG("network", "CMSG_PETITION_SHOW_SIGNATURES petition {}", petitionguid.ToString());
 
-    WorldPacket data(SMSG_PETITION_SHOW_SIGNATURES, (8 + 8 + 4 + 1 + signs * 12));
-    data << petitionguid;                                   // petition guid
-    data << _player->GetGUID();                             // owner guid
-    data << uint32(petition->petitionId);                   // guild/team id (31-bit safe)
-    data << uint8(signs);                                   // sign's count
-
-    if (signs)
-        for (SignatureMap::const_iterator itr = signatures->signatureMap.begin(); itr != signatures->signatureMap.end(); ++itr)
-        {
-            data << itr->first;                                 // Player GUID
-            data << uint32(0);                                  // there 0 ...
-        }
-
+    (void)signs;
+    WorldPacket data;
+    BuildPetitionSignatures(data, petitionguid, petition->ownerGuid, petition->petitionId, signatures);
     SendPacket(&data);
 }
 
@@ -276,59 +286,61 @@ void WorldSession::HandlePetitionQueryOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_QUERY_PETITION");   // ok
 
-    ObjectGuid::LowType guildguid;
-    ObjectGuid petitionguid;
-    recvData >> guildguid;                                 // in Trinity always same as petition low guid
-    recvData >> petitionguid;                              // petition guid
+    // 3.4.3 (writer FUN_14075f610): u32 PetitionID, PackedGuid128 ItemGUID
+    uint32 guildguid = recvData.read<uint32>();
+    ObjectGuid petitionguid = Guid128::Read(recvData);
     LOG_DEBUG("network", "CMSG_QUERY_PETITION Petition ({}) Guild GUID {}", petitionguid.ToString(), guildguid);
 
     SendPetitionQueryOpcode(petitionguid);
 }
 
+/// SMSG_QUERY_PETITION_RESPONSE, 3.4.3 (cache switch FUN_140721aa0, handler FUN_140345b50): u32 PetitionID, bit Allow,
+/// flush, [PetitionInfo (FUN_14070e110): u32 PetitionID, PackedGuid128 Petitioner, u32 MinSignatures, MaxSignatures,
+/// DeadLine, IssueDate, AllowedGuildID, AllowedClasses, AllowedRaces, u16 AllowedGender, u32 AllowedMinLevel,
+/// AllowedMaxLevel, NumChoices, StaticType (0 guild, 1 arena), Muid, 7-bit title, 12-bit body and 10 x 6-bit choice
+/// lengths, flush, the choices, the title, the body]
 void WorldSession::SendPetitionQueryOpcode(ObjectGuid petitionguid)
 {
     Petition const* petition = sPetitionMgr->GetPetition(petitionguid);
     if (!petition)
     {
         LOG_DEBUG("network", "CMSG_QUERY_PETITION failed for petition ({})", petitionguid.ToString());
+        WorldPacket data(SMSG_QUERY_PETITION_RESPONSE, 5);
+        data << uint32(0);
+        data.WriteBit(false);
+        data.FlushBits();
+        SendPacket(&data);
         return;
     }
 
     uint8 type = petition->petitionType;
-    WorldPacket data(SMSG_QUERY_PETITION_RESPONSE, (4 + 8 + petition->petitionName.size() + 1 + 1 + 4 * 12 + 2 + 10));
-    data << uint32(petition->petitionId);                   // guild/team id (was item low guid)
-    data << petition->ownerGuid;                            // charter owner guid
-    data << petition->petitionName;                         // name (guild/arena team)
-    data << uint8(0);                                       // some string
-    if (type == GUILD_CHARTER_TYPE)
-    {
-        uint32 needed = sWorld->getIntConfig(CONFIG_MIN_PETITION_SIGNS);
-        data << uint32(needed);
-        data << uint32(needed);
-        data << uint32(0);                                  // bypass client - side limitation, a different value is needed here for each petition
-    }
-    else
-    {
-        data << uint32(type - 1);
-        data << uint32(type - 1);
-        data << uint32(type);                               // bypass client - side limitation, a different value is needed here for each petition
-    }
-    data << uint32(0);                                      // 5
-    data << uint32(0);                                      // 6
-    data << uint32(0);                                      // 7
-    data << uint32(0);                                      // 8
-    data << uint16(0);                                      // 9 2 bytes field
-    data << uint32(0);                                      // 10
-    data << uint32(0);                                      // 11
-    data << uint32(0);                                      // 13 count of next strings?
-
-    for (int i = 0; i < 10; ++i)
-        data << uint8(0);                                   // some string
-
-    data << uint32(0);                                      // 14
-
-    data << uint32(type != GUILD_CHARTER_TYPE);             // 15 0 - guild, 1 - arena team
-
+    uint32 needed = type == GUILD_CHARTER_TYPE ? sWorld->getIntConfig(CONFIG_MIN_PETITION_SIGNS) : uint32(type - 1);
+    std::string_view title = std::string_view(petition->petitionName).substr(0, 127);
+    WorldPacket data(SMSG_QUERY_PETITION_RESPONSE, 5 + 18 + 60 + 10 + title.size());
+    data << uint32(petition->petitionId);
+    data.WriteBit(true);                                    // Allow
+    data.FlushBits();
+    data << uint32(petition->petitionId);
+    Guid128::WritePlayer(data, petition->ownerGuid);
+    data << uint32(needed);                                 // MinSignatures
+    data << uint32(needed);                                 // MaxSignatures
+    data << uint32(0);                                      // DeadLine
+    data << uint32(0);                                      // IssueDate
+    data << uint32(0);                                      // AllowedGuildID
+    data << uint32(0);                                      // AllowedClasses
+    data << uint32(0);                                      // AllowedRaces
+    data << uint16(0);                                      // AllowedGender
+    data << uint32(0);                                      // AllowedMinLevel
+    data << uint32(0);                                      // AllowedMaxLevel
+    data << uint32(0);                                      // NumChoices
+    data << uint32(type != GUILD_CHARTER_TYPE);             // StaticType: 0 guild, 1 arena team
+    data << uint32(0);                                      // Muid
+    data.WriteBits(title.size(), 7);
+    data.WriteBits(0, 12);                                  // BodyText
+    for (uint8 i = 0; i < 10; ++i)
+        data.WriteBits(0, 6);                               // choices
+    data.FlushBits();
+    data.WriteString(title);
     SendPacket(&data);
 }
 
@@ -336,11 +348,11 @@ void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_PETITION_RENAME_GUILD");   // ok
 
-    ObjectGuid petitionGuid;
-    std::string newName;
-
-    recvData >> petitionGuid;                              // guid
-    recvData >> newName;                                   // new name
+    // 3.4.3 (writer FUN_140768770): PackedGuid128 PetitionGuid, 7-bit name length, flush, the name
+    ObjectGuid petitionGuid = Guid128::Read(recvData);
+    uint32 nameLength = recvData.ReadBits(7);
+    recvData.ResetBitReader();
+    std::string newName = recvData.ReadString(nameLength);
 
     Item* item = _player->GetItemByGuid(petitionGuid);
     if (!item)
@@ -391,9 +403,14 @@ void WorldSession::HandlePetitionRenameOpcode(WorldPacket& recvData)
     const_cast<Petition*>(petition)->petitionName = newName;
 
     LOG_DEBUG("network", "Petition ({}) renamed to {}", petitionGuid.ToString(), newName);
-    WorldPacket data(SMSG_PETITION_RENAME_GUILD_RESPONSE, (8 + newName.size() + 1));
-    data << petitionGuid;
-    data << newName;
+    // SMSG_PETITION_RENAME_GUILD_RESPONSE, 3.4.3 (inline, handler FUN_14170e6e0): PackedGuid128 PetitionGuid, 7-bit name
+    // length, flush, the name
+    std::string_view nameView = std::string_view(newName).substr(0, 127);
+    WorldPacket data(SMSG_PETITION_RENAME_GUILD_RESPONSE, 18 + 1 + nameView.size());
+    Guid128::Write(data, petitionGuid);
+    data.WriteBits(nameView.size(), 7);
+    data.FlushBits();
+    data.WriteString(nameView);
     SendPacket(&data);
 }
 
@@ -401,10 +418,9 @@ void WorldSession::HandlePetitionSignOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_SIGN_PETITION");    // ok
 
-    ObjectGuid petitionGuid;
-    uint8 unk;
-    recvData >> petitionGuid;                              // petition guid
-    recvData >> unk;
+    // 3.4.3 (writer FUN_140760b20): PackedGuid128 PetitionGUID, u8 Choice
+    ObjectGuid petitionGuid = Guid128::Read(recvData);
+    recvData.read_skip<uint8>();
 
     Petition const* petition = sPetitionMgr->GetPetition(petitionGuid);
     if (!petition)
@@ -498,10 +514,8 @@ void WorldSession::HandlePetitionSignOpcode(WorldPacket& recvData)
 
     if (found)
     {
-        WorldPacket data(SMSG_PETITION_SIGN_RESULTS, (8 + 8 + 4));
-        data << petitionGuid;
-        data << playerGuid;
-        data << (uint32)PETITION_SIGN_ALREADY_SIGNED;
+        WorldPacket data;
+        BuildPetitionSignResult(data, petitionGuid, playerGuid, PETITION_SIGN_ALREADY_SIGNED);
 
         // close at signer side
         SendPacket(&data);
@@ -526,10 +540,8 @@ void WorldSession::HandlePetitionSignOpcode(WorldPacket& recvData)
 
     LOG_DEBUG("network", "PETITION SIGN: {} by player: {} ({}, Account: {})", petitionGuid.ToString(), _player->GetName(), playerGuid.ToString(), GetAccountId());
 
-    WorldPacket data(SMSG_PETITION_SIGN_RESULTS, (8 + 8 + 4));
-    data << petitionGuid;
-    data << playerGuid;
-    data << uint32(PETITION_SIGN_OK);
+    WorldPacket data;
+    BuildPetitionSignResult(data, petitionGuid, playerGuid, PETITION_SIGN_OK);
 
     // close at signer side
     SendPacket(&data);
@@ -548,33 +560,20 @@ void WorldSession::HandlePetitionDeclineOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_DECLINE_PETITION");  // ok
 
-    ObjectGuid petitionguid;
-    ObjectGuid ownerguid;
-    recvData >> petitionguid;                              // petition guid
+    // 3.4.3 (writer FUN_14075d260): PackedGuid128 PetitionGUID. There is no "petition declined" message for the owner.
+    ObjectGuid petitionguid = Guid128::Read(recvData);
     LOG_DEBUG("network", "Petition {} declined by {}", petitionguid.ToString(), _player->GetGUID().ToString());
-
-    Petition const* petition = sPetitionMgr->GetPetition(petitionguid);
-    if (!petition)
-        return;
-
-    if (Player* owner = ObjectAccessor::FindConnectedPlayer(ownerguid))                 // petition owner online
-    {
-        WorldPacket data(CMSG_DECLINE_PETITION, 8);
-        data << _player->GetGUID();
-        owner->SendDirectMessage(&data);
-    }
 }
 
 void WorldSession::HandleOfferPetitionOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_OFFER_PETITION");   // ok
 
-    ObjectGuid petitionguid, plguid;
-    uint32 junk;
+    // 3.4.3 (writer FUN_14075ee50): u32, PackedGuid128 ItemGUID, PackedGuid128 TargetPlayer
     Player* player;
-    recvData >> junk;                                      // this is not petition type!
-    recvData >> petitionguid;                              // petition guid
-    recvData >> plguid;                                    // player guid
+    recvData.read_skip<uint32>();
+    ObjectGuid petitionguid = Guid128::Read(recvData);
+    ObjectGuid plguid = Guid128::Read(recvData);
 
     player = ObjectAccessor::FindConnectedPlayer(plguid);
     if (!player)
@@ -638,21 +637,9 @@ void WorldSession::HandleOfferPetitionOpcode(WorldPacket& recvData)
     }
 
     Signatures const* signatures = sPetitionMgr->GetSignature(petitionguid);
-    uint8 signs = signatures ? signatures->signatureMap.size() : 0;
 
-    WorldPacket data(SMSG_PETITION_SHOW_SIGNATURES, (8 + 8 + 4 + signs + signs * 12));
-    data << petitionguid;                                   // petition guid
-    data << _player->GetGUID();                             // owner guid
-    data << uint32(petition->petitionId);                   // guild/team id (31-bit safe)
-    data << uint8(signs);                                   // sign's count
-
-    if (signs)
-        for (SignatureMap::const_iterator itr = signatures->signatureMap.begin(); itr != signatures->signatureMap.end(); ++itr)
-        {
-            data << itr->first;                                 // Player GUID
-            data << uint32(0);                                  // there 0 ...
-        }
-
+    WorldPacket data;
+    BuildPetitionSignatures(data, petitionguid, _player->GetGUID(), petition->petitionId, signatures);
     player->SendDirectMessage(&data);
 }
 
@@ -660,11 +647,14 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received opcode CMSG_TURN_IN_PETITION");
 
-    // Get petition guid from packet
-    WorldPacket data;
-    ObjectGuid petitionGuid;
-
-    recvData >> petitionGuid;
+    // 3.4.3 (writer FUN_140761340): PackedGuid128 Item, u32 BackgroundColor, EmblemStyle, EmblemColor, BorderStyle,
+    // BorderColor (the arena banner; 0xFFFFFFFF for a guild charter)
+    ObjectGuid petitionGuid = Guid128::Read(recvData);
+    uint32 background = recvData.read<uint32>();
+    uint32 icon = recvData.read<uint32>();
+    uint32 iconcolor = recvData.read<uint32>();
+    uint32 border = recvData.read<uint32>();
+    uint32 bordercolor = recvData.read<uint32>();
 
     // Check if player really has the required petition charter
     Item* item = _player->GetItemByGuid(petitionGuid);
@@ -701,9 +691,7 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
         // Check if player is already in a guild
         if (_player->GetGuildId())
         {
-            data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
-            data << (uint32)PETITION_TURN_ALREADY_IN_GUILD;
-            SendPacket(&data);
+            SendTurnInPetitionResult(this, PETITION_TURN_ALREADY_IN_GUILD);
             return;
         }
 
@@ -752,9 +740,7 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     // Notify player if signatures are missing
     if (signs < requiredSignatures)
     {
-        data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
-        data << (uint32)PETITION_TURN_NEED_MORE_SIGNATURES;
-        SendPacket(&data);
+        SendTurnInPetitionResult(this, PETITION_TURN_NEED_MORE_SIGNATURES);
         return;
     }
 
@@ -786,10 +772,6 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     }
     else
     {
-        // Receive the rest of the packet in arena team creation case
-        uint32 background, icon, iconcolor, border, bordercolor;
-        recvData >> background >> icon >> iconcolor >> border >> bordercolor;
-
         // Create arena team
         ArenaTeam* arenaTeam = new ArenaTeam();
 
@@ -830,17 +812,15 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     // created
     LOG_DEBUG("network", "TURN IN PETITION {}", petitionGuid.ToString());
 
-    data.Initialize(SMSG_TURN_IN_PETITION_RESULT, 4);
-    data << (uint32)PETITION_TURN_OK;
-    SendPacket(&data);
+    SendTurnInPetitionResult(this, PETITION_TURN_OK);
 }
 
 void WorldSession::HandlePetitionShowListOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "Received CMSG_PETITION_SHOW_LIST");
 
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075f2f0): PackedGuid128 PetitionUnit
+    ObjectGuid guid = Guid128::Read(recvData);
 
     SendPetitionShowList(guid);
 }
@@ -854,8 +834,16 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
         return;
     }
 
-    WorldPacket data(SMSG_PETITION_SHOW_LIST, 8 + 1 + 4 * 6);
-    data << guid;                                           // npc guid
+    // SMSG_PETITION_SHOW_LIST, 3.4.3 (FUN_1406c7250, handler FUN_141bb6150): PackedGuid128 Unit, u32 count, {u32 Index
+    // (echoed by CMSG_PETITION_BUY), u32 Cost, u32 CharterEntry, u32 IsArena (0 the guild registrar frame), u32
+    // ArenaType / required signatures}
+    WorldPacket data(SMSG_PETITION_SHOW_LIST, 18 + 4 + 3 * 20);
+    Guid128::Write(data, guid);
+
+    auto writeEntry = [&](uint32 index, uint32 cost, uint32 entry, uint32 isArena, uint32 arenaType)
+    {
+        data << uint32(index) << uint32(cost) << uint32(entry) << uint32(isArena) << uint32(arenaType);
+    };
 
     // For guild default
     uint32 CharterEntry = GUILD_CHARTER;
@@ -865,59 +853,23 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
     if (creature->IsTabardDesigner())
     {
         sScriptMgr->OnPlayerPetitionShowList(_player, creature, CharterEntry, CharterDispayID, CharterCost);
-
-        data << uint8(1);                                   // count
-        data << uint32(1);                                  // index
-        data << CharterEntry;                               // charter entry
-        data << CharterDispayID;                            // charter display id
-        data << CharterCost;                                // charter cost
-        data << uint32(0);                                  // unknown
-        data << uint32(sWorld->getIntConfig(CONFIG_MIN_PETITION_SIGNS)); // required signs
+        data << uint32(1);
+        writeEntry(1, CharterCost, CharterEntry, 0, sWorld->getIntConfig(CONFIG_MIN_PETITION_SIGNS));
     }
     else
     {
-        // For 2v2 default
-        CharterEntry = ARENA_TEAM_CHARTER_2v2;
-        CharterDispayID = CHARTER_DISPLAY_ID;
-        CharterCost = sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_2v2);
-
-        // 2v2
-        data << uint8(3);                                   // count
-        sScriptMgr->OnPlayerPetitionShowList(_player, creature, CharterEntry, CharterDispayID, CharterCost);
-        data << uint32(1);                                  // index
-        data << CharterEntry;                               // charter entry
-        data << CharterDispayID;                            // charter display id
-        data << CharterCost;                                // charter cost
-        data << uint32(2);                                  // unknown
-        data << uint32(2);                                  // required signs?
-
-        // For 3v3 default
-        CharterEntry = ARENA_TEAM_CHARTER_3v3;
-        CharterDispayID = CHARTER_DISPLAY_ID;
-        CharterCost = sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_3v3);
-
-        // 3v3
-        sScriptMgr->OnPlayerPetitionShowList(_player, creature, CharterEntry, CharterDispayID, CharterCost);
-        data << uint32(2);                                  // index
-        data << CharterEntry;                               // charter entry
-        data << CharterDispayID;                            // charter display id
-        data << CharterCost;                                // charter cost
-        data << uint32(3);                                  // unknown
-        data << uint32(3);                                  // required signs?
-
-        // For 3v3 default
-        CharterEntry = ARENA_TEAM_CHARTER_5v5;
-        CharterDispayID = CHARTER_DISPLAY_ID;
-        CharterCost = sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_5v5);
-
-        // 5v5
-        sScriptMgr->OnPlayerPetitionShowList(_player, creature, CharterEntry, CharterDispayID, CharterCost);
-        data << uint32(3);                                  // index
-        data << CharterEntry;                               // charter entry
-        data << CharterDispayID;                            // charter display id
-        data << CharterCost;                                // charter cost
-        data << uint32(5);                                  // unknown
-        data << uint32(5);                                  // required signs?
+        data << uint32(3);
+        uint32 const charters[3] = { ARENA_TEAM_CHARTER_2v2, ARENA_TEAM_CHARTER_3v3, ARENA_TEAM_CHARTER_5v5 };
+        uint32 const costs[3] = { sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_2v2), sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_3v3), sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_5v5) };
+        uint32 const types[3] = { 2, 3, 5 };
+        for (uint8 i = 0; i < 3; ++i)
+        {
+            CharterEntry = charters[i];
+            CharterDispayID = CHARTER_DISPLAY_ID;
+            CharterCost = costs[i];
+            sScriptMgr->OnPlayerPetitionShowList(_player, creature, CharterEntry, CharterDispayID, CharterCost);
+            writeEntry(i + 1, CharterCost, CharterEntry, 1, types[i]);
+        }
     }
 
     SendPacket(&data);

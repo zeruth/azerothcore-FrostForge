@@ -179,7 +179,7 @@ enum PetitionSigns
     PETITION_SIGN_ALREADY_SIGNED        = 1,
     PETITION_SIGN_ALREADY_IN_GUILD      = 2,
     PETITION_SIGN_CANT_SIGN_OWN         = 3,
-    PETITION_SIGN_NOT_SERVER            = 4
+    PETITION_SIGN_NOT_SERVER       = 5    // 3.4.3's number (handler FUN_141bd9ab0)
 };
 
 enum GuildBankRights
@@ -698,6 +698,7 @@ public:
 
     // Handle client commands
     void HandleRoster(WorldSession* session);
+    void SendRanks(WorldSession* session) const;
     void HandleQuery(WorldSession* session);
     void HandleSetMOTD(WorldSession* session, std::string_view motd);
     void HandleSetInfo(WorldSession* session, std::string_view info);
@@ -874,6 +875,7 @@ private:
     void _SendBankContentUpdate(uint8 tabId, SlotIds slots) const;
     void _SendBankList(WorldSession* session = nullptr, uint8 tabId = 0, bool sendFullSlots = false, SlotIds* slots = nullptr) const;
 
+    WorldPacket const* BuildEventMotd() const;
     void _BroadcastEvent(GuildEvents guildEvent, ObjectGuid guid = ObjectGuid::Empty, Optional<std::string_view> param1 = {}, Optional<std::string_view> param2 = {}, Optional<std::string_view> param3 = {}) const;
 };
 #endif

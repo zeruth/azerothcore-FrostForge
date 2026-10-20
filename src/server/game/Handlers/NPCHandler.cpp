@@ -49,8 +49,8 @@ enum StableResultCode
 
 void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_140763be0): PackedGuid128 Vendor; the client sends it itself on a tabard designer
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_TABARDDESIGNER);
     if (!unit)
@@ -66,11 +66,10 @@ void WorldSession::HandleTabardVendorActivateOpcode(WorldPacket& recvData)
     SendTabardVendorActivate(guid);
 }
 
+/// 3.4.3 has no SMSG_TABARD_VENDOR_ACTIVATE: the tabard frame opens on SMSG_NPC_INTERACTION_OPEN_RESULT type 14
 void WorldSession::SendTabardVendorActivate(ObjectGuid guid)
 {
-    WorldPacket data(CMSG_TABARD_VENDOR_ACTIVATE, 8);
-    data << guid;
-    SendPacket(&data);
+    SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_GUILD_TABARD_VENDOR, true);
 }
 
 void WorldSession::SendShowMailBox(ObjectGuid guid)
