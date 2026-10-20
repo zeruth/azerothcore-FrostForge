@@ -2083,17 +2083,9 @@ class spell_pvp_trinket_wotf_shared_cd : public SpellScript
             }
             else
             {
-                WorldPacket data(SMSG_SEND_KNOWN_SPELLS, (1 + 2 + 2 + 4 + 2 + 2 + 4 + 4));
-                data << uint8(0);
-                data << uint16(0);
-                data << uint16(1);
-                data << uint32(42292); // PvP Trinket spell
-                data << uint16(0);                 // cast item id
-                data << uint16(GetSpellInfo()->GetCategory());                   // spell category
-                data << uint32(0);
-                data << uint32(GetSpellInfo()->CategoryRecoveryTime);
-                player->SendDirectMessage(&data);
-
+                // 3.3.5 set the trinket's category cooldown through a one-spell SMSG_SEND_KNOWN_SPELLS;
+                // in 3.4.3 that packet replaces the whole spell list (handler FUN_1417149e0), so only
+                // the cooldown packet is sent.
                 WorldPacket data2;
                 player->BuildCooldownPacket(data2, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, SPELL_PVP_TRINKET, GetSpellInfo()->CategoryRecoveryTime); // PvP Trinket spell
                 player->SendDirectMessage(&data2);
