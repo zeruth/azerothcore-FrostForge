@@ -39,6 +39,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "OutdoorPvPMgr.h"
 #include "Pet.h"
 #include "Player.h"
@@ -353,9 +354,11 @@ void Spell::EffectInstaKill(SpellEffIndex /*effIndex*/)
     if (m_caster == unitTarget)                              // prevent interrupt message
         finish();
 
-    WorldPacket data(SMSG_SPELL_INSTAKILL_LOG, 8 + 8 + 4);
-    data << m_caster->GetGUID();
-    data << unitTarget->GetGUID();
+    // SMSG_SPELL_INSTAKILL_LOG, 3.4.3 (ClientSpell switch, inline): PackedGuid128 Target, PackedGuid128
+    // Caster, u32 SpellID
+    WorldPacket data(SMSG_SPELL_INSTAKILL_LOG, 18 + 18 + 4);
+    Guid128::Write(data, unitTarget->GetGUID());
+    Guid128::Write(data, m_caster->GetGUID());
     data << uint32(m_spellInfo->Id);
     m_caster->SendMessageToSet(&data, true);
 
@@ -2848,18 +2851,25 @@ void Spell::EffectDispel(SpellEffIndex effIndex)
     if (success_list.empty())
         return;
 
-    WorldPacket dataSuccess(SMSG_SPELL_DISPELL_LOG, 8 + 8 + 4 + 1 + 4 + success_list.size() * 5);
-    // Send packet header
-    dataSuccess << unitTarget->GetPackGUID();               // Victim GUID
-    dataSuccess << unitCaster->GetPackGUID();                 // Caster GUID
+    // SMSG_SPELL_DISPELL_LOG, 3.4.3 (FUN_1406cb320): bits IsSteal, IsBreak, flush, PackedGuid128 TargetGUID,
+    // CasterGUID, u32 DispelledBySpellID, u32 count, per spell {u32 SpellID, bits Harmful, HasRolled,
+    // HasNeeded, flush, [u32 Rolled], [u32 Needed]}
+    WorldPacket dataSuccess(SMSG_SPELL_DISPELL_LOG, 1 + 18 + 18 + 4 + 4 + success_list.size() * 5);
+    dataSuccess.WriteBit(false);                            // IsSteal
+    dataSuccess.WriteBit(false);                            // IsBreak
+    dataSuccess.FlushBits();
+    Guid128::Write(dataSuccess, unitTarget->GetGUID());     // Victim GUID
+    Guid128::Write(dataSuccess, unitCaster->GetGUID());     // Caster GUID
     dataSuccess << uint32(m_spellInfo->Id);                // dispel spell id
-    dataSuccess << uint8(0);                               // not used
     dataSuccess << uint32(success_list.size());            // count
     for (DispelChargesList::iterator itr = success_list.begin(); itr != success_list.end(); ++itr)
     {
         // Send dispelled spell info
         dataSuccess << uint32(itr->first->GetId());              // Spell Id
-        dataSuccess << uint8(0);                        // 0 - dispelled !=0 cleansed
+        dataSuccess.WriteBit(!itr->first->GetSpellInfo()->IsPositive());  // Harmful
+        dataSuccess.WriteBit(false);
+        dataSuccess.WriteBit(false);
+        dataSuccess.FlushBits();
         unitTarget->RemoveAurasDueToSpellByDispel(itr->first->GetId(), m_spellInfo->Id, itr->first->GetCasterGUID(), unitCaster, itr->second);
     }
     unitCaster->SendMessageToSet(&dataSuccess, true);

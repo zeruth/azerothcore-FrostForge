@@ -21,6 +21,7 @@
 #include "ByteBuffer.h"
 #include "ObjectGuid.h"
 #include "Optional.h"
+#include "PacketGuid128Raw.h"
 #include "Realm.h"
 #include "World.h"
 #include <limits>
@@ -227,6 +228,30 @@ namespace Guid128
     {
         uint64 low, high;
         ReadPacked(data, low, high);
+    }
+
+    inline Raw ReadRaw(ByteBuffer& data)
+    {
+        Raw raw;
+        ReadPacked(data, raw.Low, raw.High);
+        return raw;
+    }
+
+    inline void WriteRaw(ByteBuffer& data, Raw const& raw)
+    {
+        WritePacked(data, raw.Low, raw.High);
+    }
+
+    /// A spell cast's id (HighGuid Cast, 47): the client checks `high >> 58` for 47 on every cast it
+    /// tracks (SPELL_START / SPELL_GO / CAST_FAILED ...) and matches its own casts by the whole GUID.
+    /// The server's: TrinityCore's map-specific layout [inferred]: realm at bit 42, map at bit 29,
+    /// spell at bit 6, the cast source (3 = normal) under it, a counter in the low half.
+    inline Raw MakeCastId(uint32 mapId, uint32 spellId, uint64 counter)
+    {
+        Raw raw;
+        raw.High = (uint64(47) << 58) | RealmBits() | (uint64(mapId & 0x1FFF) << 29) | (uint64(spellId & 0x7FFFFF) << 6) | 3;
+        raw.Low = counter;
+        return raw;
     }
 }
 

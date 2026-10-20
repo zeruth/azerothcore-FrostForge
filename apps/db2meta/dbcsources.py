@@ -219,7 +219,11 @@ def source(meta, label: str, default: int = 0) -> str:
     if label == "zero":
         return "{ DBCSourceKind::Zero }"
     if isinstance(meta, dict):
-        # a joined store (meta is its result): Table.column[element]@effect
+        # a joined store (meta is its result): Table.id, the id of the record's row in that table
+        m = re.fullmatch(r"(\w+)\.id", label)
+        if m:
+            return f"{{ DBCSourceKind::RowId, 0, 0, {joined_tables(meta).index(m.group(1))} }}"
+        # Table.column[element]@effect
         m = re.fullmatch(r"(\w+)\.(\d+)(?:\[(\d+)\])?(?:@(\d+))?", label)
         if not m:
             raise SystemExit(f"{meta['struct']}: cannot read the source {label}")

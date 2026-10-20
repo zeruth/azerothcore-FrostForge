@@ -773,24 +773,27 @@ void AchievementMgr::SendAchievementEarned(AchievementEntry const* achievement) 
 
 void AchievementMgr::SendCriteriaUpdate(AchievementCriteriaEntry const* entry, CriteriaProgress const* progress, uint32 timeElapsed, bool timedCompleted) const
 {
-    WorldPacket data(SMSG_CRITERIA_UPDATE, 8 + 4 + 8);
+    // SMSG_CRITERIA_UPDATE, 3.4.3 (FUN_1406bcd10): u32 CriteriaID, u64 Quantity, PackedGuid128 PlayerGUID,
+    // u32 Unused, u32 Flags, u32 CurrentTime (packed), u64 ElapsedTime, u64 CreationTime, bit HasRafAcceptanceID,
+    // flush, [u64]
+    WorldPacket data(SMSG_CRITERIA_UPDATE, 4 + 8 + 18 + 4 + 4 + 4 + 8 + 8 + 1);
     data << uint32(entry->ID);
-
-    // the counter is packed like a packed Guid
-    data.appendPackGUID(progress->counter);
-
-    data << GetPlayer()->GetPackGUID();
+    data << uint64(progress->counter);
+    Guid128::Write(data, GetPlayer()->GetGUID());
+    data << uint32(0);
     if (!entry->timeLimit)
         data << uint32(0);
     else
         data << uint32(timedCompleted ? 0 : 1); // 1 is for keeping the counter at 0 in client
     data.AppendPackedTime(progress->date);
-    data << uint32(timeElapsed);    // time elapsed in seconds
+    data << uint64(timeElapsed);    // time elapsed in seconds
 
     if (sAchievementMgr->IsAverageCriteria(entry))
-        data << uint32(GameTime::GetGameTime().count() - GetPlayer()->GetCreationTime().count());    // for average achievements
+        data << uint64(GameTime::GetGameTime().count() - GetPlayer()->GetCreationTime().count());    // for average achievements
     else
-        data << uint32(timeElapsed);    // time elapsed in seconds
+        data << uint64(timeElapsed);    // time elapsed in seconds
+    data.WriteBit(false);
+    data.FlushBits();
 
     GetPlayer()->SendDirectMessage(&data);
 }

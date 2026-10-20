@@ -25,6 +25,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Pet.h"
 #include "PetPackets.h"
 #include "Player.h"
@@ -56,12 +57,12 @@ void WorldSession::HandleDismissCritter(WorldPackets::Pet::DismissCritter& packe
 
 void WorldSession::HandlePetAction(WorldPacket& recvData)
 {
-    ObjectGuid guid1;
-    uint32 data;
-    ObjectGuid guid2;
-    recvData >> guid1;                                     //pet guid
-    recvData >> data;
-    recvData >> guid2;                                     //tag guid
+    // 3.4.3 (writer FUN_14075efd0): PackedGuid128 PetGUID, u32 Action (the client's packing),
+    // PackedGuid128 TargetGUID, f32 ActionPosition X, Y, Z
+    ObjectGuid guid1 = Guid128::Read(recvData);            //pet guid
+    uint32 data = ServerUnitActionButton(recvData.read<uint32>());
+    ObjectGuid guid2 = Guid128::Read(recvData);            //tag guid
+    recvData.read_skip(12);
 
     uint32 spellId = UNIT_ACTION_BUTTON_ACTION(data);
     uint8 flag = UNIT_ACTION_BUTTON_TYPE(data);             //delete = 0x07 CastSpell = C1
@@ -697,10 +698,10 @@ void WorldSession::HandlePetSetAction(WorldPacket& recvData)
 {
     LOG_DEBUG("network.opcode", "HandlePetSetAction. CMSG_PET_SET_ACTION");
 
-    ObjectGuid petguid;
+    // 3.4.3 (writer FUN_14075f0e0): PackedGuid128 PetGUID, u32 Index, u32 Action, bit HasSecond, flush,
+    // [u32 Index, u32 Action]: the second pair when two buttons swap
+    ObjectGuid petguid = Guid128::Read(recvData);
     uint8  count;
-
-    recvData >> petguid;
 
     Unit* checkPet = ObjectAccessor::GetUnit(*_player, petguid);
     if (!checkPet || checkPet != _player->GetFirstControlled())
@@ -709,16 +710,21 @@ void WorldSession::HandlePetSetAction(WorldPacket& recvData)
         return;
     }
 
-    count = (recvData.size() == 24) ? 2 : 1;
-
     uint32 position[2];
     uint32 data[2];
     bool move_command = false;
 
+    position[0] = recvData.read<uint32>();
+    data[0] = ServerUnitActionButton(recvData.read<uint32>());
+    count = recvData.ReadBit() ? 2 : 1;
+    if (count == 2)
+    {
+        position[1] = recvData.read<uint32>();
+        data[1] = ServerUnitActionButton(recvData.read<uint32>());
+    }
+
     for (uint8 i = 0; i < count; ++i)
     {
-        recvData >> position[i];
-        recvData >> data[i];
 
         uint8 act_state = UNIT_ACTION_BUTTON_TYPE(data[i]);
 
@@ -1012,12 +1018,20 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
 {
     LOG_DEBUG("network", "WORLD: CMSG_PET_CAST_SPELL");
 
-    ObjectGuid guid;
-    uint8  castCount;
-    uint32 spellId;
-    uint8  castFlags;
+    // 3.4.3 (writer FUN_14075f0a0): PackedGuid128 PetGUID, SpellCastRequest
+    ObjectGuid guid = Guid128::Read(recvPacket);
+    Unit* requestCaster = ObjectAccessor::GetUnit(*_player, guid);
+    SpellCastRequest request;
+    SpellCastTargets targets;
+    if (!ReadSpellCastRequest(recvPacket, requestCaster ? requestCaster : _player, request, targets))
+    {
+        recvPacket.rfinish();
+        return;
+    }
 
-    recvPacket >> guid >> castCount >> spellId >> castFlags;
+    uint8 castCount = 1;
+    uint32 spellId = request.SpellID;
+    uint8 castFlags = request.SendCastFlags;
 
     LOG_DEBUG("network", "WORLD: CMSG_PET_CAST_SPELL, guid: {}, castCount: {}, spellId {}, castFlags {}", guid.ToString(), castCount, spellId, castFlags);
 
@@ -1044,15 +1058,13 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
     if (!caster->HasSpell(spellId) || spellInfo->IsPassive())
         return;
 
-    SpellCastTargets targets;
-    targets.Read(recvPacket, caster);
-    HandleClientCastFlags(recvPacket, castFlags, targets);
 
     bool SetFollow = caster->HasUnitState(UNIT_STATE_FOLLOW);
     caster->ClearUnitState(UNIT_STATE_FOLLOW);
 
     Spell* spell = new Spell(caster, spellInfo, TRIGGERED_NONE);
     spell->m_cast_count = castCount;                    // probably pending spell cast
+    spell->m_castId = request.CastID;
     spell->m_targets = targets;
     spell->LoadScripts();
 

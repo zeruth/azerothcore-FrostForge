@@ -392,14 +392,14 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
     /// @todo pets should be summoned from real cast instead of just faking it?
     if (petInfo->CreatedBySpellId && spellInfo && (spellInfo->CategoryRecoveryTime > 0 || spellInfo->RecoveryTime > 0))
     {
-        WorldPacket data(SMSG_SPELL_GO, (8 + 8 + 4 + 4 + 2));
-        data << owner->GetPackGUID();
-        data << owner->GetPackGUID();
-        data << uint8(0);
-        data << uint32(petInfo->CreatedBySpellId);
-        data << uint32(256); // CAST_FLAG_UNKNOWN3
-        data << uint32(0);
-        owner->SendMessageToSet(&data, true);
+        // 3.4.3 starts the summon's cooldown with SMSG_SPELL_COOLDOWN (the client takes the time from its
+        // SpellCooldowns.db2), where 3.3.5 faked a SMSG_SPELL_GO of the summon spell
+        if (Player* playerOwner = owner->ToPlayer())
+        {
+            WorldPacket data;
+            playerOwner->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, petInfo->CreatedBySpellId, 0);
+            playerOwner->SendDirectMessage(&data);
+        }
     }
 
     owner->SetMinion(this, true);
@@ -2455,9 +2455,12 @@ void Pet::RemoveSpellCooldown(uint32 spell_id, bool update /* = false */)
     {
         if (Player* playerOwner = GetCharmerOrOwnerPlayerOrPlayerItself())
         {
-            WorldPacket data(SMSG_CLEAR_COOLDOWN, 4 + 8);
+            // SMSG_CLEAR_COOLDOWN, 3.4.3: u32 SpellID, bit ClearOnHold, bit IsPet, flush
+            WorldPacket data(SMSG_CLEAR_COOLDOWN, 4 + 1);
             data << uint32(spell_id);
-            data << GetGUID();
+            data.WriteBit(false);
+            data.WriteBit(true);
+            data.FlushBits();
             playerOwner->SendDirectMessage(&data);
         }
     }

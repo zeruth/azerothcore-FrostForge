@@ -27,6 +27,7 @@ enum class DBCSourceKind : uint8
     Column,     // a column (and array element) of the client table
     Id,         // the record id
     ParentId,   // the parent id, from the file's relationship data or its parent column
+    RowId,      // a joined table: the id of the record's row in it
     Zero        // no 54261 source: 0, 0.0f or an empty string (dbcsources.json says why)
 };
 

@@ -226,7 +226,7 @@ bool DBCStorageBase::LoadDB2(char const* path, DBCSourceInfo const& sources, std
 
             DBCSource const& from = sources.Sources[source++];
             // (Record holds a reference: constructed, never assigned)
-            std::optional<DB2FileLoader::Record> record = from.Kind == DBCSourceKind::Column || from.Kind == DBCSourceKind::ParentId
+            std::optional<DB2FileLoader::Record> record = from.Kind == DBCSourceKind::Column || from.Kind == DBCSourceKind::ParentId || from.Kind == DBCSourceKind::RowId
                 ? rowOf(from, id) : std::nullopt;
 
             if (*format == FT_STRING)
@@ -261,6 +261,9 @@ bool DBCStorageBase::LoadDB2(char const* path, DBCSourceInfo const& sources, std
                     break;
                 case DBCSourceKind::Id:
                     value = id;
+                    break;
+                case DBCSourceKind::RowId:
+                    value = record ? record->getId() : from.Default;
                     break;
                 case DBCSourceKind::ParentId:
                     if (record)

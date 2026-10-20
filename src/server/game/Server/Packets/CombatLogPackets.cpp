@@ -16,14 +16,19 @@
  */
 
 #include "CombatLogPackets.h"
+#include "PacketGuid128.h"
 
 WorldPacket const* WorldPackets::CombatLog::EnvironmentalDamageLog::Write()
 {
-    _worldPacket << Victim;
+    // 3.4.3 (ClientSpell switch, inline): PackedGuid128 Victim, u8 Type, u32 Amount, u32 Resisted,
+    // u32 Absorbed, bit HasLogData, flush
+    Guid128::Write(_worldPacket, Victim);
     _worldPacket << uint8(Type);
     _worldPacket << uint32(Amount);
     _worldPacket << uint32(Resisted);
     _worldPacket << uint32(Absorbed);
+    _worldPacket.WriteBit(false);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }

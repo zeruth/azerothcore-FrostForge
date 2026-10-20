@@ -76,6 +76,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -2191,14 +2192,21 @@ void Unit::DealDamageShieldDamage(Unit* victim)
         Unit::DealDamageMods(this, damage, &absorb);
 
         /// @todo: Move this to a packet handler
-        WorldPacket data(SMSG_SPELL_DAMAGE_SHIELD, (8 + 8 + 4 + 4 + 4 + 4));
-        data << victim->GetGUID();
-        data << GetGUID();
+        // SMSG_SPELL_DAMAGE_SHIELD, 3.4.3 (ClientSpell switch, inline): PackedGuid128 Attacker (the shield's
+        // owner), PackedGuid128 Defender, u32 SpellID, u32 TotalDamage, u32 OriginalDamage, u32 OverKill,
+        // u32 SchoolMask, u32 LogAbsorbed, bit HasLogData, flush
+        WorldPacket data(SMSG_SPELL_DAMAGE_SHIELD, 18 + 18 + 6 * 4 + 1);
+        Guid128::Write(data, victim->GetGUID());
+        Guid128::Write(data, GetGUID());
         data << uint32(i_spellProto->Id);
         data << uint32(damage);                  // Damage
+        data << uint32(damage + absorb);         // OriginalDamage
         int32 overkill = int32(damage) - int32(GetHealth());
         data << uint32(overkill > 0 ? overkill : 0); // Overkill
         data << uint32(i_spellProto->GetSchoolMask());
+        data << uint32(absorb);
+        data.WriteBit(false);
+        data.FlushBits();
         victim->SendMessageToSet(&data, true);
 
         Unit::DealDamage(victim, this, damage, 0, SPELL_DIRECT_DAMAGE, i_spellProto->GetSchoolMask(), i_spellProto, true);
@@ -6463,13 +6471,41 @@ void Unit::RemoveAllGameObjects()
     }
 }
 
+/// SMSG_SPELL_NON_MELEE_DAMAGE_LOG, 3.4.3 (ClientSpell switch -> FUN_140706120): PackedGuid128 Me (the
+/// target), CasterGUID, CastID, u32 SpellID, u32 SpellXSpellVisualID, u32 Damage, u32 OriginalDamage,
+/// i32 Overkill (-1: none), u8 SchoolMask, u32 Absorbed, u32 Resisted, u32 ShieldBlock, bit Periodic, 7-bit
+/// Flags (SpellHitType), bits HasDebugInfo, HasLogData, HasContentTuning, flush.
+static void BuildSpellNonMeleeDamageLog(WorldPacket& data, SpellNonMeleeDamage const* log, ObjectGuid caster, uint32 damage, uint32 absorb)
+{
+    int32 overkill = int32(damage) - int32(log->target->GetHealth());
+    data.Initialize(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, 3 * 18 + 4 * 10 + 2);
+    Guid128::Write(data, log->target->GetGUID());
+    Guid128::Write(data, caster);
+    Guid128::WritePacked(data, 0, 0);                       // CastID
+    data << uint32(log->spellInfo->Id);
+    data << uint32(log->spellInfo->SpellVisual[1]);         // SpellXSpellVisualID
+    data << uint32(damage);
+    data << uint32(damage + absorb + log->resist + log->blocked);  // OriginalDamage
+    data << int32(overkill > 0 ? overkill : -1);
+    data << uint8(log->schoolMask);
+    data << uint32(absorb);
+    data << uint32(log->resist);
+    data << uint32(log->blocked);
+    data.WriteBit(false);                                   // Periodic
+    // the debug hit types gate nothing here: HasDebugInfo is its own bit
+    data.WriteBits(log->HitInfo & ~(SPELL_HIT_TYPE_CRIT_DEBUG | SPELL_HIT_TYPE_HIT_DEBUG | SPELL_HIT_TYPE_ATTACK_TABLE_DEBUG) & 0x7F, 7);
+    data.WriteBit(false);                                   // HasDebugInfo
+    data.WriteBit(false);                                   // HasLogData
+    data.WriteBit(false);                                   // HasContentTuning
+    data.FlushBits();
+}
+
 void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
 {
     // Xinef: function for players only, placed in unit because of cosmetics
     if (!IsPlayer())
         return;
 
-    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     // If we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our HP bar will not drop
     uint32 damage = log->damage;
     uint32 absorb = log->absorb;
@@ -6478,26 +6514,13 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
         absorb = damage;
         damage = 0;
     }
-    data << log->target->GetPackGUID();
-    data << attacker->GetPackGUID();
-    data << uint32(log->spellInfo->Id);
-    data << uint32(damage);                                 // damage amount
-    int32 overkill = damage - log->target->GetHealth();
-    data << uint32(overkill > 0 ? overkill : 0);            // overkill
-    data << uint8 (log->schoolMask);                        // damage school
-    data << uint32(absorb);                                 // AbsorbedDamage
-    data << uint32(log->resist);                            // resist
-    data << uint8 (log->physicalLog);                       // if 1, then client show spell name (example: %s's ranged shot hit %s for %u school or %s suffers %u school damage from %s's spell_name
-    data << uint8 (log->unused);                            // unused
-    data << uint32(log->blocked);                           // blocked
-    data << uint32(log->HitInfo);
-    data << uint8 (0);                                      // flag to use extend data
+    WorldPacket data;
+    BuildSpellNonMeleeDamageLog(data, log, attacker->GetGUID(), damage, absorb);
     ToPlayer()->SendDirectMessage(&data);
 }
 
 void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
 {
-    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
     uint32 damage = log->damage;
     uint32 absorb = log->absorb;
@@ -6506,39 +6529,8 @@ void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
         absorb = damage;
         damage = 0;
     }
-    data << log->target->GetPackGUID();
-    data << log->attacker->GetPackGUID();
-    data << uint32(log->spellInfo->Id);
-    data << uint32(damage);                                 // damage amount
-    int32 overkill = damage - log->target->GetHealth();
-    data << uint32(overkill > 0 ? overkill : 0);            // overkill
-    data << uint8 (log->schoolMask);                        // damage school
-    data << uint32(absorb);                                 // AbsorbedDamage
-    data << uint32(log->resist);                            // resist
-    data << uint8 (log->physicalLog);                       // if 1, then client show spell name (example: %s's ranged shot hit %s for %u school or %s suffers %u school damage from %s's spell_name
-    data << uint8 (log->unused);                            // unused
-    data << uint32(log->blocked);                           // blocked
-    data << uint32(log->HitInfo);
-    data << uint8(log->HitInfo & (SPELL_HIT_TYPE_CRIT_DEBUG | SPELL_HIT_TYPE_HIT_DEBUG | SPELL_HIT_TYPE_ATTACK_TABLE_DEBUG));
-    //if (log->HitInfo & SPELL_HIT_TYPE_CRIT_DEBUG)
-    //{
-    //    data << float(log->CritRoll);
-    //    data << float(log->CritNeeded);
-    //}
-    //if (log->HitInfo & SPELL_HIT_TYPE_HIT_DEBUG)
-    //{
-    //    data << float(log->HitRoll);
-    //    data << float(log->HitNeeded);
-    //}
-    //if (log->HitInfo & SPELL_HIT_TYPE_ATTACK_TABLE_DEBUG)
-    //{
-    //    data << float(log->MissChance);
-    //    data << float(log->DodgeChance);
-    //    data << float(log->ParryChance);
-    //    data << float(log->BlockChance);
-    //    data << float(log->GlanceChance);
-    //    data << float(log->CrushChance);
-    //}
+    WorldPacket data;
+    BuildSpellNonMeleeDamageLog(data, log, log->attacker->GetGUID(), damage, absorb);
     SendMessageToSet(&data, true);
 }
 
@@ -6598,77 +6590,95 @@ void Unit::ProcSkillsAndAuras(Unit* actor, Unit* victim, uint32 procAttacker, ui
 
 void Unit::SendPeriodicAuraLog(SpellPeriodicAuraLogInfo* pInfo)
 {
+    // SMSG_SPELL_PERIODIC_AURA_LOG, 3.4.3 (FUN_140706420): PackedGuid128 TargetGUID, CasterGUID, u32 SpellID,
+    // u32 effect count, bit HasLogData, flush, then per effect (FUN_1407163c0): u32 Effect (aura type),
+    // u32 Amount, u32 OriginalDamage, u32 OverHealOrKill, u32 SchoolMaskOrPower, u32 AbsorbedOrAmplitude,
+    // u32 Resisted, u32 supporter count, the supporters, bits Crit, HasDebugInfo, HasContentTuning, flush
     AuraEffect const* aura = pInfo->auraEff;
-    WorldPacket data(SMSG_SPELL_PERIODIC_AURA_LOG, 30);
-    data << GetPackGUID();
-    data << aura->GetCasterGUID().WriteAsPacked();
-    data << uint32(aura->GetId());                          // spellId
-    data << uint32(1);                                      // count
-    data << uint32(aura->GetAuraType());                    // auraId
+    uint32 amount = pInfo->damage, originalDamage = pInfo->damage, overHealOrKill = pInfo->overDamage;
+    uint32 schoolMaskOrPower = 0, absorbedOrAmplitude = 0, resisted = 0;
     switch (aura->GetAuraType())
     {
         case SPELL_AURA_PERIODIC_DAMAGE:
         case SPELL_AURA_PERIODIC_DAMAGE_PERCENT:
+            //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
+            absorbedOrAmplitude = pInfo->absorb;
+            if (IsPlayer() && ToPlayer()->GetCommandStatus(CHEAT_GOD))
             {
-                //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
-                uint32 damage = pInfo->damage;
-                uint32 absorb = pInfo->absorb;
-                if (IsPlayer() && ToPlayer()->GetCommandStatus(CHEAT_GOD))
-                {
-                    absorb = damage;
-                    damage = 0;
-                }
-
-                data << uint32(damage);                         // damage
-                data << uint32(pInfo->overDamage);              // overkill?
-                data << uint32(aura->GetSpellInfo()->GetSchoolMask());
-                data << uint32(absorb);                         // absorb
-                data << uint32(pInfo->resist);                  // resist
-                data << uint8(pInfo->critical);                 // new 3.1.2 critical tick
+                absorbedOrAmplitude = amount;
+                amount = 0;
             }
+            originalDamage = pInfo->damage + pInfo->absorb + pInfo->resist;
+            schoolMaskOrPower = aura->GetSpellInfo()->GetSchoolMask();
+            resisted = pInfo->resist;
             break;
         case SPELL_AURA_PERIODIC_HEAL:
         case SPELL_AURA_OBS_MOD_HEALTH:
-            data << uint32(pInfo->damage);                  // damage
-            data << uint32(pInfo->overDamage);              // overheal
-            data << uint32(pInfo->absorb);                  // absorb
-            data << uint8(pInfo->critical);                 // new 3.1.2 critical tick
+            schoolMaskOrPower = aura->GetSpellInfo()->GetSchoolMask();
+            absorbedOrAmplitude = pInfo->absorb;
             break;
         case SPELL_AURA_OBS_MOD_POWER:
         case SPELL_AURA_PERIODIC_ENERGIZE:
-            data << uint32(aura->GetMiscValue());           // power type
-            data << uint32(pInfo->damage);                  // damage
+            schoolMaskOrPower = uint32(aura->GetMiscValue());   // power type
+            overHealOrKill = 0;
             break;
         case SPELL_AURA_PERIODIC_MANA_LEECH:
-            data << uint32(aura->GetMiscValue());           // power type
-            data << uint32(pInfo->damage);                  // amount
-            data << float(pInfo->multiplier);               // gain multiplier
+            schoolMaskOrPower = uint32(aura->GetMiscValue());   // power type
+            absorbedOrAmplitude = std::bit_cast<uint32>(float(pInfo->multiplier));  // gain multiplier
+            overHealOrKill = 0;
             break;
         default:
             LOG_ERROR("entities.unit", "Unit::SendPeriodicAuraLog: unknown aura {}", uint32(aura->GetAuraType()));
             return;
     }
 
+    WorldPacket data(SMSG_SPELL_PERIODIC_AURA_LOG, 2 * 18 + 8 + 1 + 32 + 1);
+    Guid128::Write(data, GetGUID());
+    Guid128::Write(data, aura->GetCasterGUID());
+    data << uint32(aura->GetId());                          // spellId
+    data << uint32(1);                                      // count
+    data.WriteBit(false);                                   // HasLogData
+    data.FlushBits();
+    data << uint32(aura->GetAuraType());
+    data << uint32(amount);
+    data << uint32(originalDamage);
+    data << uint32(overHealOrKill);
+    data << uint32(schoolMaskOrPower);
+    data << uint32(absorbedOrAmplitude);
+    data << uint32(resisted);
+    data << uint32(0);                                      // supporters
+    data.WriteBit(pInfo->critical);
+    data.WriteBit(false);                                   // HasDebugInfo
+    data.WriteBit(false);                                   // HasContentTuning
+    data.FlushBits();
+
     SendMessageToSet(&data, true);
 }
 
 void Unit::SendSpellDamageResist(Unit* target, uint32 spellId)
 {
-    WorldPacket data(SMSG_PROC_RESIST, 8 + 8 + 4 + 1);
-    data << GetGUID();
-    data << target->GetGUID();
+    // SMSG_PROC_RESIST, 3.4.3 (FUN_1406c7f50): PackedGuid128 Caster, PackedGuid128 Target, u32 SpellID,
+    // bits HasRolled, HasNeeded, flush, [f32 Rolled], [f32 Needed]
+    WorldPacket data(SMSG_PROC_RESIST, 18 + 18 + 4 + 1);
+    Guid128::Write(data, GetGUID());
+    Guid128::Write(data, target->GetGUID());
     data << uint32(spellId);
-    data << uint8(0); // bool - log format: 0-default, 1-debug
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
 void Unit::SendSpellDamageImmune(Unit* target, uint32 spellId)
 {
-    WorldPacket data(SMSG_SPELL_OR_DAMAGE_IMMUNE, 8 + 8 + 4 + 1);
-    data << GetGUID();
-    data << target->GetGUID();
+    // SMSG_SPELL_OR_DAMAGE_IMMUNE, 3.4.3: PackedGuid128 CasterGUID, PackedGuid128 VictimGUID, u32 SpellID,
+    // bit IsPeriodic, flush
+    WorldPacket data(SMSG_SPELL_OR_DAMAGE_IMMUNE, 18 + 18 + 4 + 1);
+    Guid128::Write(data, GetGUID());
+    Guid128::Write(data, target->GetGUID());
     data << uint32(spellId);
-    data << uint8(0); // bool - log format: 0-default, 1-debug
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
@@ -6696,65 +6706,60 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
         ++count;
     }
 
-    std::size_t const maxsize = 4 + 5 + 5 + 4 + 4 + 1 + count * (4 + 4 + 4 + 4 + 4) + 1 + 4 + 4 + 4 + 4 + 4 * 12;
-    WorldPacket data(SMSG_ATTACKER_STATE_UPDATE, maxsize);            // we guess size
-    data << uint32(damageInfo->HitInfo);
-    data << damageInfo->attacker->GetPackGUID();
-    data << damageInfo->target->GetPackGUID();
-    data << uint32(tmpDamage[0] + tmpDamage[1]);                    // Full damage
-    int32 overkill = tmpDamage[0] + tmpDamage[1] - damageInfo->target->GetHealth();
-    data << uint32(overkill < 0 ? 0 : overkill);                    // Overkill
-    data << uint8(count);                                           // Sub damage count
+    // SMSG_ATTACKER_STATE_UPDATE, 3.4.3 (ClientCombat switch FUN_140724760): bit HasLogData, flush,
+    // [SpellCastLogData], u32 size, then the attack round (read by the handler, FUN_14182e0d0): u32 HitInfo,
+    // PackedGuid128 Attacker, Victim, u32 Damage, u32 OriginalDamage, i32 OverDamage (-1: none), u8 sub
+    // damage count (at most 5), per sub damage {u32 SchoolMask, f32 FDamage, u32 Damage, [u32 Absorbed if
+    // HitInfo & ABSORB], [u32 Resisted if HitInfo & RESIST]}, u8 VictimState, u32 AttackerState, u32
+    // MeleeSpellID, [u32 BlockAmount if BLOCK], [u32 RageGained if RAGE_GAIN], [20 x u32 if HitInfo & 0x1],
+    // [f32 if HitInfo & (BLOCK | 0x1000)], then 15 bytes of content tuning: u8 Type, TargetLevel,
+    // Expansion, TargetMinScalingLevel, TargetMaxScalingLevel, i16 PlayerLevelDelta, i8
+    // TargetScalingLevelDelta, u16 PlayerItemLevel, u32 ScalingHealthItemLevelCurveID, u8
+    // ScalesWithItemLevel (all 0: no scaling).
+    uint32 hitInfo = damageInfo->HitInfo & ~uint32(HITINFO_DEBUG); // 3.4.3 reads 20 dwords for it, AC has 12
+    uint32 totalDamage = tmpDamage[0] + tmpDamage[1];
+    int32 overkill = int32(totalDamage) - int32(damageInfo->target->GetHealth());
 
+    ByteBuffer round(64 + count * 20);
+    round << uint32(hitInfo);
+    Guid128::Write(round, damageInfo->attacker->GetGUID());
+    Guid128::Write(round, damageInfo->target->GetGUID());
+    round << uint32(totalDamage);                                   // Full damage
+    round << uint32(totalDamage + tmpAbsorb[0] + tmpAbsorb[1] + damageInfo->damages[0].resist + damageInfo->damages[1].resist + damageInfo->blocked_amount);
+    round << int32(overkill > 0 ? overkill : -1);                   // Overkill
+    round << uint8(count);                                          // Sub damage count
     for (uint32 i = 0; i < count; ++i)
     {
-        data << uint32(damageInfo->damages[i].damageSchoolMask);    // School of sub damage
-        data << float(tmpDamage[i]);                                // sub damage
-        data << uint32(tmpDamage[i]);                               // Sub Damage
+        round << uint32(damageInfo->damages[i].damageSchoolMask);   // School of sub damage
+        round << float(tmpDamage[i]);                               // sub damage
+        round << uint32(tmpDamage[i]);                              // Sub Damage
+        if (hitInfo & (HITINFO_FULL_ABSORB | HITINFO_PARTIAL_ABSORB))
+            round << uint32(tmpAbsorb[i]);                          // Absorb
+        if (hitInfo & (HITINFO_FULL_RESIST | HITINFO_PARTIAL_RESIST))
+            round << uint32(damageInfo->damages[i].resist);         // Resist
     }
 
-    if (damageInfo->HitInfo & (HITINFO_FULL_ABSORB | HITINFO_PARTIAL_ABSORB))
-    {
-        for (uint32 i = 0; i < count; ++i)
-        {
-            data << uint32(tmpAbsorb[i]);                           // Absorb
-        }
-    }
+    round << uint8(damageInfo->TargetState);
+    round << uint32(0);                                             // AttackerState
+    round << uint32(0);                                             // MeleeSpellID
 
-    if (damageInfo->HitInfo & (HITINFO_FULL_RESIST | HITINFO_PARTIAL_RESIST))
-    {
-        for (uint32 i = 0; i < count; ++i)
-        {
-            data << uint32(damageInfo->damages[i].resist);          // Resist
-        }
-    }
+    if (hitInfo & HITINFO_BLOCK)
+        round << uint32(damageInfo->blocked_amount);
 
-    data << uint8(damageInfo->TargetState);
-    data << uint32(0);  // Unknown attackerstate
-    data << uint32(0);  // Melee spellid
+    if (hitInfo & HITINFO_RAGE_GAIN)
+        round << uint32(0);
 
-    if (damageInfo->HitInfo & HITINFO_BLOCK)
-        data << uint32(damageInfo->blocked_amount);
+    if (hitInfo & (HITINFO_BLOCK | 0x1000))
+        round << float(0);
 
-    if (damageInfo->HitInfo & HITINFO_RAGE_GAIN)
-        data << uint32(0);
+    round << uint8(0) << uint8(0) << uint8(0) << uint8(0) << uint8(0);   // content tuning: Type, levels, expansion
+    round << int16(0) << int8(0) << uint16(0) << uint32(0) << uint8(0);
 
-    //! Probably used for debugging purposes, as it is not known to appear on retail servers
-    if (damageInfo->HitInfo & HITINFO_DEBUG)
-    {
-        data << uint32(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);
-        data << float(0);       // Found in a loop with 1 iteration
-        data << float(0);       // ditto ^
-        data << uint32(0);
-    }
+    WorldPacket data(SMSG_ATTACKER_STATE_UPDATE, 1 + 4 + round.size());
+    data.WriteBit(false);                                           // HasLogData
+    data.FlushBits();
+    data << uint32(round.size());
+    data.append(round);
 
     SendMessageToSet(&data, true);
 }
@@ -8135,16 +8140,23 @@ void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
 {
     uint32 overheal = healInfo.GetHeal() - healInfo.GetEffectiveHeal();
 
-    // we guess size
-    WorldPacket data(SMSG_SPELL_HEAL_LOG, (8 + 8 + 4 + 4 + 4 + 4 + 1 + 1));
-    data << healInfo.GetTarget()->GetPackGUID();
-    data << GetPackGUID();
+    // SMSG_SPELL_HEAL_LOG, 3.4.3 (FUN_140705eb0): PackedGuid128 TargetGUID, CasterGUID, u32 SpellID,
+    // u32 Health, u32 OriginalHeal, u32 OverHeal, u32 Absorbed, bits Crit, HasCritRollMade,
+    // HasCritRollNeeded, HasLogData, HasContentTuning, flush
+    WorldPacket data(SMSG_SPELL_HEAL_LOG, 18 + 18 + 5 * 4 + 1);
+    Guid128::Write(data, healInfo.GetTarget()->GetGUID());
+    Guid128::Write(data, GetGUID());
     data << uint32(healInfo.GetSpellInfo()->Id);
     data << uint32(healInfo.GetHeal());
+    data << uint32(healInfo.GetHeal() + healInfo.GetAbsorb());  // OriginalHeal
     data << uint32(overheal);
     data << uint32(healInfo.GetAbsorb()); // Absorb amount
-    data << uint8(critical ? 1 : 0);
-    data << uint8(0); // unused
+    data.WriteBit(critical);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
@@ -8166,12 +8178,17 @@ int32 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 
 void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint32 damage, Powers powerType)
 {
-    WorldPacket data(SMSG_SPELL_ENERGIZE_LOG, (8 + 8 + 4 + 4 + 4 + 1));
-    data << victim->GetPackGUID();
-    data << GetPackGUID();
+    // SMSG_SPELL_ENERGIZE_LOG, 3.4.3 (ClientSpell switch, inline): PackedGuid128 CasterGUID, TargetGUID,
+    // u32 SpellID, u32 Type (power), u32 Amount, u32 OverEnergize, bit HasLogData, flush
+    WorldPacket data(SMSG_SPELL_ENERGIZE_LOG, 18 + 18 + 4 * 4 + 1);
+    Guid128::Write(data, GetGUID());
+    Guid128::Write(data, victim->GetGUID());
     data << uint32(spellID);
     data << uint32(powerType);
     data << uint32(damage);
+    data << uint32(0);                                      // OverEnergize
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
@@ -12625,7 +12642,9 @@ void Unit::SendPetActionFeedback(uint8 msg) const
     if (!owner || !owner->IsPlayer())
         return;
 
-    WorldPacket data(SMSG_PET_ACTION_FEEDBACK, 1);
+    // SMSG_PET_ACTION_FEEDBACK, 3.4.3: read by the handler (FUN_141994a00) as u32 SpellID, u8 Response
+    WorldPacket data(SMSG_PET_ACTION_FEEDBACK, 5);
+    data << uint32(0);
     data << uint8(msg);
     owner->ToPlayer()->SendDirectMessage(&data);
 }
@@ -14792,9 +14811,16 @@ void Unit::SetAuraStack(uint32 spellId, Unit* target, uint32 stack)
 
 void Unit::SendPlaySpellVisual(uint32 id)
 {
-    WorldPacket data(SMSG_PLAY_SPELL_VISUAL, 8 + 4);
-    data << GetGUID();
-    data << uint32(id); // SpellVisualKit.dbc index
+    // 3.3.5's SMSG_PLAY_SPELL_VISUAL played a SpellVisualKit on the unit; 3.4.3 does that with
+    // SMSG_PLAY_SPELL_VISUAL_KIT (handler FUN_1416c28d0): PackedGuid128 Unit, u32 KitRecID, u32 KitType,
+    // u32 Duration, bit MimicHostCast, flush
+    WorldPacket data(SMSG_PLAY_SPELL_VISUAL_KIT, 18 + 12 + 1);
+    Guid128::Write(data, GetGUID());
+    data << uint32(id); // SpellVisualKit id
+    data << uint32(0);
+    data << uint32(0);
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
@@ -16367,24 +16393,31 @@ void Unit::SendMovementHover(Player* sendTo)
     sendTo->SendDirectMessage(&data);
 }
 
+/// SMSG_SPELL_COOLDOWN, 3.4.3 (ClientSpell switch, handler FUN_14178e000): PackedGuid128 Caster, u8 Flags,
+/// u32 count, {u32 SpellID, u32 ForcedCooldown, f32 ModRate}. A ForcedCooldown of 0 lets the client take
+/// the cooldown and category cooldown from its own SpellCooldowns.db2.
 void Unit::BuildCooldownPacket(WorldPacket& data, uint8 flags, uint32 spellId, uint32 cooldown)
 {
-    data.Initialize(SMSG_SPELL_COOLDOWN, 8 + 1 + 4 + 4);
-    data << GetGUID();
+    data.Initialize(SMSG_SPELL_COOLDOWN, 18 + 1 + 4 + 12);
+    Guid128::Write(data, GetGUID());
     data << uint8(flags);
+    data << uint32(1);
     data << uint32(spellId);
     data << uint32(cooldown);
+    data << float(1.0f);
 }
 
 void Unit::BuildCooldownPacket(WorldPacket& data, uint8 flags, PacketCooldowns const& cooldowns)
 {
-    data.Initialize(SMSG_SPELL_COOLDOWN, 8 + 1 + (4 + 4) * cooldowns.size());
-    data << GetGUID();
+    data.Initialize(SMSG_SPELL_COOLDOWN, 18 + 1 + 4 + 12 * cooldowns.size());
+    Guid128::Write(data, GetGUID());
     data << uint8(flags);
+    data << uint32(cooldowns.size());
     for (std::unordered_map<uint32, uint32>::const_iterator itr = cooldowns.begin(); itr != cooldowns.end(); ++itr)
     {
         data << uint32(itr->first);
         data << uint32(itr->second);
+        data << float(1.0f);
     }
 }
 

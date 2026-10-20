@@ -3899,15 +3899,16 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, Spell const* spell, bool
 
 void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo missInfo)
 {
-    WorldPacket data(SMSG_SPELL_MISS_LOG, (4 + 8 + 1 + 4 + 8 + 1));
+    // SMSG_SPELL_MISS_LOG, 3.4.3 (ClientSpell switch, inline): u32 SpellID, PackedGuid128 Caster, u32 count,
+    // per entry {PackedGuid128 Victim, u8 MissReason, bit HasDebug, flush, [f32, f32]}
+    WorldPacket data(SMSG_SPELL_MISS_LOG, 4 + 18 + 4 + 18 + 2);
     data << uint32(spellID);
-    data << GetGUID();
-    data << uint8(0);                                       // can be 0 or 1
+    Guid128::Write(data, GetGUID());
     data << uint32(1);                                      // target count
-    // for (i = 0; i < target count; ++i)
-    data << target->GetGUID();                              // target GUID
+    Guid128::Write(data, target->GetGUID());                // target GUID
     data << uint8(missInfo);
-    // end loop
+    data.WriteBit(false);
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 
@@ -3920,21 +3921,27 @@ void WorldObject::SendSpellNonMeleeDamageLog(Unit* target, SpellInfo const* spel
         damage = 0;
     }
 
-    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1));
-    data << target->GetPackGUID();
-    data << GetPackGUID();
-    data << uint32(spellInfo->Id);
-    data << uint32(damage);
+    // SMSG_SPELL_NON_MELEE_DAMAGE_LOG, 3.4.3: the layout of Unit's BuildSpellNonMeleeDamageLog
     int32 overkill = int32(damage) - int32(target->GetHealth());
-    data << uint32(overkill > 0 ? overkill : 0);
+    WorldPacket data(SMSG_SPELL_NON_MELEE_DAMAGE_LOG, 3 * 18 + 4 * 10 + 2);
+    Guid128::Write(data, target->GetGUID());
+    Guid128::Write(data, GetGUID());
+    Guid128::WritePacked(data, 0, 0);                       // CastID
+    data << uint32(spellInfo->Id);
+    data << uint32(spellInfo->SpellVisual[1]);              // SpellXSpellVisualID
+    data << uint32(damage);
+    data << uint32(damage + absorb + resist);               // OriginalDamage
+    data << int32(overkill > 0 ? overkill : -1);
     data << uint8(schoolMask);
     data << uint32(absorb);
     data << uint32(resist);
-    data << uint8(0);  // physicalLog - 0: target suffers x school damage from caster's spell
-    data << uint8(0);  // unused
-    data << uint32(0); // blocked
-    data << uint32(0); // HitInfo
-    data << uint8(0);  // debug flags
+    data << uint32(0);                                      // ShieldBlock
+    data.WriteBit(false);                                   // Periodic
+    data.WriteBits(0, 7);                                   // Flags
+    data.WriteBit(false);                                   // HasDebugInfo
+    data.WriteBit(false);                                   // HasLogData
+    data.WriteBit(false);                                   // HasContentTuning
+    data.FlushBits();
     SendMessageToSet(&data, true);
 }
 

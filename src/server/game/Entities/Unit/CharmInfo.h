@@ -32,6 +32,18 @@
 #define UNIT_ACTION_BUTTON_TYPE(X)   ((uint32(X) & 0xFF000000) >> 24)
 #define MAKE_UNIT_ACTION_BUTTON(A, T) (uint32(A) | (uint32(T) << 24))
 
+/// The 3.4.3 client packs a pet action as a 23-bit id under the ACT_* type at bit 23 (its pet bar takes
+/// `(button >> 23) & 0x1F`, FUN_141994bf0); AC keeps 3.3.5's 24-bit id under the type at bit 24.
+inline uint32 ClientUnitActionButton(uint32 packed)
+{
+    return (UNIT_ACTION_BUTTON_ACTION(packed) & 0x007FFFFF) | (UNIT_ACTION_BUTTON_TYPE(packed) << 23);
+}
+
+inline uint32 ServerUnitActionButton(uint32 clientPacked)
+{
+    return MAKE_UNIT_ACTION_BUTTON(clientPacked & 0x007FFFFF, (clientPacked >> 23) & 0xFF);
+}
+
 class GlobalCooldownMgr;
 class SpellInfo;
 class Unit;

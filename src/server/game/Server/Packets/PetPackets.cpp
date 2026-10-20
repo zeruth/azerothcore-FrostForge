@@ -16,27 +16,29 @@
  */
 
 #include "PetPackets.h"
+#include "PacketGuid128.h"
 
 void WorldPackets::Pet::DismissCritter::Read()
 {
-    _worldPacket >> CritterGUID;
+    CritterGUID = Guid128::Read(_worldPacket);              // 3.4.3: PackedGuid128 (FUN_14075d340)
 }
 
 void WorldPackets::Pet::PetAbandon::Read()
 {
-    _worldPacket >> PetGUID;
+    PetGUID = Guid128::Read(_worldPacket);
 }
 
 void WorldPackets::Pet::PetStopAttack::Read()
 {
-    _worldPacket >> PetGUID;
+    PetGUID = Guid128::Read(_worldPacket);                  // 3.4.3: PackedGuid128 (FUN_14075f1f0)
 }
 
 void WorldPackets::Pet::PetSpellAutocast::Read()
 {
-    _worldPacket >> PetGUID;
+    // 3.4.3 (writer FUN_14075f180): PackedGuid128 PetGUID, u32 SpellID, bit AutocastEnabled, flush
+    PetGUID = Guid128::Read(_worldPacket);
     _worldPacket >> SpellID;
-    _worldPacket >> AutocastEnabled;
+    AutocastEnabled = _worldPacket.ReadBit();
 }
 
 WorldPacket const* WorldPackets::Pet::PetLearnedSpell::Write()
@@ -53,7 +55,8 @@ WorldPacket const* WorldPackets::Pet::PetUnlearnedSpell::Write()
 
 WorldPacket const* WorldPackets::Pet::PetActionSound::Write()
 {
-    _worldPacket << UnitGUID;
+    // 3.4.3 (FUN_1406b5650): PackedGuid128 UnitGUID, u32 Action
+    Guid128::Write(_worldPacket, UnitGUID);
     _worldPacket << int32(Action);
     return &_worldPacket;
 }

@@ -20,6 +20,7 @@
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -32,27 +33,90 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
-void WorldSession::HandleClientCastFlags(WorldPacket& recvPacket, uint8 castFlags, SpellCastTargets& targets)
+/// SpellCastRequest, 3.4.3 (writer FUN_14074f2a0, shared by CMSG_CAST_SPELL, CMSG_PET_CAST_SPELL and
+/// CMSG_USE_ITEM): PackedGuid128 CastID, u32 Misc[2], u32 SpellID, u32 SpellXSpellVisualID,
+/// MissileTrajectory {f32 Pitch, f32 Speed}, PackedGuid128 CraftingNPC, u32 counts of optional currencies,
+/// optional reagents and removed modifications, the currencies {u32 ID, u32 Count}, bits: 5 SendCastFlags,
+/// HasMoveUpdate, 2 weight count, HasCraftingOrderID; flush; SpellTargetData; [u64 CraftingOrderID], the
+/// reagents and removed modifications {u32 ItemID, u32 DataSlotIndex, u32 Quantity, bit, flush, [u8]},
+/// [the movement status], the weights {2-bit Type, flush, u32 ID, u32 Quantity}.
+/// The targets are read into `targets` (missile pitch and speed included); a move update the client sent
+/// because it stopped to cast is applied as a CMSG_MOVE_STOP.
+bool WorldSession::ReadSpellCastRequest(WorldPacket& recvPacket, Unit* caster, SpellCastRequest& request, SpellCastTargets& targets)
 {
-    // some spell cast packet including more data (for projectiles?)
-    if (castFlags & 0x02)
+    request.CastID = Guid128::ReadRaw(recvPacket);
+    request.Misc[0] = recvPacket.read<uint32>();
+    request.Misc[1] = recvPacket.read<uint32>();
+    request.SpellID = recvPacket.read<uint32>();
+    recvPacket.read_skip<uint32>();                         // SpellXSpellVisualID
+    float pitch = recvPacket.read<float>();
+    float speed = recvPacket.read<float>();
+    Guid128::Skip(recvPacket);                              // CraftingNPC
+    uint32 currencies = recvPacket.read<uint32>();
+    uint32 reagents = recvPacket.read<uint32>();
+    uint32 removedModifications = recvPacket.read<uint32>();
+    if (currencies > 16 || reagents > 16 || removedModifications > 16)
+        return false;
+
+    recvPacket.read_skip(std::size_t(currencies) * 8);
+    request.SendCastFlags = uint8(recvPacket.ReadBits(5));
+    bool hasMoveUpdate = recvPacket.ReadBit();
+    uint32 weights = recvPacket.ReadBits(2);
+    bool hasCraftingOrderID = recvPacket.ReadBit();
+    recvPacket.ResetBitReader();
+
+    targets.Read(recvPacket, caster);
+    targets.SetElevation(pitch);
+    targets.SetSpeed(speed);
+
+    if (hasCraftingOrderID)
+        recvPacket.read_skip<uint64>();
+
+    for (uint32 i = 0; i < reagents + removedModifications; ++i)
     {
-        // not sure about these two
-        float elevation, speed;
-        recvPacket >> elevation;
-        recvPacket >> speed;
-
-        targets.SetElevation(elevation);
-        targets.SetSpeed(speed);
-
-        uint8 hasMovementData;
-        recvPacket >> hasMovementData;
-        if (hasMovementData)
-        {
-            recvPacket.SetOpcode(recvPacket.read<uint32>());
-            HandleMovementOpcodes(recvPacket);
-        }
+        recvPacket.read_skip(12);
+        bool hasUnknown = recvPacket.ReadBit();
+        recvPacket.ResetBitReader();
+        if (hasUnknown)
+            recvPacket.read_skip<uint8>();
     }
+
+    if (hasMoveUpdate)
+    {
+        MovementInfo movementInfo;
+        ReadMovementInfo(recvPacket, &movementInfo);
+        HandleCastMoveUpdate(movementInfo);
+    }
+
+    for (uint32 i = 0; i < weights; ++i)
+    {
+        recvPacket.ReadBits(2);
+        recvPacket.ResetBitReader();
+        recvPacket.read_skip(8);
+    }
+
+    return true;
+}
+
+/// The movement status a cast request carries (the client stops to cast): handled as a CMSG_MOVE_STOP
+/// of the mover, and shown to the others as SMSG_MOVE_UPDATE.
+void WorldSession::HandleCastMoveUpdate(MovementInfo& movementInfo)
+{
+    Unit* mover = _player->m_mover;
+    if (!mover || !mover->IsInWorld() || mover->IsDuringRemoveFromWorld() || movementInfo.guid != mover->GetGUID())
+        return;
+
+    Player* plrMover = mover->ToPlayer();
+    if (plrMover && plrMover->IsBeingTeleported())
+        return;
+
+    WorldPacket stop(CMSG_MOVE_STOP, 0);
+    if (!ProcessMovementInfo(movementInfo, mover, plrMover, stop))
+        return;
+
+    WorldPacket data(SMSG_MOVE_UPDATE, 64);
+    WriteMovementInfo(&data, &movementInfo);
+    mover->SendMessageToSet(&data, _player);
 }
 
 void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
@@ -64,19 +128,23 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     if (pUser->m_mover != pUser)
         return;
 
-    uint8 bagIndex, slot, castFlags;
-    uint8 castCount;                                       // next cast if exists (single or not)
-    ObjectGuid itemGUID;
-    uint32 glyphIndex;                                      // something to do with glyphs?
-    uint32 spellId;                                         // casted spell id
-
-    recvPacket >> bagIndex >> slot >> castCount >> spellId >> itemGUID >> glyphIndex >> castFlags;
-
-    if (glyphIndex >= MAX_GLYPH_SLOT_INDEX)
+    // 3.4.3 (writer FUN_1407617d0): u8 PackSlot, u8 Slot, PackedGuid128 CastItem, SpellCastRequest
+    uint8 bagIndex = recvPacket.read<uint8>();
+    uint8 slot = recvPacket.read<uint8>();
+    ObjectGuid itemGUID = Guid128::Read(recvPacket);
+    SpellCastRequest request;
+    SpellCastTargets targets;
+    if (!ReadSpellCastRequest(recvPacket, pUser, request, targets))
     {
-        pUser->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, nullptr, nullptr);
+        recvPacket.rfinish();
         return;
     }
+
+    uint8 castCount = 1;                                    // a cast the client asked for
+    uint32 spellId = request.SpellID;
+    uint32 glyphIndex = request.Misc[0];                    // the glyph slot of a glyph item
+    if (glyphIndex >= MAX_GLYPH_SLOT_INDEX)
+        glyphIndex = 0;
 
     Item* pItem = pUser->GetUseableItemByPos(bagIndex, slot);
     if (!pItem)
@@ -189,15 +257,11 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
         }
     }
 
-    SpellCastTargets targets;
-    targets.Read(recvPacket, pUser);
-    HandleClientCastFlags(recvPacket, castFlags, targets);
-
     // Note: If script stop casting it must send appropriate data to client to prevent stuck item in gray state.
     if (!sScriptMgr->OnItemUse(pUser, pItem, targets))
     {
         // no script or script not process request by self
-        pUser->CastItemUseSpell(pItem, targets, castCount, glyphIndex);
+        pUser->CastItemUseSpell(pItem, targets, castCount, glyphIndex, request.CastID);
     }
 }
 
@@ -377,13 +441,23 @@ void WorldSession::HandleGameobjectReportUse(WorldPacket& recvPacket)
 
 void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 {
-    uint32 spellId;
-    uint8  castCount, castFlags;
-
     if (recvPacket.empty())
         return;
 
-    recvPacket >> castCount >> spellId >> castFlags;
+    // 3.4.3 (writer FUN_14075cd20): the SpellCastRequest alone. The targets are read with it: the
+    // request's fields come before them and its move update after.
+    Unit* mover = _player->m_mover;
+    SpellCastRequest request;
+    SpellCastTargets targets;
+    if (!ReadSpellCastRequest(recvPacket, mover, request, targets))
+    {
+        recvPacket.rfinish();
+        return;
+    }
+
+    uint32 spellId = request.SpellID;
+    uint8 castCount = 1;                                    // a cast the client asked for
+    uint8 castFlags = request.SendCastFlags;
     TriggerCastFlags triggerFlag = TRIGGERED_NONE;
 
     uint32 oldSpellId = spellId;
@@ -391,7 +465,6 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     LOG_DEBUG("network", "WORLD: got cast spell packet, castCount: {}, spellId: {}, castFlags: {}, data length = {}", castCount, spellId, castFlags, (uint32)recvPacket.size());
 
     // ignore for remote control state (for player case)
-    Unit* mover = _player->m_mover;
     if (mover != _player && mover->IsPlayer())
     {
         recvPacket.rfinish(); // prevent spam at ignore packet
@@ -410,11 +483,12 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     // fail if we are cancelling pending request
     if (!_player->SpellQueue.empty())
     {
-        PendingSpellCastRequest& request = _player->SpellQueue.front(); // Peek at the first spell
-        if (request.cancelInProgress)
+        PendingSpellCastRequest& pending = _player->SpellQueue.front(); // Peek at the first spell
+        if (pending.cancelInProgress)
         {
             Spell* spell = new Spell(_player, spellInfo, TRIGGERED_NONE);
             spell->m_cast_count = castCount;
+            spell->m_castId = request.CastID;
             spell->SendCastResult(SPELL_FAILED_DONT_REPORT);
             spell->finish(false);
             recvPacket.rfinish(); // prevent spam at ignore packet
@@ -437,11 +511,6 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
             return;
         }
     }
-
-    // client provided targets
-    SpellCastTargets targets;
-    targets.Read(recvPacket, mover);
-    HandleClientCastFlags(recvPacket, castFlags, targets);
 
     // not have spell in spellbook
     if (mover->IsPlayer())
@@ -524,7 +593,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
         return;
     }
 
-    // pussywizard: HandleClientCastFlags calls HandleMovementOpcodes, which can result in pretty much anything. Caster not in map will crash at GetMap() for spell difficulty in Spell constructor.
+    // pussywizard: the request's move update goes through HandleCastMoveUpdate, which can result in pretty much anything. Caster not in map will crash at GetMap() for spell difficulty in Spell constructor.
     if (!mover->FindMap())
     {
         recvPacket.rfinish(); // prevent spam at ignore packet
@@ -548,15 +617,15 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     sScriptMgr->ValidateSpellAtCastSpellResult(_player, mover, spell, oldSpellId, spellId);
 
     spell->m_cast_count = castCount;                       // set count of casts
+    spell->m_castId = request.CastID;                      // the client's id for this cast
     spell->prepare(&targets);
 }
 
 void WorldSession::HandleCancelCastOpcode(WorldPacket& recvPacket)
 {
-    uint32 spellId;
-
-    recvPacket.read_skip<uint8>();                          // counter, increments with every CANCEL packet, don't use for now
-    recvPacket >> spellId;
+    // 3.4.3 (writer FUN_14075cbd0): PackedGuid128 CastID, u32 SpellID
+    Guid128::Skip(recvPacket);
+    uint32 spellId = recvPacket.read<uint32>();
 
     _player->SpellQueue.clear();
 
@@ -567,8 +636,9 @@ void WorldSession::HandleCancelCastOpcode(WorldPacket& recvPacket)
 
 void WorldSession::HandleCancelAuraOpcode(WorldPacket& recvPacket)
 {
-    uint32 spellId;
-    recvPacket >> spellId;
+    // 3.4.3 (writer FUN_14075cb60): u32 SpellID, PackedGuid128 CasterGUID
+    uint32 spellId = recvPacket.read<uint32>();
+    Guid128::Skip(recvPacket);
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
@@ -603,11 +673,9 @@ void WorldSession::HandleCancelAuraOpcode(WorldPacket& recvPacket)
 
 void WorldSession::HandlePetCancelAuraOpcode(WorldPacket& recvPacket)
 {
-    ObjectGuid guid;
-    uint32 spellId;
-
-    recvPacket >> guid;
-    recvPacket >> spellId;
+    // 3.4.3 (writer FUN_14075f050): PackedGuid128 PetGUID, u32 SpellID
+    ObjectGuid guid = Guid128::Read(recvPacket);
+    uint32 spellId = recvPacket.read<uint32>();
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
@@ -652,8 +720,9 @@ void WorldSession::HandleCancelAutoRepeatSpellOpcode(WorldPacket& /*recvPacket*/
 
 void WorldSession::HandleCancelChanneling(WorldPacket& recvData)
 {
-    uint32 spellID = 0;
-    recvData >> spellID;
+    // 3.4.3 (writer FUN_14075b880): u32 ChannelSpell, u32 Reason
+    uint32 spellID = recvData.read<uint32>();
+    recvData.read_skip<uint32>();
 
     // ignore for remote control state (for player case)
     Unit* mover = _player->m_mover;

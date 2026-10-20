@@ -32,6 +32,7 @@
 #include "GossipDef.h"
 #include "Optional.h"
 #include "Packet.h"
+#include "PacketGuid128Raw.h"
 #include "QueryHolder.h"
 #include "SharedDefines.h"
 #include "World.h"
@@ -61,6 +62,15 @@ struct DeclinedName;
 struct ItemTemplate;
 struct MovementInfo;
 struct TradeStatusInfo;
+
+/// What the server uses of a 3.4.3 SpellCastRequest (WorldSession::ReadSpellCastRequest)
+struct SpellCastRequest
+{
+    Guid128::Raw CastID;                    // the client's id for the cast, echoed in every packet about it
+    uint32 Misc[2] = {};                    // Misc[0]: the glyph slot of a glyph item
+    uint32 SpellID = 0;
+    uint8 SendCastFlags = 0;
+};
 
 namespace lfg
 {
@@ -602,7 +612,8 @@ public:
     void SendPetitionQueryOpcode(ObjectGuid petitionguid);
 
     // Spell
-    void HandleClientCastFlags(WorldPacket& recvPacket, uint8 castFlags, SpellCastTargets& targets);
+    bool ReadSpellCastRequest(WorldPacket& recvPacket, Unit* caster, SpellCastRequest& request, SpellCastTargets& targets);
+    void HandleCastMoveUpdate(MovementInfo& movementInfo);
 
     // Pet
     void SendPetNameQuery(ObjectGuid guid, uint32 petnumber);

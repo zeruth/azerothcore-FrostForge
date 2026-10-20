@@ -16,18 +16,26 @@
  */
 
 #include "TotemPackets.h"
+#include "PacketGuid128.h"
 
 void WorldPackets::Totem::TotemDestroyed::Read()
 {
+    // 3.4.3 (writer FUN_140761260): u8 Slot, PackedGuid128 TotemGUID
     _worldPacket >> Slot;
+    Guid128::Skip(_worldPacket);
 }
 
 WorldPacket const* WorldPackets::Totem::TotemCreated::Write()
 {
-    _worldPacket << Slot;
-    _worldPacket << Totem;
-    _worldPacket << Duration;
-    _worldPacket << SpellID;
+    // 3.4.3 (FUN_1406cc290): u8 Slot, PackedGuid128 Totem, u32 Duration, u32 SpellID, f32 TimeMod,
+    // bit CannotDismiss, flush
+    _worldPacket << uint8(Slot);
+    Guid128::Write(_worldPacket, Totem);
+    _worldPacket << uint32(Duration);
+    _worldPacket << uint32(SpellID);
+    _worldPacket << float(1.0f);
+    _worldPacket.WriteBit(false);
+    _worldPacket.FlushBits();
 
     return &_worldPacket;
 }

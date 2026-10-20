@@ -24,6 +24,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -186,39 +187,66 @@ void AuraApplication::_HandleEffect(uint8 effIndex, bool apply)
 
 void AuraApplication::BuildUpdatePacket(ByteBuffer& data, bool remove) const
 {
+    // AuraInfo, 3.4.3 (FUN_1406f7ee0): u8 Slot, bit HasAuraData, flush, [AuraDataInfo (FUN_140710540):
+    // PackedGuid128 CastID, u32 SpellID, u32 SpellXSpellVisualID, u16 Flags, u32 ActiveFlags (effect mask),
+    // u16 CastLevel, u8 Applications, u32 ContentTuningID, bits HasCastUnit, HasDuration, HasRemaining,
+    // HasTimeMod, 6-bit point count, 6-bit estimated point count, HasContentTuning, flush,
+    // [ContentTuningParams], [PackedGuid128 CastUnit], [u32 Duration], [u32 Remaining], [f32 TimeMod],
+    // f32 Points[], f32 EstimatedPoints[]]. A removed aura is its slot without data.
     data << uint8(_slot);
 
     if (remove)
     {
         ASSERT(!_target->GetVisibleAura(_slot));
-        data << uint32(0);
+        data.WriteBit(false);
+        data.FlushBits();
         return;
     }
     ASSERT(_target->GetVisibleAura(_slot));
 
     Aura const* aura = GetBase();
-    data << uint32(aura->GetId());
-    uint32 flags = _flags;
-    if (aura->GetMaxDuration() > 0 && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR5_DO_NOT_DISPLAY_DURATION))
-        flags |= AFLAG_DURATION;
+    bool hasDuration = aura->GetMaxDuration() > 0 && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR5_DO_NOT_DISPLAY_DURATION);
 
     // paladin auras are positive for self-cast only
+    bool positive = (_flags & AFLAG_POSITIVE) != 0;
     if (!IsSelfcasted() && aura->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_AURA)
-        flags &= ~AFLAG_POSITIVE;
+        positive = false;
 
-    data << uint8(flags);
-    data << uint8(aura->GetCasterLevel());
+    // 3.4.3's AuraFlags (TrinityCore's names [inferred]): 0x2 CANCELABLE, 0x4 DURATION, 0x10 NEGATIVE.
+    // The caster always travels in CastUnit (AFLAG_NOCASTER 0x1 is never set).
+    uint16 flags = 0;
+    if (positive && !aura->GetSpellInfo()->IsPassive() && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR0_NO_AURA_CANCEL))
+        flags |= 0x2;
+    if (hasDuration)
+        flags |= 0x4;
+    if (!positive || (_flags & AFLAG_NEGATIVE))
+        flags |= 0x10;
+
+    data.WriteBit(true);                                    // HasAuraData
+    data.FlushBits();
+    Guid128::WritePacked(data, 0, 0);                       // CastID
+    data << uint32(aura->GetId());
+    data << uint32(aura->GetSpellInfo()->SpellVisual[1]);   // SpellXSpellVisualID
+    data << uint16(flags);
+    data << uint32(GetEffectMask());                        // ActiveFlags
+    data << uint16(aura->GetCasterLevel());
     // send stack amount for aura which could be stacked (never 0 - causes incorrect display) or charges
     // stack amount has priority over charges (checked on retail with spell 50262)
     data << uint8(aura->GetSpellInfo()->StackAmount ? aura->GetStackAmount() : aura->GetCharges());
-
-    if (!(flags & AFLAG_CASTER))
-        data << aura->GetCasterGUID().WriteAsPacked();
-
-    if (flags & AFLAG_DURATION)
+    data << uint32(0);                                      // ContentTuningID
+    data.WriteBit(true);                                    // HasCastUnit
+    data.WriteBit(hasDuration);
+    data.WriteBit(hasDuration);                             // HasRemaining
+    data.WriteBit(false);                                   // HasTimeMod
+    data.WriteBits(0, 6);                                   // Points
+    data.WriteBits(0, 6);                                   // EstimatedPoints
+    data.WriteBit(false);                                   // HasContentTuning
+    data.FlushBits();
+    Guid128::Write(data, aura->GetCasterGUID());
+    if (hasDuration)
     {
-        data << uint32(aura->GetMaxDuration());
-        data << uint32(aura->GetDuration());
+        data << int32(aura->GetMaxDuration());
+        data << int32(aura->GetDuration());
     }
 }
 
@@ -226,9 +254,14 @@ void AuraApplication::ClientUpdate(bool remove)
 {
     _needClientUpdate = false;
 
-    WorldPacket data(SMSG_AURA_UPDATE);
-    data << GetTarget()->GetPackGUID();
+    // SMSG_AURA_UPDATE, 3.4.3 (FUN_1406f7ee0): bit UpdateAll, 9-bit aura count, flush, the auras, then
+    // the unit's PackedGuid128
+    WorldPacket data(SMSG_AURA_UPDATE, 64);
+    data.WriteBit(false);                                   // UpdateAll
+    data.WriteBits(1, 9);
+    data.FlushBits();
     BuildUpdatePacket(data, remove);
+    Guid128::Write(data, GetTarget()->GetGUID());
 
     if (GetSlot() < MAX_AURAS)
         if (Player const* plr = GetTarget()->ToPlayer())
@@ -494,9 +527,11 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
             {
                 if (Player* playerOwner = owner->ToPlayer())
                 {
-                    WorldPacket data(SMSG_COOLDOWN_EVENT, 4 + 8);
+                    // SMSG_COOLDOWN_EVENT, 3.4.3: u32 SpellID, bit IsPet, flush
+                    WorldPacket data(SMSG_COOLDOWN_EVENT, 4 + 1);
                     data << uint32(m_spellInfo->Id);
-                    data << caster->GetGUID();
+                    data.WriteBit(true);
+                    data.FlushBits();
                     playerOwner->SendDirectMessage(&data);
                 }
             }
@@ -1818,10 +1853,13 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
 
                             player->AddSpellCooldown(GetSpellInfo()->Id, 0, aurEff->GetAmount()*IN_MILLISECONDS);
 
-                            WorldPacket data(SMSG_MODIFY_COOLDOWN, 4 + 8 + 4);
+                            // SMSG_MODIFY_COOLDOWN, 3.4.3: u32 SpellID, i32 DeltaTime, bit IsPet, bit WithoutCategoryCooldown
+                            WorldPacket data(SMSG_MODIFY_COOLDOWN, 4 + 4 + 1);
                             data << uint32(GetId());                  // Spell ID
-                            data << player->GetGUID();                // Player GUID
                             data << int32(-110000);                   // Cooldown mod in milliseconds
+                            data.WriteBit(false);
+                            data.WriteBit(false);
+                            data.FlushBits();
                             player->SendDirectMessage(&data);
                         }
                         break;

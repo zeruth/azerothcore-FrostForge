@@ -21,6 +21,7 @@
 #include "ConditionMgr.h"
 #include "GridDefines.h"
 #include "LootMgr.h"
+#include "PacketGuid128Raw.h"
 #include "PathGenerator.h"
 #include "SharedDefines.h"
 #include "SpellInfo.h"
@@ -294,6 +295,25 @@ struct TriggeredByAuraSpellData
     uint32 tickNumber;
 };
 
+/// One effect's part of SMSG_SPELL_EXECUTE_LOG: 3.4.3's SpellLogEffect (FUN_140711370) keeps its
+/// targets by kind, each kind with its own count and entries.
+struct SpellLogEffectData
+{
+    enum Kind : uint8
+    {
+        POWER_DRAIN = 0,        // {PackedGuid128 Victim, u32 Points, u32 PowerType, f32 Amplitude}
+        EXTRA_ATTACKS,          // {PackedGuid128 Victim, u32 NumAttacks}
+        DURABILITY_DAMAGE,      // {PackedGuid128 Victim, i32 ItemID, i32 Amount}
+        GENERIC_VICTIM,         // {PackedGuid128 Victim}
+        TRADE_SKILL,            // {i32 ItemID}
+        FEED_PET,               // {i32 ItemID}
+        MAX_KIND
+    };
+
+    uint32 Counts[MAX_KIND] = {};
+    ByteBuffer Parts[MAX_KIND];
+};
+
 class Spell
 {
     friend void Unit::SetCurrentCastedSpell(Spell* pSpell);
@@ -497,16 +517,19 @@ public:
     void setState(uint32 state) { m_spellState = state; }
 
     void DoCreateItem(uint8 effIndex, uint32 itemId);
-    void WriteSpellGoTargets(WorldPacket* data);
-    void WriteAmmoToPacket(WorldPacket* data);
+    void WriteSpellCastData(WorldPacket& data, uint32 castFlags, bool go);
+    void GetAmmoForPacket(uint32& ammoDisplayID, uint32& ammoInventoryType);
 
     bool CheckEffectTarget(Unit const* target, uint32 eff) const;
     bool CanAutoCast(Unit* target);
     void CheckSrc() { if (!m_targets.HasSrc()) m_targets.SetSrc(*m_caster); }
     void CheckDst() { if (!m_targets.HasDst()) m_targets.SetDst(*m_caster); }
 
-    static void WriteCastResultInfo(WorldPacket& data, Player* caster, SpellInfo const* spellInfo, uint8 castCount, SpellCastResult result, SpellCustomErrors customError);
+    /// AC's SpellCastResult (3.3.5's numbering) as the 3.4.3 client numbers it (FUN_1416c0d90's names)
+    static uint32 ClientCastResult(SpellCastResult result);
+    static void WriteCastResultInfo(WorldPacket& data, Player* caster, SpellInfo const* spellInfo, Guid128::Raw const& castId, SpellCastResult result, SpellCustomErrors customError, bool pet = false);
     static void SendCastResult(Player* caster, SpellInfo const* spellInfo, uint8 castCount, SpellCastResult result, SpellCustomErrors customError = SPELL_CUSTOM_ERROR_NONE);
+    static void SendCastResult(Player* caster, SpellInfo const* spellInfo, Guid128::Raw const& castId, SpellCastResult result, SpellCustomErrors customError = SPELL_CUSTOM_ERROR_NONE);
     void SendCastResult(SpellCastResult result);
     void SendPetCastResult(SpellCastResult result);
     void SendSpellStart();
@@ -537,6 +560,9 @@ public:
     Item* m_weaponItem;
     ObjectGuid m_castItemGUID;
     uint8 m_cast_count;
+    Guid128::Raw m_castId;                  // the client's id for a cast it asked for, else made on first use
+    Guid128::Raw m_originalCastId;          // the cast that triggered this one, if known
+    Guid128::Raw const& GetCastId();
     uint32 m_glyphIndex;
     uint32 m_preCastSpell;
     SpellCastTargets m_targets;
@@ -747,7 +773,7 @@ public:
     void FinishTargetProcessing();
 
     // spell execution log
-    void InitEffectExecuteData(uint8 effIndex);
+    ByteBuffer& InitEffectExecuteData(uint8 effIndex, SpellLogEffectData::Kind kind);
     void CheckEffectExecuteData();
 
     // Scripting system
@@ -806,7 +832,7 @@ public:
     // xinef:
     bool _spellTargetsSelected;
 
-    ByteBuffer* m_effectExecuteData[MAX_SPELL_EFFECTS];
+    SpellLogEffectData* m_effectExecuteData[MAX_SPELL_EFFECTS];
 };
 
 namespace Acore

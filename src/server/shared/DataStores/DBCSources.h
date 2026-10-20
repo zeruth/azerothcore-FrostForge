@@ -519,7 +519,7 @@ namespace DBCSources
     {
         { DBCSourceKind::Id },  // id: the record id
         { DBCSourceKind::ParentId },  // mapId: the parent id (agrees on 100%)
-        { DBCSourceKind::Column, 3, 0 },  // difficulty: column 3 is a Difficulty.db2 id; DifficultyIndex turns it into AC's 0-3 index through Difficulty's own old-enum column. 3.4.3 uses 0 for every difficulty, which AC has no value for (engine follow-up) [fixup: DifficultyIndex]
+        { DBCSourceKind::Column, 3, 0 },  // difficulty: column 3 is a Difficulty.db2 id; DifficultyIndex ranks its old enum value (Difficulty column 3) among its map's modes, as 3.3.5 numbered them per map (147 of 149 MapDifficulty rows). 3.4.3 uses 0 for every difficulty, which AC has no value for (engine follow-up) [fixup: DifficultyIndex]
         { DBCSourceKind::Column, 5, 0 },  // encounterIndex: agrees on 100%
         { DBCSourceKind::Column, 0, 0 },  // encounterName[0]: agrees on 98%
         { DBCSourceKind::Zero },  // encounterName[1]: another locale: a 54261 table file holds one
@@ -1947,7 +1947,7 @@ namespace DBCSources
         { DBCSourceKind::Column, 26, 1, 20, 2 },  // EffectSpellClassMask1[2]: EffectSpellClassMask1[] is SpellEffect.26[1]@i by its placed elements (this one agrees on 0%)
         { DBCSourceKind::Column, 26, 2, 20, 2 },  // EffectSpellClassMask2[2]: EffectSpellClassMask2[] is SpellEffect.26[2]@i by its placed elements (this one agrees on 88%)
         { DBCSourceKind::Column, 2, 0, 18 },  // SpellVisual[0]: agrees on 100%
-        { DBCSourceKind::Zero },  // SpellVisual[1]: a second visual, on 4 kinds of spells; SpellXSpellVisual keeps one row per spell and difficulty
+        { DBCSourceKind::RowId, 0, 0, 18 },  // SpellVisual[1]: the id of the spell's SpellXSpellVisual row, the visual 3.4.3 packets name (SpellCastVisual); 3.3.5 had a second visual here, on 4 kinds of spells
         { DBCSourceKind::Column, 9, 0, 2 },  // SpellIconID: the icon is a FileDataID now (Fireball 135812), not a SpellIcon id; AC's 48 comparisons with 3.3.5 icon ids must be rewritten (engine follow-up)
         { DBCSourceKind::Column, 10, 0, 2 },  // ActiveIconID: the active icon's FileDataID; AC compares it once, in SpellInfoCorrections (engine follow-up)
         { DBCSourceKind::Zero },  // SpellPriority: no 54261 column; AC sets it only in SpellInfoCorrections

@@ -19,6 +19,7 @@
 #include "GameTime.h"
 #include "InstancePackets.h"
 #include "MapMgr.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
@@ -79,7 +80,11 @@ bool Player::CanSpeak() const
 
 void Player::SendAttackSwingNotInRange()
 {
-    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
+    // SMSG_ATTACK_SWING_ERROR, 3.4.3 (handler FUN_14182b3d0): 3-bit Reason (0 not in range, 1 bad facing,
+    // 2 can't attack, 3 dead target; 4-7 crash the client), flush
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 1);
+    data.WriteBits(0, 3);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -129,13 +134,21 @@ void Player::Customize(CharacterCustomizeInfo const* customizeInfo, CharacterDat
 
 void Player::SendAttackSwingDeadTarget()
 {
-    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
+    // SMSG_ATTACK_SWING_ERROR, 3.4.3 (handler FUN_14182b3d0): 3-bit Reason (0 not in range, 1 bad facing,
+    // 2 can't attack, 3 dead target; 4-7 crash the client), flush
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 1);
+    data.WriteBits(3, 3);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
 void Player::SendAttackSwingCantAttack()
 {
-    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
+    // SMSG_ATTACK_SWING_ERROR, 3.4.3 (handler FUN_14182b3d0): 3-bit Reason (0 not in range, 1 bad facing,
+    // 2 can't attack, 3 dead target; 4-7 crash the client), flush
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 1);
+    data.WriteBits(2, 3);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
@@ -147,14 +160,19 @@ void Player::SendAttackSwingCancelAttack()
 
 void Player::SendAttackSwingBadFacingAttack()
 {
-    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 0);
+    // SMSG_ATTACK_SWING_ERROR, 3.4.3 (handler FUN_14182b3d0): 3-bit Reason (0 not in range, 1 bad facing,
+    // 2 can't attack, 3 dead target; 4-7 crash the client), flush
+    WorldPacket data(SMSG_ATTACK_SWING_ERROR, 1);
+    data.WriteBits(1, 3);
+    data.FlushBits();
     SendDirectMessage(&data);
 }
 
 void Player::SendAutoRepeatCancel(Unit* target)
 {
-    WorldPacket data(SMSG_CANCEL_AUTO_REPEAT, target->GetPackGUID().size());
-    data << target->GetPackGUID();                  // may be it's target guid
+    // SMSG_CANCEL_AUTO_REPEAT, 3.4.3 (FUN_1406b8960): PackedGuid128 Guid
+    WorldPacket data(SMSG_CANCEL_AUTO_REPEAT, 18);
+    Guid128::Write(data, target->GetGUID());
     SendMessageToSet(&data, true);
 }
 

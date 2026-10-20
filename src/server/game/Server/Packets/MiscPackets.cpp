@@ -35,14 +35,19 @@ WorldPacket const* WorldPackets::Misc::Weather::Write()
 
 WorldPacket const* WorldPackets::Misc::LevelUpInfo::Write()
 {
+    // 3.4.3: the handler (FUN_14170e5d0) reads 76 bytes unchecked: i32 Level, i32 HealthDelta,
+    // i32 PowerDelta[10], i32 StatDelta[5], i32 NumNewTalents, i32 NumNewPvpTalentSlots
     _worldPacket << uint32(Level);
     _worldPacket << uint32(HealthDelta);
 
-    for (uint32 power : PowerDelta)
-        _worldPacket << power;
+    for (std::size_t i = 0; i < 10; ++i)
+        _worldPacket << uint32(i < PowerDelta.size() ? PowerDelta[i] : 0);
 
     for (uint32 stat : StatDelta)
         _worldPacket << stat;
+
+    _worldPacket << int32(0);                               // NumNewTalents
+    _worldPacket << int32(0);                               // NumNewPvpTalentSlots
 
     return &_worldPacket;
 }

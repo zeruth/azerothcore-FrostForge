@@ -35,6 +35,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PacketGuid128.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -51,6 +52,7 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <atomic>
 #include <cmath>
 #include <G3D/g3dmath.h>
 
@@ -162,25 +164,31 @@ SpellCastTargets::~SpellCastTargets()
 
 void SpellCastTargets::Read(ByteBuffer& data, WorldObject* caster)
 {
-    data >> m_targetMask;
+    // SpellTargetData, 3.4.3 (writer FUN_14074f640): 28-bit Flags, bits HasSrcLocation, HasDstLocation,
+    // HasOrientation, HasMapID, 7-bit name length, flush, PackedGuid128 Unit, PackedGuid128 Item,
+    // [Src {PackedGuid128 Transport, f32 X, Y, Z}], [Dst {same}], [f32 Orientation], [u32 MapID], name
+    m_targetMask = data.ReadBits(28);
+    bool hasSrc = data.ReadBit();
+    bool hasDst = data.ReadBit();
+    bool hasOrientation = data.ReadBit();
+    bool hasMapId = data.ReadBit();
+    uint32 nameLength = data.ReadBits(7);
+    data.ResetBitReader();
 
-    if (m_targetMask == TARGET_FLAG_NONE)
-        return;
+    m_objectTargetGUID = Guid128::Read(data);
+    m_itemTargetGUID = Guid128::Read(data);
 
-    if (m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_MINIPET | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_CORPSE_ALLY))
-        data >> m_objectTargetGUID.ReadAsPacked();
-
-    if (m_targetMask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM))
-        data >> m_itemTargetGUID.ReadAsPacked();
-
-    if (m_targetMask & TARGET_FLAG_SOURCE_LOCATION)
+    auto readLocation = [&data](SpellDestination& location)
     {
-        data >> m_src._transportGUID.ReadAsPacked();
-        if (m_src._transportGUID)
-            data >> m_src._transportOffset.PositionXYZStream();
+        location._transportGUID = Guid128::Read(data);
+        if (location._transportGUID)
+            data >> location._transportOffset.PositionXYZStream();
         else
-            data >> m_src._position.PositionXYZStream();
-    }
+            data >> location._position.PositionXYZStream();
+    };
+
+    if (hasSrc)
+        readLocation(m_src);
     else
     {
         m_src._transportGUID = caster->GetTransGUID();
@@ -190,14 +198,8 @@ void SpellCastTargets::Read(ByteBuffer& data, WorldObject* caster)
             m_src._position.Relocate(caster);
     }
 
-    if (m_targetMask & TARGET_FLAG_DEST_LOCATION)
-    {
-        data >> m_dst._transportGUID.ReadAsPacked();
-        if (m_dst._transportGUID)
-            data >> m_dst._transportOffset.PositionXYZStream();
-        else
-            data >> m_dst._position.PositionXYZStream();
-    }
+    if (hasDst)
+        readLocation(m_dst);
     else
     {
         m_dst._transportGUID = caster->GetTransGUID();
@@ -207,47 +209,63 @@ void SpellCastTargets::Read(ByteBuffer& data, WorldObject* caster)
             m_dst._position.Relocate(caster);
     }
 
-    if (m_targetMask & TARGET_FLAG_STRING)
-        data >> m_strTarget;
+    if (hasOrientation)
+        data.read_skip<float>();
+    if (hasMapId)
+        data.read_skip<uint32>();
+
+    m_strTarget = data.ReadString(nameLength);
+
+    // the client sends both GUIDs every time; keep the 3.3.5 meaning of the mask
+    if (!(m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_MINIPET | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_CORPSE_ALLY)))
+        m_objectTargetGUID.Clear();
+    if (!(m_targetMask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM)))
+        m_itemTargetGUID.Clear();
 
     Update(caster);
 }
 
 void SpellCastTargets::Write(ByteBuffer& data)
 {
-    data << uint32(m_targetMask);
+    // SpellTargetData, 3.4.3 (reader FUN_14071a000): the layout Read takes
+    bool hasSrc = (m_targetMask & TARGET_FLAG_SOURCE_LOCATION) != 0;
+    bool hasDst = (m_targetMask & TARGET_FLAG_DEST_LOCATION) != 0;
+    std::string_view name = (m_targetMask & TARGET_FLAG_STRING) ? std::string_view(m_strTarget) : std::string_view();
+    name = name.substr(0, std::min<std::size_t>(name.size(), 0x7F));
+
+    data.WriteBits(m_targetMask, 28);
+    data.WriteBit(hasSrc);
+    data.WriteBit(hasDst);
+    data.WriteBit(false);                                   // HasOrientation
+    data.WriteBit(false);                                   // HasMapID
+    data.WriteBits(name.size(), 7);
+    data.FlushBits();
 
     if (m_targetMask & (TARGET_FLAG_UNIT | TARGET_FLAG_CORPSE_ALLY | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_UNIT_MINIPET))
-        data << m_objectTargetGUID.WriteAsPacked();
+        Guid128::Write(data, m_objectTargetGUID);
+    else
+        Guid128::WritePacked(data, 0, 0);
 
     if (m_targetMask & (TARGET_FLAG_ITEM | TARGET_FLAG_TRADE_ITEM))
-    {
-        if (m_itemTarget)
-            data << m_itemTarget->GetPackGUID();
-        else
-            data << uint8(0);
-    }
+        Guid128::Write(data, m_itemTarget ? m_itemTarget->GetGUID() : m_itemTargetGUID);
+    else
+        Guid128::WritePacked(data, 0, 0);
 
-    if (m_targetMask & TARGET_FLAG_SOURCE_LOCATION)
+    auto writeLocation = [&data](SpellDestination& location)
     {
-        data << m_src._transportGUID.WriteAsPacked(); // relative position guid here - transport for example
-        if (m_src._transportGUID)
-            data << m_src._transportOffset.PositionXYZStream();
+        Guid128::Write(data, location._transportGUID);      // relative position guid here - transport for example
+        if (location._transportGUID)
+            data << location._transportOffset.PositionXYZStream();
         else
-            data << m_src._position.PositionXYZStream();
-    }
+            data << location._position.PositionXYZStream();
+    };
 
-    if (m_targetMask & TARGET_FLAG_DEST_LOCATION)
-    {
-        data << m_dst._transportGUID.WriteAsPacked(); // relative position guid here - transport for example
-        if (m_dst._transportGUID)
-            data << m_dst._transportOffset.PositionXYZStream();
-        else
-            data << m_dst._position.PositionXYZStream();
-    }
+    if (hasSrc)
+        writeLocation(m_src);
+    if (hasDst)
+        writeLocation(m_dst);
 
-    if (m_targetMask & TARGET_FLAG_STRING)
-        data << m_strTarget;
+    data.WriteString(name);
 }
 
 ObjectGuid SpellCastTargets::GetUnitTargetGUID() const
@@ -722,7 +740,7 @@ Spell::Spell(WorldObject* caster, SpellInfo const* info, TriggerCastFlags trigge
                    && !m_spellInfo->IsPassive() && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL));
 
     CleanupTargetList();
-    memset(m_effectExecuteData, 0, MAX_SPELL_EFFECTS * sizeof(ByteBuffer*));
+    memset(m_effectExecuteData, 0, MAX_SPELL_EFFECTS * sizeof(SpellLogEffectData*));
 
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         m_destTargets[i] = SpellDestination(*m_caster);
@@ -4490,11 +4508,15 @@ void Spell::SendSpellCooldown()
             if (m_spellInfo->RequireCooldownInfo())
                 if (Player* player = unitCaster->GetCharmerOrOwnerPlayerOrPlayerItself())
                 {
-                    WorldPacket data(SMSG_SPELL_COOLDOWN, 8 + 1 + 4 + 4);
-                    data << unitCaster->GetGUID();
+                    // SMSG_SPELL_COOLDOWN, 3.4.3 (handler FUN_14178e000): PackedGuid128 Caster, u8 Flags,
+                    // u32 count, {u32 SpellID, u32 ForcedCooldown, f32 ModRate}
+                    WorldPacket data(SMSG_SPELL_COOLDOWN, 18 + 1 + 4 + 12);
+                    Guid128::Write(data, unitCaster->GetGUID());
                     data << uint8(SPELL_COOLDOWN_FLAG_INCLUDE_GCD);
+                    data << uint32(1);
                     data << uint32(m_spellInfo->Id);
                     data << uint32(m_spellInfo->RecoveryTime);
+                    data << float(1.0f);
                     player->SendDirectMessage(&data);
                 }
         }
@@ -4701,118 +4723,345 @@ void Spell::finish(bool ok)
         unitCaster->AttackStop();
 }
 
-void Spell::WriteCastResultInfo(WorldPacket& data, Player* caster, SpellInfo const* spellInfo, uint8 castCount, SpellCastResult result, SpellCustomErrors customError)
+uint32 Spell::ClientCastResult(SpellCastResult result)
 {
-    data << uint8(castCount);                               // single cast or multi 2.3 (0/1)
-    data << uint32(spellInfo->Id);
-    data << uint8(result);                                  // problem
+    // AC keeps 3.3.5's numbering; the 3.4.3 client's is its own (names: FUN_1416c0d90), matched by name
+    switch (result)
+    {
+        case SPELL_FAILED_SUCCESS:                              return 0;
+        case SPELL_FAILED_AFFECTING_COMBAT:                     return 1;
+        case SPELL_FAILED_ALREADY_AT_FULL_HEALTH:               return 2;
+        case SPELL_FAILED_ALREADY_AT_FULL_MANA:                 return 3;
+        case SPELL_FAILED_ALREADY_AT_FULL_POWER:                return 4;
+        case SPELL_FAILED_ALREADY_BEING_TAMED:                  return 5;
+        case SPELL_FAILED_ALREADY_HAVE_CHARM:                   return 6;
+        case SPELL_FAILED_ALREADY_HAVE_SUMMON:                  return 7;
+        case SPELL_FAILED_ALREADY_OPEN:                         return 9;
+        case SPELL_FAILED_AURA_BOUNCED:                         return 10;
+        case SPELL_FAILED_AUTOTRACK_INTERRUPTED:                return 11;
+        case SPELL_FAILED_BAD_IMPLICIT_TARGETS:                 return 12;
+        case SPELL_FAILED_BAD_TARGETS:                          return 13;
+        case SPELL_FAILED_CANT_BE_CHARMED:                      return 15;
+        case SPELL_FAILED_CANT_BE_MILLED:                       return 19;
+        case SPELL_FAILED_CANT_BE_PROSPECTED:                   return 20;
+        case SPELL_FAILED_CANT_CAST_ON_TAPPED:                  return 21;
+        case SPELL_FAILED_CANT_DUEL_WHILE_INVISIBLE:            return 22;
+        case SPELL_FAILED_CANT_DUEL_WHILE_STEALTHED:            return 23;
+        case SPELL_FAILED_CANT_STEALTH:                         return 24;
+        case SPELL_FAILED_CASTER_AURASTATE:                     return 26;
+        case SPELL_FAILED_CASTER_DEAD:                          return 27;
+        case SPELL_FAILED_CHARMED:                              return 28;
+        case SPELL_FAILED_CHEST_IN_USE:                         return 29;
+        case SPELL_FAILED_CONFUSED:                             return 30;
+        case SPELL_FAILED_DONT_REPORT:                          return 32;
+        case SPELL_FAILED_EQUIPPED_ITEM:                        return 33;
+        case SPELL_FAILED_EQUIPPED_ITEM_CLASS:                  return 34;
+        case SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND:         return 35;
+        case SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND:          return 36;
+        case SPELL_FAILED_ERROR:                                return 37;
+        case SPELL_FAILED_FIZZLE:                               return 39;
+        case SPELL_FAILED_FLEEING:                              return 40;
+        case SPELL_FAILED_FOOD_LOWLEVEL:                        return 41;
+        case SPELL_FAILED_HIGHLEVEL:                            return 59;
+        case SPELL_FAILED_HUNGER_SATIATED:                      return 60;
+        case SPELL_FAILED_IMMUNE:                               return 61;
+        case SPELL_FAILED_INCORRECT_AREA:                       return 62;
+        case SPELL_FAILED_INTERRUPTED:                          return 63;
+        case SPELL_FAILED_INTERRUPTED_COMBAT:                   return 64;
+        case SPELL_FAILED_ITEM_ALREADY_ENCHANTED:               return 65;
+        case SPELL_FAILED_ITEM_GONE:                            return 66;
+        case SPELL_FAILED_ITEM_NOT_FOUND:                       return 67;
+        case SPELL_FAILED_ITEM_NOT_READY:                       return 68;
+        case SPELL_FAILED_LEVEL_REQUIREMENT:                    return 70;
+        case SPELL_FAILED_LINE_OF_SIGHT:                        return 71;
+        case SPELL_FAILED_LOWLEVEL:                             return 72;
+        case SPELL_FAILED_LOW_CASTLEVEL:                        return 73;
+        case SPELL_FAILED_MAINHAND_EMPTY:                       return 74;
+        case SPELL_FAILED_MOVING:                               return 75;
+        case SPELL_FAILED_NEED_AMMO:                            return 76;
+        case SPELL_FAILED_NEED_AMMO_POUCH:                      return 77;
+        case SPELL_FAILED_NEED_EXOTIC_AMMO:                     return 78;
+        case SPELL_FAILED_NEED_MORE_ITEMS:                      return 79;
+        case SPELL_FAILED_NOPATH:                               return 80;
+        case SPELL_FAILED_NOT_BEHIND:                           return 81;
+        case SPELL_FAILED_NOT_FISHABLE:                         return 82;
+        case SPELL_FAILED_NOT_FLYING:                           return 83;
+        case SPELL_FAILED_NOT_HERE:                             return 84;
+        case SPELL_FAILED_NOT_INFRONT:                          return 85;
+        case SPELL_FAILED_NOT_IN_CONTROL:                       return 86;
+        case SPELL_FAILED_NOT_KNOWN:                            return 87;
+        case SPELL_FAILED_NOT_MOUNTED:                          return 88;
+        case SPELL_FAILED_NOT_ON_TAXI:                          return 89;
+        case SPELL_FAILED_NOT_ON_TRANSPORT:                     return 90;
+        case SPELL_FAILED_NOT_READY:                            return 91;
+        case SPELL_FAILED_NOT_SHAPESHIFT:                       return 92;
+        case SPELL_FAILED_NOT_STANDING:                         return 93;
+        case SPELL_FAILED_NOT_TRADEABLE:                        return 94;
+        case SPELL_FAILED_NOT_TRADING:                          return 95;
+        case SPELL_FAILED_NOT_UNSHEATHED:                       return 96;
+        case SPELL_FAILED_NOT_WHILE_GHOST:                      return 97;
+        case SPELL_FAILED_NOT_WHILE_LOOTING:                    return 98;
+        case SPELL_FAILED_NO_AMMO:                              return 99;
+        case SPELL_FAILED_NO_CHARGES_REMAIN:                    return 100;
+        case SPELL_FAILED_NO_COMBO_POINTS:                      return 101;
+        case SPELL_FAILED_NO_DUELING:                           return 102;
+        case SPELL_FAILED_NO_ENDURANCE:                         return 103;
+        case SPELL_FAILED_NO_FISH:                              return 104;
+        case SPELL_FAILED_NO_ITEMS_WHILE_SHAPESHIFTED:          return 105;
+        case SPELL_FAILED_NO_MOUNTS_ALLOWED:                    return 106;
+        case SPELL_FAILED_NO_PET:                               return 107;
+        case SPELL_FAILED_NO_POWER:                             return 108;
+        case SPELL_FAILED_NOTHING_TO_DISPEL:                    return 109;
+        case SPELL_FAILED_NOTHING_TO_STEAL:                     return 110;
+        case SPELL_FAILED_ONLY_ABOVEWATER:                      return 111;
+        case SPELL_FAILED_ONLY_INDOORS:                         return 112;
+        case SPELL_FAILED_ONLY_MOUNTED:                         return 113;
+        case SPELL_FAILED_ONLY_OUTDOORS:                        return 114;
+        case SPELL_FAILED_ONLY_SHAPESHIFT:                      return 115;
+        case SPELL_FAILED_ONLY_STEALTHED:                       return 116;
+        case SPELL_FAILED_ONLY_UNDERWATER:                      return 117;
+        case SPELL_FAILED_OUT_OF_RANGE:                         return 118;
+        case SPELL_FAILED_PACIFIED:                             return 119;
+        case SPELL_FAILED_POSSESSED:                            return 120;
+        case SPELL_FAILED_REAGENTS:                             return 121;
+        case SPELL_FAILED_REQUIRES_AREA:                        return 122;
+        case SPELL_FAILED_REQUIRES_SPELL_FOCUS:                 return 123;
+        case SPELL_FAILED_ROOTED:                               return 124;
+        case SPELL_FAILED_SILENCED:                             return 125;
+        case SPELL_FAILED_SPELL_IN_PROGRESS:                    return 126;
+        case SPELL_FAILED_SPELL_LEARNED:                        return 127;
+        case SPELL_FAILED_SPELL_UNAVAILABLE:                    return 128;
+        case SPELL_FAILED_STUNNED:                              return 129;
+        case SPELL_FAILED_TARGETS_DEAD:                         return 130;
+        case SPELL_FAILED_TARGET_AFFECTING_COMBAT:              return 131;
+        case SPELL_FAILED_TARGET_AURASTATE:                     return 132;
+        case SPELL_FAILED_TARGET_DUELING:                       return 133;
+        case SPELL_FAILED_TARGET_ENEMY:                         return 134;
+        case SPELL_FAILED_TARGET_ENRAGED:                       return 135;
+        case SPELL_FAILED_TARGET_FRIENDLY:                      return 136;
+        case SPELL_FAILED_TARGET_IN_COMBAT:                     return 137;
+        case SPELL_FAILED_TARGET_IS_PLAYER:                     return 139;
+        case SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED:          return 140;
+        case SPELL_FAILED_TARGET_NOT_DEAD:                      return 141;
+        case SPELL_FAILED_TARGET_NOT_IN_PARTY:                  return 142;
+        case SPELL_FAILED_TARGET_NOT_LOOTED:                    return 143;
+        case SPELL_FAILED_TARGET_NOT_PLAYER:                    return 144;
+        case SPELL_FAILED_TARGET_NO_POCKETS:                    return 145;
+        case SPELL_FAILED_TARGET_NO_WEAPONS:                    return 146;
+        case SPELL_FAILED_TARGET_NO_RANGED_WEAPONS:             return 147;
+        case SPELL_FAILED_TARGET_UNSKINNABLE:                   return 148;
+        case SPELL_FAILED_THIRST_SATIATED:                      return 149;
+        case SPELL_FAILED_TOO_CLOSE:                            return 150;
+        case SPELL_FAILED_TOO_MANY_OF_ITEM:                     return 151;
+        case SPELL_FAILED_TOTEM_CATEGORY:                       return 152;
+        case SPELL_FAILED_TOTEMS:                               return 153;
+        case SPELL_FAILED_TRY_AGAIN:                            return 155;
+        case SPELL_FAILED_UNIT_NOT_BEHIND:                      return 156;
+        case SPELL_FAILED_UNIT_NOT_INFRONT:                     return 157;
+        case SPELL_FAILED_WRONG_PET_FOOD:                       return 159;
+        case SPELL_FAILED_NOT_WHILE_FATIGUED:                   return 160;
+        case SPELL_FAILED_TARGET_NOT_IN_INSTANCE:               return 161;
+        case SPELL_FAILED_NOT_WHILE_TRADING:                    return 162;
+        case SPELL_FAILED_TARGET_NOT_IN_RAID:                   return 163;
+        case SPELL_FAILED_TARGET_FREEFORALL:                    return 164;
+        case SPELL_FAILED_NO_EDIBLE_CORPSES:                    return 165;
+        case SPELL_FAILED_ONLY_BATTLEGROUNDS:                   return 166;
+        case SPELL_FAILED_TARGET_NOT_GHOST:                     return 167;
+        case SPELL_FAILED_TRANSFORM_UNUSABLE:                   return 169;
+        case SPELL_FAILED_WRONG_WEATHER:                        return 170;
+        case SPELL_FAILED_DAMAGE_IMMUNE:                        return 171;
+        case SPELL_FAILED_PREVENTED_BY_MECHANIC:                return 172;
+        case SPELL_FAILED_PLAY_TIME:                            return 173;
+        case SPELL_FAILED_REPUTATION:                           return 174;
+        case SPELL_FAILED_MIN_SKILL:                            return 175;
+        case SPELL_FAILED_NOT_IN_ARENA:                         return 243;
+        case SPELL_FAILED_NOT_ON_SHAPESHIFT:                    return 177;
+        case SPELL_FAILED_NOT_ON_STEALTHED:                     return 178;
+        case SPELL_FAILED_NOT_ON_DAMAGE_IMMUNE:                 return 179;
+        case SPELL_FAILED_NOT_ON_MOUNTED:                       return 180;
+        case SPELL_FAILED_TOO_SHALLOW:                          return 181;
+        case SPELL_FAILED_TARGET_NOT_IN_SANCTUARY:              return 182;
+        case SPELL_FAILED_TARGET_IS_TRIVIAL:                    return 183;
+        case SPELL_FAILED_BM_OR_INVISGOD:                       return 184;
+        case SPELL_FAILED_EXPERT_RIDING_REQUIREMENT:            return 191;
+        case SPELL_FAILED_ARTISAN_RIDING_REQUIREMENT:           return 192;
+        case SPELL_FAILED_NOT_IDLE:                             return 204;
+        case SPELL_FAILED_NOT_INACTIVE:                         return 205;
+        case SPELL_FAILED_PARTIAL_PLAYTIME:                     return 206;
+        case SPELL_FAILED_NO_PLAYTIME:                          return 207;
+        case SPELL_FAILED_NOT_IN_BATTLEGROUND:                  return 208;
+        case SPELL_FAILED_NOT_IN_RAID_INSTANCE:                 return 209;
+        case SPELL_FAILED_ONLY_IN_ARENA:                        return 210;
+        case SPELL_FAILED_TARGET_LOCKED_TO_RAID_INSTANCE:       return 211;
+        case SPELL_FAILED_ON_USE_ENCHANT:                       return 212;
+        case SPELL_FAILED_NOT_ON_GROUND:                        return 213;
+        case SPELL_FAILED_CUSTOM_ERROR:                         return 214;
+        case SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW:               return 215;
+        case SPELL_FAILED_TOO_MANY_SOCKETS:                     return 216;
+        case SPELL_FAILED_INVALID_GLYPH:                        return 217;
+        case SPELL_FAILED_UNIQUE_GLYPH:                         return 218;
+        case SPELL_FAILED_GLYPH_SOCKET_LOCKED:                  return 219;
+        case SPELL_FAILED_NO_VALID_TARGETS:                     return 224;
+        case SPELL_FAILED_ITEM_AT_MAX_CHARGES:                  return 225;
+        case SPELL_FAILED_NOT_IN_BARBERSHOP:                    return 226;
+        case SPELL_FAILED_FISHING_TOO_LOW:                      return 227;
+        case SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW:            return 228;
+        case SPELL_FAILED_SUMMON_PENDING:                       return 229;
+        case SPELL_FAILED_MAX_SOCKETS:                          return 230;
+        case SPELL_FAILED_PET_CAN_RENAME:                       return 231;
+        case SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED:         return 232;
+        case SPELL_FAILED_CANT_BE_DISENCHANTED:                return 16;  // 3.4.3 CANT_BE_SALVAGED
+        case SPELL_FAILED_CANT_BE_DISENCHANTED_SKILL:          return 17;  // 3.4.3 CANT_BE_SALVAGED_SKILL
+        default:                                            // NO_CHAMPION, ONLY_DAYTIME, ONLY_NIGHTTIME, UNKNOWN: not in 3.4.3
+            return 32;                                      // SPELL_FAILED_DONT_REPORT
+    }
+}
+
+Guid128::Raw const& Spell::GetCastId()
+{
+    if (m_castId.IsEmpty())
+    {
+        static std::atomic<uint64> counter{ 0 };
+        m_castId = Guid128::MakeCastId(m_caster->GetMapId(), m_spellInfo->Id, ++counter);
+    }
+    return m_castId;
+}
+
+void Spell::WriteCastResultInfo(WorldPacket& data, Player* caster, SpellInfo const* spellInfo, Guid128::Raw const& castId, SpellCastResult result, SpellCustomErrors customError, bool pet)
+{
+    // SMSG_CAST_FAILED, 3.4.3 (ClientSpell switch, handler FUN_1416be640): PackedGuid128 CastID, u32 SpellID,
+    // u32 SpellXSpellVisualID, u32 Reason, i32 FailedArg1, i32 FailedArg2 (-1 when unused).
+    // SMSG_PET_CAST_FAILED (FUN_1416beca0) has no visual.
+    int32 arg1 = -1;
+    int32 arg2 = -1;
     switch (result)
     {
         case SPELL_FAILED_REQUIRES_SPELL_FOCUS:
-            data << uint32(spellInfo->RequiresSpellFocus);  // SpellFocusObject.dbc id
+            arg1 = int32(spellInfo->RequiresSpellFocus);    // SpellFocusObject id
             break;
-        case SPELL_FAILED_REQUIRES_AREA:                    // AreaTable.dbc id
+        case SPELL_FAILED_REQUIRES_AREA:                    // AreaTable id
             // hardcode areas limitation case
             switch (spellInfo->Id)
             {
                 case 41617:                                 // Cenarion Mana Salve
                 case 41619:                                 // Cenarion Healing Salve
-                    data << uint32(3905);
+                    arg1 = 3905;
                     break;
                 case 41618:                                 // Bottled Nethergon Energy
                 case 41620:                                 // Bottled Nethergon Vapor
-                    data << uint32(3842);
+                    arg1 = 3842;
                     break;
                 case 45373:                                 // Bloodberry Elixir
-                    data << uint32(4075);
+                    arg1 = 4075;
                     break;
                 default:                                    // default case (don't must be)
-                    data << uint32(0);
+                    arg1 = 0;
                     break;
             }
             break;
         case SPELL_FAILED_TOTEMS:
             if (spellInfo->Totem[0])
-                data << uint32(spellInfo->Totem[0]);
+                arg1 = int32(spellInfo->Totem[0]);
             if (spellInfo->Totem[1])
-                data << uint32(spellInfo->Totem[1]);
+                arg2 = int32(spellInfo->Totem[1]);
             break;
         case SPELL_FAILED_TOTEM_CATEGORY:
             if (spellInfo->TotemCategory[0])
-                data << uint32(spellInfo->TotemCategory[0]);
+                arg1 = int32(spellInfo->TotemCategory[0]);
             if (spellInfo->TotemCategory[1])
-                data << uint32(spellInfo->TotemCategory[1]);
+                arg2 = int32(spellInfo->TotemCategory[1]);
             break;
         case SPELL_FAILED_EQUIPPED_ITEM_CLASS:
         case SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND:
         case SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND:
-            data << uint32(spellInfo->EquippedItemClass);
-            data << uint32(spellInfo->EquippedItemSubClassMask);
+            arg1 = spellInfo->EquippedItemClass;
+            arg2 = spellInfo->EquippedItemSubClassMask;
             break;
         case SPELL_FAILED_TOO_MANY_OF_ITEM:
-            {
-                uint32 item = 0;
-                for (int8 eff = 0; eff < MAX_SPELL_EFFECTS; eff++)
-                    if (spellInfo->Effects[eff].ItemType)
-                        item = spellInfo->Effects[eff].ItemType;
-                ItemTemplate const* proto = sObjectMgr->GetItemTemplate(item);
-                if (proto && proto->ItemLimitCategory)
-                    data << uint32(proto->ItemLimitCategory);
-                break;
-            }
+        {
+            // the client names the item (Arg1 = ItemID)
+            for (uint8 eff = 0; eff < MAX_SPELL_EFFECTS; eff++)
+                if (spellInfo->Effects[eff].ItemType)
+                    arg1 = int32(spellInfo->Effects[eff].ItemType);
+            break;
+        }
         case SPELL_FAILED_CUSTOM_ERROR:
-            data << uint32(customError);
+            arg1 = int32(customError);
             break;
         case SPELL_FAILED_REAGENTS:
+        {
+            uint32 missingItem = 0;
+            for (uint32 i = 0; i < MAX_SPELL_REAGENTS; i++)
             {
-                uint32 missingItem = 0;
-                for (uint32 i = 0; i < MAX_SPELL_REAGENTS; i++)
+                if (spellInfo->Reagent[i] <= 0)
+                    continue;
+
+                uint32 itemid    = spellInfo->Reagent[i];
+                uint32 itemcount = spellInfo->ReagentCount[i];
+
+                if (!caster->HasItemCount(itemid, itemcount))
                 {
-                    if (spellInfo->Reagent[i] <= 0)
-                        continue;
-
-                    uint32 itemid    = spellInfo->Reagent[i];
-                    uint32 itemcount = spellInfo->ReagentCount[i];
-
-                    if (!caster->HasItemCount(itemid, itemcount))
-                    {
-                        missingItem = itemid;
-                        break;
-                    }
+                    missingItem = itemid;
+                    break;
                 }
-
-                data << uint32(missingItem);  // first missing item
-                break;
             }
+
+            arg1 = int32(missingItem);                      // first missing item
+            break;
+        }
         case SPELL_FAILED_PREVENTED_BY_MECHANIC:
-            data << uint32(spellInfo->Mechanic);
+            arg1 = int32(spellInfo->Mechanic);
             break;
         case SPELL_FAILED_NEED_EXOTIC_AMMO:
-            data << uint32(spellInfo->EquippedItemSubClassMask);
+        {
+            // the client takes the ammo subclass and makes the mask itself (1 << Arg1)
+            uint32 mask = uint32(spellInfo->EquippedItemSubClassMask);
+            for (int32 bit = 0; bit < 32; ++bit)
+                if (mask & (1u << bit))
+                {
+                    arg1 = bit;
+                    break;
+                }
             break;
+        }
         case SPELL_FAILED_NEED_MORE_ITEMS:
-            data << uint32(0); // Item entry
-            data << uint32(0); // Count
+            arg1 = 0;                                       // Item entry
+            arg2 = 0;                                       // Count
             break;
         case SPELL_FAILED_MIN_SKILL:
-            data << uint32(0); // SkillLine.dbc Id
-            data << uint32(0); // Amount
+            arg1 = 0;                                       // SkillLine id
+            arg2 = 0;                                       // Amount
             break;
         case SPELL_FAILED_FISHING_TOO_LOW:
-            data << uint32(0); // Skill level
+            arg1 = 0;                                       // Skill level
             break;
         default:
             break;
     }
+
+    data.Initialize(pet ? SMSG_PET_CAST_FAILED : SMSG_CAST_FAILED, 18 + 4 * 5);
+    Guid128::WriteRaw(data, castId);
+    data << uint32(spellInfo->Id);
+    if (!pet)
+        data << uint32(spellInfo->SpellVisual[1]);          // SpellXSpellVisualID
+    data << uint32(ClientCastResult(result));
+    data << int32(arg1);
+    data << int32(arg2);
 }
 
-void Spell::SendCastResult(Player* caster, SpellInfo const* spellInfo, uint8 castCount, SpellCastResult result, SpellCustomErrors customError /*= SPELL_CUSTOM_ERROR_NONE*/)
+void Spell::SendCastResult(Player* caster, SpellInfo const* spellInfo, uint8 /*castCount*/, SpellCastResult result, SpellCustomErrors customError /*= SPELL_CUSTOM_ERROR_NONE*/)
+{
+    // no cast to name: the client drops a failure for a cast it does not know, but shows the error
+    SendCastResult(caster, spellInfo, Guid128::Raw(), result, customError);
+}
+
+void Spell::SendCastResult(Player* caster, SpellInfo const* spellInfo, Guid128::Raw const& castId, SpellCastResult result, SpellCustomErrors customError /*= SPELL_CUSTOM_ERROR_NONE*/)
 {
     if (result == SPELL_CAST_OK)
         return;
 
-    WorldPacket data(SMSG_CAST_FAILED, 1 + 4 + 1);
-    WriteCastResultInfo(data, caster, spellInfo, castCount, result, customError);
+    WorldPacket data;
+    WriteCastResultInfo(data, caster, spellInfo, castId, result, customError);
 
     caster->SendDirectMessage(&data);
 }
@@ -4836,7 +5085,7 @@ void Spell::SendCastResult(SpellCastResult result)
     if (HasTriggeredCastFlag(TRIGGERED_DONT_REPORT_CAST_ERROR) && result != SPELL_FAILED_BM_OR_INVISGOD)
         result = SPELL_FAILED_DONT_REPORT;
 
-    SendCastResult(unitCaster->ToPlayer(), m_spellInfo, m_cast_count, result, m_customError);
+    SendCastResult(unitCaster->ToPlayer(), m_spellInfo, GetCastId(), result, m_customError);
 }
 
 void Spell::SendPetCastResult(SpellCastResult result)
@@ -4856,10 +5105,148 @@ void Spell::SendPetCastResult(SpellCastResult result)
     if (!player)
         return;
 
-    WorldPacket data(SMSG_PET_CAST_FAILED, 1 + 4 + 1);
-    WriteCastResultInfo(data, player, m_spellInfo, m_cast_count, result, m_customError);
+    WorldPacket data;
+    WriteCastResultInfo(data, player, m_spellInfo, GetCastId(), result, m_customError, true);
 
     player->SendDirectMessage(&data);
+}
+
+/// SpellCastData, 3.4.3 (FUN_1407195e0), the body of SMSG_SPELL_START and the start of SMSG_SPELL_GO:
+/// PackedGuid128 CasterGUID (the item for an item's spell), CasterUnit, CastID, OriginalCastID, u32 SpellID,
+/// u32 SpellXSpellVisualID, u32 CastFlags, u32 CastFlagsEx, u32 CastTime, MissileTrajectory {u32 TravelTime,
+/// f32 Pitch}, u8 DestLocSpellCastIndex, CreatureImmunities {u32, u32}, SpellHealPrediction {u32, u8,
+/// PackedGuid128}, then bits: 16 hit count, 16 miss count, 16 miss status count, 9 remaining power count,
+/// HasRemainingRunes, 16 target point count, HasAmmoDisplayID, HasAmmoInventoryType; flush; SpellTargetData,
+/// the hit GUIDs, the miss GUIDs, the miss statuses {u8 Reason, [u8 ReflectStatus]}, the remaining powers
+/// {i32 Cost, u8 Type}, [RuneData {u8 Start, u8 Count, u32 n, u8 cooldowns}], the target points, [i32
+/// AmmoDisplayID], [i32 AmmoInventoryType].
+void Spell::WriteSpellCastData(WorldPacket& data, uint32 castFlags, bool go)
+{
+    Unit* unitCaster = m_caster->ToUnit();
+
+    ObjectGuid realCasterGUID = m_caster->GetGUID();
+    if (TempSummon const* tempSummon = unitCaster ? unitCaster->ToTempSummon() : nullptr)
+        if (tempSummon->GetEntry() == WORLD_TRIGGER)
+            if (GameObject* casterGameobject = tempSummon->GetSummonerGameObject())
+                realCasterGUID = casterGameobject->GetGUID();
+
+    // the targets: only a SPELL_GO names who was hit and who was missed
+    std::vector<ObjectGuid> hits;
+    std::vector<std::pair<ObjectGuid, std::pair<uint8, uint8>>> misses;
+    if (go)
+    {
+        for (TargetInfo& target : m_UniqueTargetInfo)
+            if (target.effectMask == 0)                     // No effect apply - all immuned add state
+                target.missCondition = SPELL_MISS_IMMUNE2;
+
+        for (TargetInfo const& target : m_UniqueTargetInfo)
+        {
+            if (target.missCondition == SPELL_MISS_NONE)
+            {
+                if (hits.size() < 0xFFFF)
+                    hits.push_back(target.targetGUID);
+            }
+            else if (misses.size() < 0xFFFF)
+                misses.push_back({ target.targetGUID, { uint8(target.missCondition), uint8(target.reflectResult) } });
+        }
+
+        for (GOTargetInfo const& target : m_UniqueGOTargetInfo)
+            if (hits.size() < 0xFFFF)
+                hits.push_back(target.targetGUID);  // Always hits
+    }
+
+    bool hasPower = (castFlags & CAST_FLAG_POWER_LEFT_SELF) != 0;
+
+    std::vector<uint8> runeCooldowns;
+    uint8 runesBefore = 0, runesAfter = 0;
+    bool hasRunes = false;
+    if (castFlags & CAST_FLAG_RUNE_LIST)
+    {
+        //TODO: There is a crash caused by a spell with CAST_FLAG_RUNE_LIST casted by a creature
+        //The creature is the mover of a player, so HandleCastSpellOpcode uses it as the caster
+        if (Player* player = unitCaster ? unitCaster->ToPlayer() : nullptr)
+        {
+            hasRunes = true;
+            runesBefore = m_runesState;
+            runesAfter = player->GetRunesState();
+            for (uint8 i = 0; i < MAX_RUNES; ++i)
+            {
+                uint8 mask = (1 << i);
+                if (mask & runesBefore && !(mask & runesAfter))  // usable before and on cooldown now...
+                {
+                    // float casts ensure the division is performed on floats as we need float result
+                    float baseCd = float(player->GetRuneBaseCooldown(i, true));
+                    runeCooldowns.push_back(uint8((baseCd - float(player->GetRuneCooldown(i))) / baseCd * 255)); // rune cooldown passed
+                }
+            }
+        }
+    }
+
+    uint32 ammoDisplayID = 0, ammoInventoryType = 0;
+    bool hasAmmo = (castFlags & CAST_FLAG_PROJECTILE) != 0;
+    if (hasAmmo)
+        GetAmmoForPacket(ammoDisplayID, ammoInventoryType);
+
+    Guid128::Write(data, m_CastItem ? m_CastItem->GetGUID() : realCasterGUID);
+    Guid128::Write(data, realCasterGUID);
+    Guid128::WriteRaw(data, GetCastId());
+    Guid128::WriteRaw(data, m_originalCastId);
+    data << uint32(m_spellInfo->Id);
+    data << uint32(m_spellInfo->SpellVisual[1]);            // SpellXSpellVisualID
+    data << uint32(castFlags);
+    data << uint32(0);                                      // CastFlagsEx
+    data << uint32(m_casttime);
+    bool trajectory = (castFlags & CAST_FLAG_ADJUST_MISSILE) != 0;
+    data << uint32(trajectory ? (m_delayTrajectory ? m_delayTrajectory : m_delayMoment) : 0);
+    data << float(trajectory ? m_targets.GetElevation() : 0.0f);
+    data << uint8(0);                                       // DestLocSpellCastIndex
+    data << uint32(0) << uint32(0);                         // Immunities: School, Value
+    data << uint32(0) << uint8(0);                          // Predict: Points, Type
+    Guid128::WritePacked(data, 0, 0);                       // Predict: BeaconGUID
+
+    data.WriteBits(hits.size(), 16);
+    data.WriteBits(misses.size(), 16);
+    data.WriteBits(misses.size(), 16);                      // one status per missed target
+    data.WriteBits(hasPower ? 1 : 0, 9);
+    data.WriteBit(hasRunes);
+    data.WriteBits(0, 16);                                  // TargetPoints
+    data.WriteBit(hasAmmo);
+    data.WriteBit(hasAmmo);
+    data.FlushBits();
+
+    m_targets.Write(data);
+
+    for (ObjectGuid const& guid : hits)
+        Guid128::Write(data, guid);
+    for (auto const& miss : misses)
+        Guid128::Write(data, miss.first);
+    for (auto const& miss : misses)
+    {
+        data << uint8(miss.second.first);
+        if (miss.second.first == SPELL_MISS_REFLECT)
+            data << uint8(miss.second.second);
+    }
+
+    if (hasPower)
+    {
+        data << int32(unitCaster ? unitCaster->GetPower((Powers)m_spellInfo->PowerType) : 0);
+        data << uint8(m_spellInfo->PowerType);
+    }
+
+    if (hasRunes)
+    {
+        data << uint8(runesBefore);
+        data << uint8(runesAfter);
+        data << uint32(runeCooldowns.size());
+        for (uint8 cooldown : runeCooldowns)
+            data << uint8(cooldown);
+    }
+
+    if (hasAmmo)
+    {
+        data << int32(ammoDisplayID);
+        data << int32(ammoInventoryType);
+    }
 }
 
 void Spell::SendSpellStart()
@@ -4899,43 +5286,9 @@ void Spell::SendSpellStart()
     if (m_spellInfo->RuneCostID && m_spellInfo->PowerType == POWER_RUNE)
         castFlags |= CAST_FLAG_NO_GCD; // not needed, but Blizzard sends it
 
-    PackedGuid realCasterGUID = m_caster->GetPackGUID();
-    if (TempSummon const* tempSummon = unitCaster ? unitCaster->ToTempSummon() : nullptr)
-    {
-        if (tempSummon->GetEntry() == WORLD_TRIGGER)
-        {
-            if (GameObject* casterGameobject = tempSummon->GetSummonerGameObject())
-            {
-                realCasterGUID = casterGameobject->GetPackGUID();
-            }
-        }
-    }
-
-    WorldPacket data(SMSG_SPELL_START, (8 + 8 + 4 + 4 + 2));
-    if (m_CastItem)
-        data << m_CastItem->GetPackGUID();
-    else
-        data << realCasterGUID;
-
-    data << realCasterGUID;
-    data << uint8(m_cast_count);                            // pending spell cast?
-    data << uint32(m_spellInfo->Id);                        // spellId
-    data << uint32(castFlags);                              // cast flags
-    data << int32(m_timer);                                 // delay?
-
-    m_targets.Write(data);
-
-    if (castFlags & CAST_FLAG_POWER_LEFT_SELF)
-        data << uint32(unitCaster ? unitCaster->GetPower((Powers)m_spellInfo->PowerType) : 0);
-
-    if (castFlags & CAST_FLAG_PROJECTILE)
-        WriteAmmoToPacket(&data);
-
-    if (castFlags & CAST_FLAG_UNKNOWN_23)
-    {
-        data << uint32(0);
-        data << uint32(0);
-    }
+    // SMSG_SPELL_START, 3.4.3: the SpellCastData alone (ClientSpell switch FUN_1407461c0 -> FUN_1407195e0)
+    WorldPacket data(SMSG_SPELL_START, 150);
+    WriteSpellCastData(data, castFlags, false);
 
     m_caster->SendMessageToSet(&data, true);
 
@@ -4998,88 +5351,20 @@ void Spell::SendSpellGo()
     if (!m_spellInfo->StartRecoveryTime)
         castFlags |= CAST_FLAG_NO_GCD;
 
-    PackedGuid realCasterGUID = m_caster->GetPackGUID();
-    if (TempSummon const* tempSummon = unitCaster ? unitCaster->ToTempSummon() : nullptr)
-    {
-        if (tempSummon->GetEntry() == WORLD_TRIGGER)
-        {
-            if (GameObject* casterGameobject = tempSummon->GetSummonerGameObject())
-            {
-                realCasterGUID = casterGameobject->GetPackGUID();
-            }
-        }
-    }
-
-    WorldPacket data(SMSG_SPELL_GO, 150);                    // guess size
-
-    if (m_CastItem)
-        data << m_CastItem->GetPackGUID();
-    else
-        data << realCasterGUID;
-
-    data << realCasterGUID;
-    data << uint8(m_cast_count);                            // pending spell cast?
-    data << uint32(m_spellInfo->Id);                        // spellId
-    data << uint32(castFlags);                              // cast flags
-    data << uint32(GameTime::GetGameTimeMS().count());                 // timestamp
-
-    WriteSpellGoTargets(&data);
-
-    m_targets.Write(data);
-
-    if (castFlags & CAST_FLAG_POWER_LEFT_SELF)
-        data << uint32(unitCaster ? unitCaster->GetPower((Powers)m_spellInfo->PowerType) : 0);
-
-    if (castFlags & CAST_FLAG_RUNE_LIST)                   // rune cooldowns list
-    {
-        //TODO: There is a crash caused by a spell with CAST_FLAG_RUNE_LIST casted by a creature
-        //The creature is the mover of a player, so HandleCastSpellOpcode uses it as the caster
-        if (Player* player = unitCaster ? unitCaster->ToPlayer() : nullptr)
-        {
-            uint8 runeMaskInitial = m_runesState;
-            uint8 runeMaskAfterCast = player->GetRunesState();
-            data << uint8(runeMaskInitial);                     // runes state before
-            data << uint8(runeMaskAfterCast);                   // runes state after
-            for (uint8 i = 0; i < MAX_RUNES; ++i)
-            {
-                uint8 mask = (1 << i);
-                if (mask & runeMaskInitial && !(mask & runeMaskAfterCast))  // usable before andon cooldown now...
-                {
-                    // float casts ensure the division is performed on floats as we need float result
-                    float baseCd = float(player->GetRuneBaseCooldown(i, true));
-                    data << uint8((baseCd - float(player->GetRuneCooldown(i))) / baseCd * 255); // rune cooldown passed
-                }
-            }
-        }
-    }
-    if (castFlags & CAST_FLAG_ADJUST_MISSILE)
-    {
-        data << m_targets.GetElevation();
-        data << uint32(m_delayTrajectory ? m_delayTrajectory : m_delayMoment);
-    }
-
-    if (castFlags & CAST_FLAG_PROJECTILE)
-        WriteAmmoToPacket(&data);
-
-    if (castFlags & CAST_FLAG_VISUAL_CHAIN)
-    {
-        data << uint32(0);
-        data << uint32(0);
-    }
-
-    if (m_targets.GetTargetMask() & TARGET_FLAG_DEST_LOCATION)
-    {
-        data << uint8(0);
-    }
+    // SMSG_SPELL_GO, 3.4.3: SpellCastData, then bit HasLogData, flush, [SpellCastLogData]
+    WorldPacket data(SMSG_SPELL_GO, 200);
+    WriteSpellCastData(data, castFlags, true);
+    data.WriteBit(false);                                   // HasLogData
+    data.FlushBits();
 
     m_caster->SendMessageToSet(&data, true);
 }
 
-void Spell::WriteAmmoToPacket(WorldPacket* data)
+void Spell::GetAmmoForPacket(uint32& ammoDisplayID, uint32& ammoInventoryType)
 {
     Unit* unitCaster = m_caster->ToUnit();
-    uint32 ammoInventoryType = 0;
-    uint32 ammoDisplayID = 0;
+    ammoInventoryType = 0;
+    ammoDisplayID = 0;
 
     if (unitCaster && unitCaster->IsPlayer())
     {
@@ -5155,80 +5440,14 @@ void Spell::WriteAmmoToPacket(WorldPacket* data)
             ammoInventoryType = nonRangedAmmoInventoryType;
         }
     }
-
-    *data << uint32(ammoDisplayID);
-    *data << uint32(ammoInventoryType);
-}
-
-/// Writes miss and hit targets for a SMSG_SPELL_GO packet
-void Spell::WriteSpellGoTargets(WorldPacket* data)
-{
-    // This function also fill data for channeled spells:
-    // m_needAliveTargetMask req for stop channelig if one target die
-    for (std::list<TargetInfo>::iterator ihit = m_UniqueTargetInfo.begin(); ihit != m_UniqueTargetInfo.end(); ++ihit)
-    {
-        if ((*ihit).effectMask == 0)                  // No effect apply - all immuned add state
-            // possibly SPELL_MISS_IMMUNE2 for this??
-            ihit->missCondition = SPELL_MISS_IMMUNE2;
-    }
-
-    // Hit and miss target counts are both uint8, that limits us to 255 targets for each
-    // sending more than 255 targets crashes the client (since count sent would be wrong)
-    // Spells like 40647 (with a huge radius) can easily reach this limit (spell might need
-    // target conditions but we still need to limit the number of targets sent and keeping
-    // correct count for both hit and miss).
-
-    uint32 hit = 0;
-    std::size_t hitPos = data->wpos();
-    *data << (uint8)0; // placeholder
-    for (std::list<TargetInfo>::const_iterator ihit = m_UniqueTargetInfo.begin(); ihit != m_UniqueTargetInfo.end() && hit < 255; ++ihit)
-    {
-        if ((*ihit).missCondition == SPELL_MISS_NONE)       // Add only hits
-        {
-            *data << ihit->targetGUID;
-            // Xinef: No channeled spell checked, no anything
-            //m_channelTargetEffectMask |=ihit->effectMask;
-            ++hit;
-        }
-    }
-
-    for (std::list<GOTargetInfo>::const_iterator ighit = m_UniqueGOTargetInfo.begin(); ighit != m_UniqueGOTargetInfo.end() && hit < 255; ++ighit)
-    {
-        *data << ighit->targetGUID;                 // Always hits
-        ++hit;
-    }
-
-    uint32 miss = 0;
-    std::size_t missPos = data->wpos();
-    *data << (uint8)0; // placeholder
-    for (std::list<TargetInfo>::const_iterator ihit = m_UniqueTargetInfo.begin(); ihit != m_UniqueTargetInfo.end() && miss < 255; ++ihit)
-    {
-        if (ihit->missCondition != SPELL_MISS_NONE)        // Add only miss
-        {
-            *data << ihit->targetGUID;
-            *data << uint8(ihit->missCondition);
-            if (ihit->missCondition == SPELL_MISS_REFLECT)
-                *data << uint8(ihit->reflectResult);
-            ++miss;
-        }
-    }
-    // Reset m_needAliveTargetMask for non channeled spell
-    // Xinef: Why do we reset something that is not set??????
-    //if (!m_spellInfo->IsChanneled())
-    //    m_channelTargetEffectMask = 0;
-
-    data->put<uint8>(hitPos, (uint8)hit);
-    data->put<uint8>(missPos, (uint8)miss);
 }
 
 void Spell::SendLogExecute()
 {
-    WorldPacket data(SMSG_SPELL_EXECUTE_LOG, (8 + 4 + 4 + 4 + 4 + 8));
-
-    data << m_caster->GetPackGUID();
-
-    data << uint32(m_spellInfo->Id);
-
+    // SMSG_SPELL_EXECUTE_LOG, 3.4.3 (FUN_140705a50): PackedGuid128 Caster, u32 SpellID, u32 effect count,
+    // per effect SpellLogEffect (FUN_140711370): u32 Effect, six u32 counts (power drain, extra attacks,
+    // durability damage, generic victim, trade skill, feed pet), then the six arrays in that order; then
+    // bit HasLogData, flush
     uint8 effCount = 0;
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
     {
@@ -5239,6 +5458,9 @@ void Spell::SendLogExecute()
     if (!effCount)
         return;
 
+    WorldPacket data(SMSG_SPELL_EXECUTE_LOG, 18 + 4 + 4 + effCount * (4 + 24 + 20));
+    Guid128::Write(data, m_caster->GetGUID());
+    data << uint32(m_spellInfo->Id);
     data << uint32(effCount);
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
     {
@@ -5246,96 +5468,100 @@ void Spell::SendLogExecute()
             continue;
 
         data << uint32(m_spellInfo->Effects[i].Effect);             // spell effect
-
-        data.append(*m_effectExecuteData[i]);
+        for (uint8 kind = 0; kind < SpellLogEffectData::MAX_KIND; ++kind)
+            data << uint32(m_effectExecuteData[i]->Counts[kind]);
+        for (uint8 kind = 0; kind < SpellLogEffectData::MAX_KIND; ++kind)
+            data.append(m_effectExecuteData[i]->Parts[kind]);
 
         delete m_effectExecuteData[i];
         m_effectExecuteData[i] = nullptr;
     }
+    data.WriteBit(false);                                   // HasLogData
+    data.FlushBits();
     m_caster->SendMessageToSet(&data, true);
 }
 
 void Spell::ExecuteLogEffectTakeTargetPower(uint8 effIndex, Unit* target, uint32 PowerType, uint32 powerTaken, float gainMultiplier)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << target->GetPackGUID();
-    *m_effectExecuteData[effIndex] << uint32(powerTaken);
-    *m_effectExecuteData[effIndex] << uint32(PowerType);
-    *m_effectExecuteData[effIndex] << float(gainMultiplier);
+    ByteBuffer& part = InitEffectExecuteData(effIndex, SpellLogEffectData::POWER_DRAIN);
+    Guid128::Write(part, target->GetGUID());
+    part << uint32(powerTaken);
+    part << uint32(PowerType);
+    part << float(gainMultiplier);
 }
 
 void Spell::ExecuteLogEffectExtraAttacks(uint8 effIndex, Unit* victim, uint32 attCount)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << victim->GetPackGUID();
-    *m_effectExecuteData[effIndex] << uint32(attCount);
+    ByteBuffer& part = InitEffectExecuteData(effIndex, SpellLogEffectData::EXTRA_ATTACKS);
+    Guid128::Write(part, victim->GetGUID());
+    part << uint32(attCount);
 }
 
-void Spell::ExecuteLogEffectInterruptCast(uint8 effIndex, Unit* victim, uint32 spellId)
+void Spell::ExecuteLogEffectInterruptCast(uint8 effIndex, Unit* victim, uint32 /*spellId*/)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << victim->GetPackGUID();
-    *m_effectExecuteData[effIndex] << uint32(spellId);
+    // 3.4.3's effect log has no interrupt entry (SMSG_SPELL_INTERRUPT_LOG reports it): the victim only
+    Guid128::Write(InitEffectExecuteData(effIndex, SpellLogEffectData::GENERIC_VICTIM), victim->GetGUID());
 }
 
 void Spell::ExecuteLogEffectDurabilityDamage(uint8 effIndex, Unit* victim, int32 itemId, int32 slot)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << victim->GetPackGUID();
-    *m_effectExecuteData[effIndex] << int32(itemId);
-    *m_effectExecuteData[effIndex] << int32(slot);
+    ByteBuffer& part = InitEffectExecuteData(effIndex, SpellLogEffectData::DURABILITY_DAMAGE);
+    Guid128::Write(part, victim->GetGUID());
+    part << int32(itemId);
+    part << int32(slot);
 }
 
 void Spell::ExecuteLogEffectOpenLock(uint8 effIndex, Object* obj)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << obj->GetPackGUID();
+    Guid128::Write(InitEffectExecuteData(effIndex, SpellLogEffectData::GENERIC_VICTIM), obj->GetGUID());
 }
 
 void Spell::ExecuteLogEffectCreateItem(uint8 effIndex, uint32 entry)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << uint32(entry);
+    InitEffectExecuteData(effIndex, SpellLogEffectData::TRADE_SKILL) << int32(entry);
 }
 
 void Spell::ExecuteLogEffectDestroyItem(uint8 effIndex, uint32 entry)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << uint32(entry);
+    InitEffectExecuteData(effIndex, SpellLogEffectData::FEED_PET) << int32(entry);
 }
 
 void Spell::ExecuteLogEffectSummonObject(uint8 effIndex, WorldObject* obj)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << obj->GetPackGUID();
+    Guid128::Write(InitEffectExecuteData(effIndex, SpellLogEffectData::GENERIC_VICTIM), obj->GetGUID());
 }
 
 void Spell::ExecuteLogEffectUnsummonObject(uint8 effIndex, WorldObject* obj)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << obj->GetPackGUID();
+    Guid128::Write(InitEffectExecuteData(effIndex, SpellLogEffectData::GENERIC_VICTIM), obj->GetGUID());
 }
 
 void Spell::ExecuteLogEffectResurrect(uint8 effIndex, Unit* target)
 {
-    InitEffectExecuteData(effIndex);
-    *m_effectExecuteData[effIndex] << target->GetPackGUID();
+    Guid128::Write(InitEffectExecuteData(effIndex, SpellLogEffectData::GENERIC_VICTIM), target->GetGUID());
 }
 
 void Spell::SendInterrupted(uint8 result)
 {
-    WorldPacket data(SMSG_SPELL_FAILURE, (8 + 1 + 4 + 1));
-    data << m_caster->GetPackGUID();
-    data << uint8(m_cast_count);
+    // SMSG_SPELL_FAILURE, 3.4.3 (handler FUN_1416bfe50): PackedGuid128 CasterUnit, PackedGuid128 CastID,
+    // u32 SpellID, u32 SpellXSpellVisualID, u16 Reason. SMSG_SPELL_FAILED_OTHER (FUN_1416bfdc0): the same
+    // with a u8 Reason. Both in the client's SpellCastResult numbering.
+    uint32 reason = ClientCastResult(SpellCastResult(result));
+
+    WorldPacket data(SMSG_SPELL_FAILURE, 18 + 18 + 4 + 4 + 2);
+    Guid128::Write(data, m_caster->GetGUID());
+    Guid128::WriteRaw(data, GetCastId());
     data << uint32(m_spellInfo->Id);
-    data << uint8(result);
+    data << uint32(m_spellInfo->SpellVisual[1]);
+    data << uint16(reason);
     m_caster->SendMessageToSet(&data, true);
 
-    data.Initialize(SMSG_SPELL_FAILED_OTHER, (8 + 1 + 4 + 1));
-    data << m_caster->GetPackGUID();
-    data << uint8(m_cast_count);
+    data.Initialize(SMSG_SPELL_FAILED_OTHER, 18 + 18 + 4 + 4 + 1);
+    Guid128::Write(data, m_caster->GetGUID());
+    Guid128::WriteRaw(data, GetCastId());
     data << uint32(m_spellInfo->Id);
-    data << uint8(result);
+    data << uint32(m_spellInfo->SpellVisual[1]);
+    data << uint8(std::min<uint32>(reason, 0xFF));
     m_caster->SendMessageToSet(&data, true);
 }
 
@@ -5351,9 +5577,10 @@ void Spell::SendChannelUpdate(uint32 time)
         unitCaster->SetUInt32Value(UNIT_CHANNEL_SPELL, 0);
     }
 
-    WorldPacket data(SMSG_SPELL_CHANNEL_UPDATE, 8 + 4);
-    data << m_caster->GetPackGUID();
-    data << uint32(time);
+    // SMSG_SPELL_CHANNEL_UPDATE, 3.4.3 (handler FUN_1416bfab0): PackedGuid128 CasterGUID, i32 TimeRemaining
+    WorldPacket data(SMSG_SPELL_CHANNEL_UPDATE, 18 + 4);
+    Guid128::Write(data, m_caster->GetGUID());
+    data << int32(time);
 
     m_caster->SendMessageToSet(&data, true);
 }
@@ -5369,10 +5596,17 @@ void Spell::SendChannelStart(uint32 duration)
         if (m_UniqueTargetInfo.size() + m_UniqueGOTargetInfo.size() == 1)   // this is for TARGET_SELECT_CATEGORY_NEARBY
             channelTarget = !m_UniqueTargetInfo.empty() ? m_UniqueTargetInfo.front().targetGUID : m_UniqueGOTargetInfo.front().targetGUID;
 
-    WorldPacket data(SMSG_SPELL_CHANNEL_START, (8 + 4 + 4));
-    data << m_caster->GetPackGUID();
+    // SMSG_SPELL_CHANNEL_START, 3.4.3 (ClientSpell switch): PackedGuid128 CasterGUID, u32 SpellID,
+    // u32 SpellXSpellVisualID, u32 ChannelDuration, bit HasInterruptImmunities, bit HasHealPrediction,
+    // flush, [the immunities], [the heal prediction]
+    WorldPacket data(SMSG_SPELL_CHANNEL_START, 18 + 4 + 4 + 4 + 1);
+    Guid128::Write(data, m_caster->GetGUID());
     data << uint32(m_spellInfo->Id);
+    data << uint32(m_spellInfo->SpellVisual[1]);
     data << uint32(duration);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.FlushBits();
 
     m_caster->SendMessageToSet(&data, true);
 
@@ -5398,17 +5632,20 @@ void Spell::SendResurrectRequest(Player* target)
                                ? ""
                                : unitCaster->GetNameForLocaleIdx(target->GetSession()->GetSessionDbLocaleIndex()));
 
-    WorldPacket data(SMSG_RESURRECT_REQUEST, (8 + 4 + sentName.size() + 1 + 1 + 1 + 4));
-    data << unitCaster->GetGUID();
-    data << uint32(sentName.size() + 1);
-
-    data << sentName;
-    data << uint8(0); // null terminator
-
-    data << uint8(unitCaster->IsPlayer() ? 0 : 1); // "you'll be afflicted with resurrection sickness"
-    // override delay sent with SMSG_CORPSE_RECLAIM_DELAY, set instant resurrection for spells with this attribute
-    if (m_spellInfo->HasAttribute(SPELL_ATTR3_NO_RES_TIMER))
-        data << uint32(0);
+    // SMSG_RESURRECT_REQUEST, 3.4.3 (game switch, inline): PackedGuid128 ResurrectOffererGUID, u32 its
+    // virtual realm address, u32 PetNumber, u32 SpellID, 11-bit name length, bit UseTimer, bit Sickness,
+    // flush, the name
+    WorldPacket data(SMSG_RESURRECT_REQUEST, 18 + 12 + 2 + sentName.size());
+    Guid128::Write(data, unitCaster->GetGUID());
+    data << uint32(Guid128::VirtualRealmAddress());
+    data << uint32(0);                                      // PetNumber
+    data << uint32(m_spellInfo->Id);
+    data.WriteBits(std::min<std::size_t>(sentName.size(), 0x7FF), 11);
+    // the reclaim delay of SMSG_CORPSE_RECLAIM_DELAY is skipped for spells with this attribute
+    data.WriteBit(!m_spellInfo->HasAttribute(SPELL_ATTR3_NO_RES_TIMER));
+    data.WriteBit(!unitCaster->IsPlayer());                 // "you'll be afflicted with resurrection sickness"
+    data.FlushBits();
+    data.WriteString(std::string_view(sentName).substr(0, 0x7FF));
     target->SendDirectMessage(&data);
 }
 
@@ -8140,9 +8377,10 @@ void Spell::Delayed() // only called in DealDamage()
 
     LOG_DEBUG("spells", "Spell {} partially interrupted for ({}) ms at damage", m_spellInfo->Id, delaytime);
 
-    WorldPacket data(SMSG_SPELL_DELAYED, 8 + 4);
-    data << m_caster->GetPackGUID();
-    data << uint32(delaytime);
+    // SMSG_SPELL_DELAYED, 3.4.3 (handler FUN_1416bfc80): PackedGuid128 Caster, i32 ActualDelay
+    WorldPacket data(SMSG_SPELL_DELAYED, 18 + 4);
+    Guid128::Write(data, m_caster->GetGUID());
+    data << int32(delaytime);
 
     m_caster->SendMessageToSet(&data, true);
 }
@@ -8850,21 +9088,14 @@ void Spell::FinishTargetProcessing()
     SendLogExecute();
 }
 
-void Spell::InitEffectExecuteData(uint8 effIndex)
+ByteBuffer& Spell::InitEffectExecuteData(uint8 effIndex, SpellLogEffectData::Kind kind)
 {
     ASSERT(effIndex < MAX_SPELL_EFFECTS);
     if (!m_effectExecuteData[effIndex])
-    {
-        m_effectExecuteData[effIndex] = new ByteBuffer(0x20);
-        // first dword - target counter
-        *m_effectExecuteData[effIndex] << uint32(1);
-    }
-    else
-    {
-        // increase target counter by one
-        uint32 count = (*m_effectExecuteData[effIndex]).read<uint32>(0);
-        (*m_effectExecuteData[effIndex]).put<uint32>(0, ++count);
-    }
+        m_effectExecuteData[effIndex] = new SpellLogEffectData();
+
+    ++m_effectExecuteData[effIndex]->Counts[kind];
+    return m_effectExecuteData[effIndex]->Parts[kind];
 }
 
 void Spell::CheckEffectExecuteData()
