@@ -21,6 +21,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterPackets.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Common.h"
 #include "DBCEnums.h"
@@ -45,6 +46,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "PacketGuid128.h"
+#include "QueryPackets.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SocialMgr.h"
@@ -224,54 +226,55 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_WHO Message");
 
-    uint32 matchCount = 0;
+    // 3.4.3 (writer FUN_14076a270, WhoRequest FUN_14074fa00): 4-bit area count, bit IsFromAddOn, flush,
+    // i32 MinLevel, i32 MaxLevel, i64 RaceFilter, i32 ClassFilter, 6-bit name, 9-bit realm, 7-bit guild,
+    // 9-bit guild realm lengths, 3-bit word count, bits ShowEnemies, ShowArenaPlayers, ExactName,
+    // HasServerInfo, flush, the words (7-bit length, flush, the word), the four strings, [i32, i32, u32
+    // server info], u32 RequestID, u8 Origin, i32 areas
+    uint32 zonesCount = recvData.ReadBits(4);
+    recvData.ReadBit();
+    recvData.ResetBitReader();
+    int32 levelMin = recvData.read<int32>();
+    int32 levelMax = recvData.read<int32>();
+    uint64 racemask = recvData.read<uint64>();
+    uint32 classmask = recvData.read<uint32>();
+    uint32 nameLen = recvData.ReadBits(6);
+    uint32 realmLen = recvData.ReadBits(9);
+    uint32 guildLen = recvData.ReadBits(7);
+    uint32 guildRealmLen = recvData.ReadBits(9);
+    uint32 strCount = recvData.ReadBits(3);
+    recvData.ReadBit();                                     // ShowEnemies
+    recvData.ReadBit();                                     // ShowArenaPlayers
+    recvData.ReadBit();                                     // ExactName
+    bool hasServerInfo = recvData.ReadBit();
+    recvData.ResetBitReader();
 
-    uint32 levelMin, levelMax, racemask, classmask, zonesCount, strCount;
-    std::array<uint32, 10> zoneids = {};                    // 10 is client limit
-    std::string packetPlayerName, packetGuildName;
-
-    recvData >> levelMin;                                   // maximal player level, default 0
-    recvData >> levelMax;                                   // minimal player level, default 100 (MAX_LEVEL)
-    recvData >> packetPlayerName;                           // player name, case sensitive...
-
-    recvData >> packetGuildName;                            // guild name, case sensitive...
-
-    recvData >> racemask;                                   // race mask
-    recvData >> classmask;                                  // class mask
-    recvData >> zonesCount;                                 // zones count, client limit = 10 (2.0.10)
-
-    if (zonesCount > 10)
-        return;                                             // can't be received from real client or broken packet
-
-    for (uint32 i = 0; i < zonesCount; ++i)
+    std::wstring str[8];
+    for (uint32 i = 0; i < strCount; ++i)
     {
-        uint32 temp;
-        recvData >> temp;                                   // zone id, 0 if zone is unknown...
-        zoneids[i] = temp;
-        LOG_DEBUG("network.who", "Zone {}: {}", i, zoneids[i]);
+        uint32 len = recvData.ReadBits(7);
+        recvData.ResetBitReader();
+        std::string temp = recvData.ReadString(len);
+        if (!Utf8toWStr(temp, str[i]))
+            continue;
+        wstrToLower(str[i]);
+        LOG_DEBUG("network.who", "String {}: {}", i, temp);
     }
+    std::string packetPlayerName = recvData.ReadString(nameLen);
+    recvData.read_skip(realmLen);
+    std::string packetGuildName = recvData.ReadString(guildLen);
+    recvData.read_skip(guildRealmLen);
+    if (hasServerInfo)
+        recvData.read_skip(12);
+    uint32 requestId = recvData.read<uint32>();
+    recvData.read_skip<uint8>();                            // Origin
 
-    recvData >> strCount;                                   // user entered strings count, client limit=4 (checked on 2.0.10)
-
-    if (strCount > 4)
-        return;                                             // can't be received from real client or broken packet
+    std::array<uint32, 16> zoneids = {};
+    for (uint32 i = 0; i < zonesCount; ++i)
+        zoneids[i] = recvData.read<int32>();
 
     LOG_DEBUG("network.who", "Minlvl {}, maxlvl {}, name {}, guild {}, racemask {}, classmask {}, zones {}, strings {}",
         levelMin, levelMax, packetPlayerName, packetGuildName, racemask, classmask, zonesCount, strCount);
-
-    std::wstring str[4];                                    // 4 is client limit
-    for (uint32 i = 0; i < strCount; ++i)
-    {
-        std::string temp;
-        recvData >> temp;                                   // user entered string, it used as universal search pattern(guild+player name)?
-
-        if (!Utf8toWStr(temp, str[i]))
-            continue;
-
-        wstrToLower(str[i]);
-
-        LOG_DEBUG("network.who", "String {}: {}", i, temp);
-    }
 
     std::wstring wpacketPlayerName;
     std::wstring wpacketGuildName;
@@ -288,11 +291,11 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
     uint32 team = _player->GetTeamId();
     uint32 gmLevelInWhoList = sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST);
-    uint32 displaycount = 0;
+    // the 6-bit entry count holds at most 63 players
+    uint32 maxShown = std::min<uint32>(sWorld->getIntConfig(CONFIG_MAX_WHO_LIST_RETURN), 63);
 
-    WorldPacket data(SMSG_WHO, 50);     // guess size
-    data << uint32(matchCount);         // placeholder, count of players matching criteria
-    data << uint32(displaycount);       // placeholder, count of players displayed
+    ByteBuffer entries(200);
+    uint32 displaycount = 0;
 
     for (auto const& target : sWhoListCacheMgr->GetWhoList())
     {
@@ -306,68 +309,42 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         // check if target is globally visible for player
         if ((_player->GetGUID() != target.GetGuid() && !target.IsVisible()) &&
             (AccountMgr::IsPlayerAccount(_player->GetSession()->GetSecurity()) || target.GetSecurity() > _player->GetSession()->GetSecurity()))
-        {
             continue;
-        }
 
         // check if target's level is in level range
-        uint8 lvl = target.GetLevel();
+        int32 lvl = target.GetLevel();
         if (lvl < levelMin || lvl > levelMax)
-        {
             continue;
-        }
 
         // check if class matches classmask
         uint8 class_ = target.GetClass();
         if (!(classmask & (1 << class_)))
-        {
             continue;
-        }
 
-        // check if race matches racemask
+        // check if race matches racemask (3.4.3: race N is bit N-1)
         uint32 race = target.GetRace();
-        if (!(racemask & (1 << race)))
-        {
+        if (race && !(racemask & (uint64(1) << (race - 1))))
             continue;
-        }
 
         uint32 playerZoneId = target.GetZoneId();
-        uint8 gender = target.GetGender();
-
-        bool showZones = true;
+        bool showZones = zonesCount == 0;
         for (uint32 i = 0; i < zonesCount; ++i)
-        {
             if (zoneids[i] == playerZoneId)
-            {
                 showZones = true;
-                break;
-            }
-
-            showZones = false;
-        }
-
         if (!showZones)
-        {
             continue;
-        }
 
         std::wstring const& wideplayername = target.GetWidePlayerName();
         if (!(wpacketPlayerName.empty() || wideplayername.find(wpacketPlayerName) != std::wstring::npos))
-        {
             continue;
-        }
 
         std::wstring const& wideguildname = target.GetWideGuildName();
         if (!(wpacketGuildName.empty() || wideguildname.find(wpacketGuildName) != std::wstring::npos))
-        {
             continue;
-        }
 
         std::string aname;
         if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(playerZoneId))
-        {
             aname = areaEntry->area_name[GetSessionDbcLocale()];
-        }
 
         bool s_show = true;
         for (uint32 i = 0; i < strCount; ++i)
@@ -387,30 +364,47 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         }
 
         if (!s_show)
-        {
             continue;
-        }
 
-        // 49 is maximum player count sent to client - can be overridden
-        // through config, but is unstable
-        if ((matchCount++) >= sWorld->getIntConfig(CONFIG_MAX_WHO_LIST_RETURN))
-        {
-            continue;
-        }
+        if (displaycount >= maxShown)
+            break;
 
-        data << target.GetPlayerName();                   // player name
-        data << target.GetGuildName();                    // guild name
-        data << uint32(lvl);                              // player level
-        data << uint32(class_);                           // player class
-        data << uint32(race);                             // player race
-        data << uint8(gender);                            // player gender
-        data << uint32(playerZoneId);                     // player zone id
+        // WhoEntry: PlayerGuidLookupData, PackedGuid128 GuildGUID, u32 GuildVirtualRealmAddress, i32 AreaID,
+        // 7-bit guild name length, bit IsGM, flush, the guild name
+        WorldPackets::Query::NameCacheLookupResult lookup;
+        lookup.Player = target.GetGuid();
+        lookup.Result = 0;
+        lookup.HasData = true;
+        lookup.Name = target.GetPlayerName();
+        lookup.Race = race;
+        lookup.Sex = target.GetGender();
+        lookup.Class = class_;
+        lookup.Level = uint8(lvl);
+        WorldPackets::Query::WritePlayerGuidLookupData(entries, lookup);
+
+        ObjectGuid::LowType guildId = sCharacterCache->GetCharacterGuildIdByGuid(target.GetGuid());
+        std::string_view guildName = std::string_view(target.GetGuildName()).substr(0, std::min<std::size_t>(target.GetGuildName().size(), 0x7F));
+        if (guildId)
+            Guid128::WritePacked(entries, guildId, (uint64(28) << 58) | Guid128::RealmBits());
+        else
+            Guid128::WritePacked(entries, 0, 0);
+        entries << uint32(guildId ? Guid128::VirtualRealmAddress() : 0);
+        entries << int32(playerZoneId);
+        entries.WriteBits(guildName.size(), 7);
+        entries.WriteBit(target.GetSecurity() > SEC_PLAYER);
+        entries.FlushBits();
+        entries.WriteString(guildName);
 
         ++displaycount;
     }
 
-    data.put(0, displaycount);                            // insert right count, count displayed
-    data.put(4, matchCount);                              // insert right count, count of matches
+    // SMSG_WHO, 3.4.3 (inline in the chat switch FUN_140723060): u32 RequestID, 6-bit entry count, flush,
+    // the entries
+    WorldPacket data(SMSG_WHO, 5 + entries.size());
+    data << uint32(requestId);
+    data.WriteBits(displaycount, 6);
+    data.FlushBits();
+    data.append(entries);
 
     SendPacket(&data);
     LOG_DEBUG("network", "WORLD: Send SMSG_WHO Message");

@@ -19,6 +19,7 @@
 #include "AreaDefines.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -678,9 +679,7 @@ bool Group::RemoveMember(ObjectGuid guid, RemoveMethod const& method /*= GROUP_R
                 }
 
                 // Do we really need to send this opcode?
-                data.Initialize(SMSG_PARTY_UPDATE, 1 + 1 + 1 + 1 + 8 + 4 + 4 + 8);
-                data << uint8(0x10) << uint8(0) << uint8(0) << uint8(0);
-                data << m_guid << uint32(m_counter) << uint32(0) << uint64(0);
+                BuildEmptyPartyUpdate(data);
                 player->GetSession()->SendPacket(&data);
             }
         }
@@ -810,8 +809,12 @@ void Group::ChangeLeader(ObjectGuid newLeaderGuid)
     m_leaderName = newLeader->GetName();
     ToggleGroupMemberFlag(slot, MEMBER_FLAG_ASSISTANT, false);
 
-    WorldPacket data(SMSG_GROUP_NEW_LEADER, m_leaderName.size() + 1);
-    data << slot->name;
+    // SMSG_GROUP_NEW_LEADER, 3.4.3 (FUN_1406c1a50): u8 PartyIndex, 9-bit name length, flush, the name
+    WorldPacket data(SMSG_GROUP_NEW_LEADER, 3 + slot->name.size());
+    data << uint8(0);
+    data.WriteBits(slot->name.size(), 9);
+    data.FlushBits();
+    data.WriteString(slot->name);
     BroadcastPacket(&data, true);
 
     sScriptMgr->OnGroupChangeLeader(this, newLeaderGuid, m_leaderGuid); // This hook should be executed at the end - Not used anywhere in the original core
@@ -876,9 +879,7 @@ void Group::ForcedDisband(bool hideDestroy /* = false */)
         }
         else
         {
-            data.Initialize(SMSG_PARTY_UPDATE, 1 + 1 + 1 + 1 + 8 + 4 + 4 + 8);
-            data << uint8(0x10) << uint8(0) << uint8(0) << uint8(0);
-            data << m_guid << uint32(m_counter) << uint32(0) << uint64(0);
+            BuildEmptyPartyUpdate(data);
             player->SendDirectMessage(&data);
         }
     }
@@ -1900,56 +1901,106 @@ void Group::SendUpdateToPlayer(ObjectGuid playerGUID, MemberSlot* slot)
         slot = &(*witr);
     }
 
-    WorldPacket data(SMSG_PARTY_UPDATE, (1 + 1 + 1 + 1 + 1 + 4 + 8 + 4 + 4 + (GetMembersCount() - 1) * (13 + 8 + 1 + 1 + 1 + 1) + 8 + 1 + 8 + 1 + 1 + 1 + 1));
-    data << uint8(m_groupType);                         // group type (flags in 3.3)
-    data << uint8(slot->group);
-    data << uint8(slot->flags);
-    data << uint8(slot->roles);
-    if (isLFGGroup())
+    // SMSG_PARTY_UPDATE, 3.4.3 (FUN_1406c6720 -> FUN_140701b50): u16 PartyFlags (3.3.5's group type bits:
+    // 0x1 battleground, 0x2 raid, 0x8 dungeon finder, 0x10 destroyed), u8 PartyIndex, u8 PartyType (1 a
+    // normal party), i32 MyIndex, PackedGuid128 PartyGUID, u32 SequenceNum, PackedGuid128 LeaderGUID, u8
+    // LeaderFactionGroup, u32 member count, bits HasLfgInfos, HasLootSettings, HasDifficultySettings,
+    // flush; every member, the receiver too (PartyPlayerInfo: 6-bit name and voice state lengths,
+    // Connected, VoiceChatSilenced, FromSocialQueue bits, flush, GUID, subgroup, flags, roles, class,
+    // faction group, the name; a voice state length of 1 sends none); [loot: method, master, threshold];
+    // [difficulty: dungeon, raid and legacy raid Difficulty.db2 ids]; [dungeon finder]
+    WorldPacket data(SMSG_PARTY_UPDATE, 64 + GetMembersCount() * 40);
+    int32 myIndex = 0;
     {
-        data << uint8(sLFGMgr->GetState(m_guid) == lfg::LFG_STATE_FINISHED_DUNGEON ? 2 : 0); // FIXME - Dungeon save status? 2 = done
-        data << uint32(sLFGMgr->GetDungeon(m_guid));
+        int32 i = 0;
+        for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr, ++i)
+            if (citr->guid == slot->guid)
+                myIndex = i;
     }
 
-    data << m_guid;
-    data << uint32(m_counter++);                        // 3.3, value increases every time this packet gets sent
-    data << uint32(GetMembersCount() - 1);
+    bool lfg = isLFGGroup();
+    data << uint16(m_groupType);
+    data << uint8(0);                                   // PartyIndex: the home party
+    data << uint8(1);                                   // PartyType: normal
+    data << int32(myIndex);
+    Guid128::Write(data, m_guid);
+    data << uint32(m_counter++);                        // value increases every time this packet gets sent
+    Guid128::Write(data, m_leaderGuid);
+    data << uint8(0);                                   // LeaderFactionGroup
+    data << uint32(GetMembersCount());
+    data.WriteBit(lfg);
+    data.WriteBit(true);                                // HasLootSettings
+    data.WriteBit(true);                                // HasDifficultySettings
+    data.FlushBits();
+
     for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr)
     {
-        if (slot->guid == citr->guid)
-            continue;
-
         Player* member = ObjectAccessor::FindConnectedPlayer(citr->guid);
+        bool online = member && !member->GetSession()->PlayerLogout();
+        uint8 classId = member ? member->getClass() : 0;
+        if (!member)
+            if (CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(citr->guid))
+                classId = cache->Class;
 
-        uint8 onlineState = (member && !member->GetSession()->PlayerLogout()) ? MEMBER_STATUS_ONLINE : MEMBER_STATUS_OFFLINE;
-        onlineState = onlineState | ((isBGGroup() || isBFGroup()) ? MEMBER_STATUS_PVP : 0);
-
-        data << citr->name;
-        data << citr->guid;                             // guid
-        data << uint8(onlineState);                     // online-state
-        data << uint8(citr->group);                     // groupid
+        std::string_view name = std::string_view(citr->name).substr(0, std::min<std::size_t>(citr->name.size(), 0x3F));
+        data.WriteBits(name.size(), 6);
+        data.WriteBits(1, 6);                           // VoiceStateID: empty
+        data.WriteBit(online);
+        data.WriteBit(false);                           // VoiceChatSilenced
+        data.WriteBit(false);                           // FromSocialQueue
+        data.FlushBits();
+        Guid128::Write(data, citr->guid);
+        data << uint8(citr->group);
         data << uint8(citr->flags);                     // See enum GroupMemberFlags
         data << uint8(citr->roles);                     // Lfg Roles
+        data << uint8(classId);
+        data << uint8(0);                               // FactionGroup
+        data.WriteString(name);
     }
 
-    data << m_leaderGuid;                               // leader guid
+    data << uint8(m_lootMethod);
+    Guid128::Write(data, m_lootMethod == MASTER_LOOT ? m_masterLooterGuid : ObjectGuid::Empty);
+    data << uint8(m_lootThreshold);
 
-    if (GetMembersCount() - 1)
+    data << uint32(m_dungeonDifficulty + 1);            // 5-man normal / heroic: Difficulty.db2 1 / 2
+    data << uint32(m_raidDifficulty + 3);               // 10 / 25 normal / heroic: 3-6
+    data << uint32(m_raidDifficulty + 3);               // LegacyRaidDifficultyID
+
+    if (lfg)
     {
-        data << uint8(m_lootMethod);                    // loot method
-
-        if (m_lootMethod == MASTER_LOOT)
-            data << m_masterLooterGuid;                 // master looter guid
-        else
-            data << uint64(0);                          // looter guid
-
-        data << uint8(m_lootThreshold);                 // loot threshold
-        data << uint8(m_dungeonDifficulty);             // Dungeon Difficulty
-        data << uint8(m_raidDifficulty);                // Raid Difficulty
-        data << uint8(m_raidDifficulty >= RAID_DIFFICULTY_10MAN_HEROIC);    // 3.3 Dynamic Raid Difficulty - 0 normal/1 heroic
+        data << uint8(sLFGMgr->GetState(m_guid) == lfg::LFG_STATE_FINISHED_DUNGEON ? 2 : 0); // MyFlags
+        data << uint32(sLFGMgr->GetDungeon(m_guid));    // Slot
+        data << uint32(0);                              // MyRandomSlot
+        data << uint8(0);                               // MyPartialClear
+        data << float(0.0f);                            // MyGearDiff
+        data << uint8(0);                               // MyStrangerCount
+        data << uint8(0);                               // MyKickVoteCount
+        data << uint8(0);                               // BootCount
+        data.WriteBit(false);                           // Aborted
+        data.WriteBit(false);                           // MyFirstReward
+        data.FlushBits();
     }
 
     player->SendDirectMessage(&data);
+}
+
+/// SMSG_PARTY_UPDATE for a player who has left: PartyFlags 0x10 (destroyed), MyIndex -1, no members.
+void Group::BuildEmptyPartyUpdate(WorldPacket& data)
+{
+    data.Initialize(SMSG_PARTY_UPDATE, 2 + 2 + 4 + 18 + 4 + 2 + 1 + 4 + 1);
+    data << uint16(0x10);
+    data << uint8(0);
+    data << uint8(0);
+    data << int32(-1);
+    Guid128::Write(data, m_guid);
+    data << uint32(m_counter);
+    Guid128::Write(data, ObjectGuid::Empty);
+    data << uint8(0);
+    data << uint32(0);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.WriteBit(false);
+    data.FlushBits();
 }
 
 void Group::UpdatePlayerOutOfRange(Player* player)

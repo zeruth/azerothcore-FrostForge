@@ -266,11 +266,33 @@ void SocialMgr::GetFriendInfo(Player* player, ObjectGuid const& friendGUID, Frie
     }
 }
 
+/// SMSG_FRIEND_STATUS, 3.4.3 (FUN_1406bf930, handler FUN_141572810): u8 FriendResult (3.3.5's 0-17), PackedGuid128
+/// Guid, PackedGuid128 WowAccountGuid, u32 VirtualRealmAddress, u8 Status, u32 AreaID, u32 Level, u32
+/// ClassID, 10-bit notes length, bit Mobile, flush, the notes. Every field travels for every result.
+static void BuildFriendStatus(WorldPacket& data, FriendsResult result, ObjectGuid const& guid, FriendInfo const* fi)
+{
+    bool withStatus = fi && (result == FRIEND_ADDED_ONLINE || result == FRIEND_ONLINE);
+    bool withNote = fi && (result == FRIEND_ADDED_ONLINE || result == FRIEND_ADDED_OFFLINE);
+    std::string_view note = withNote ? std::string_view(fi->Note).substr(0, std::min<std::size_t>(fi->Note.size(), 0x3FF)) : std::string_view();
+
+    data.Initialize(SMSG_FRIEND_STATUS, 1 + 18 * 2 + 4 + 1 + 12 + 2 + note.size());
+    data << uint8(result);
+    Guid128::Write(data, guid);
+    Guid128::Write(data, ObjectGuid::Empty);                // WowAccountGuid
+    data << uint32(Guid128::VirtualRealmAddress());
+    data << uint8(withStatus ? fi->Status : 0);
+    data << uint32(withStatus ? fi->Area : 0);
+    data << uint32(withStatus ? fi->Level : 0);
+    data << uint32(withStatus ? fi->Class : 0);
+    data.WriteBits(note.size(), 10);
+    data.WriteBit(false);                                   // Mobile
+    data.FlushBits();
+    data.WriteString(note);
+}
+
 void SocialMgr::MakeFriendStatusPacket(FriendsResult result, ObjectGuid const& guid, WorldPacket* data)
 {
-    data->Initialize(SMSG_FRIEND_STATUS, 9);
-    *data << uint8(result);
-    *data << guid;
+    BuildFriendStatus(*data, result, guid, nullptr);
 }
 
 void SocialMgr::SendFriendStatus(Player* player, FriendsResult result, ObjectGuid const& friendGuid, bool broadcast)
@@ -278,31 +300,8 @@ void SocialMgr::SendFriendStatus(Player* player, FriendsResult result, ObjectGui
     FriendInfo fi;
     GetFriendInfo(player, friendGuid, fi);
 
-    WorldPacket data(SMSG_FRIEND_STATUS, 9);
-    data << uint8(result);
-    data << friendGuid;
-    switch (result)
-    {
-        case FRIEND_ADDED_OFFLINE:
-        case FRIEND_ADDED_ONLINE:
-            data << fi.Note;
-            break;
-        default:
-            break;
-    }
-
-    switch (result)
-    {
-        case FRIEND_ADDED_ONLINE:
-        case FRIEND_ONLINE:
-            data << uint8(fi.Status);
-            data << uint32(fi.Area);
-            data << uint32(fi.Level);
-            data << uint32(fi.Class);
-            break;
-        default:
-            break;
-    }
+    WorldPacket data;
+    BuildFriendStatus(data, result, friendGuid, &fi);
 
     if (broadcast)
         BroadcastToFriendListers(player, &data);

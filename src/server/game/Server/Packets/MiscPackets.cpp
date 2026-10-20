@@ -16,6 +16,7 @@
  */
 
 #include "MiscPackets.h"
+#include "PacketGuid128.h"
 
 WorldPackets::Misc::Weather::Weather() : ServerPacket(SMSG_WEATHER, 4 + 4 + 1) { }
 
@@ -76,13 +77,18 @@ WorldPacket const* WorldPackets::Misc::Playsound::Write()
 
 void WorldPackets::Misc::MinimapPingClient::Read()
 {
+    // 3.4.3 (writer FUN_140768230): bit HasPartyIndex, flush, f32 PositionX, f32 PositionY, [u8 PartyIndex]
+    _worldPacket.ReadBit();
+    _worldPacket.ResetBitReader();
     _worldPacket >> MapX;
     _worldPacket >> MapY;
+    _worldPacket.rfinish();
 }
 
 WorldPacket const* WorldPackets::Misc::MinimapPing::Write()
 {
-    _worldPacket << SourceGuid;
+    // 3.4.3 (FUN_1406c50d0): PackedGuid128 Sender, f32 PositionX, f32 PositionY
+    Guid128::Write(_worldPacket, SourceGuid);
     _worldPacket << float(MapX);
     _worldPacket << float(MapY);
 
@@ -91,16 +97,22 @@ WorldPacket const* WorldPackets::Misc::MinimapPing::Write()
 
 void WorldPackets::Misc::RandomRollClient::Read()
 {
+    // 3.4.3 (writer FUN_140768a40): bit HasPartyIndex, flush, i32 Min, i32 Max, [u8 PartyIndex]
+    _worldPacket.ReadBit();
+    _worldPacket.ResetBitReader();
     _worldPacket >> Min;
     _worldPacket >> Max;
+    _worldPacket.rfinish();
 }
 
 WorldPacket const* WorldPackets::Misc::RandomRoll::Write()
 {
-    _worldPacket << uint32(Min);
-    _worldPacket << uint32(Max);
-    _worldPacket << uint32(Result);
-    _worldPacket << Roller;
+    // 3.4.3 (FUN_1406c8dd0): PackedGuid128 Roller, PackedGuid128 RollerWowAccount, i32 Min, i32 Max, i32 Result
+    Guid128::Write(_worldPacket, Roller);
+    Guid128::Write(_worldPacket, ObjectGuid::Empty);
+    _worldPacket << int32(Min);
+    _worldPacket << int32(Max);
+    _worldPacket << int32(Result);
 
     return &_worldPacket;
 }

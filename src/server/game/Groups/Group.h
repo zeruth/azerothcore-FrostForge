@@ -285,6 +285,7 @@ public:
     void SendTargetIconList(WorldSession* session);
     void SendUpdate();
     void SendUpdateToPlayer(ObjectGuid playerGUID, MemberSlot* slot = nullptr);
+    void BuildEmptyPartyUpdate(WorldPacket& data);
     void UpdatePlayerOutOfRange(Player* player);
     // ignore: GUID of player that will be ignored
     void BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRaid, int group = -1, ObjectGuid ignore = ObjectGuid::Empty);

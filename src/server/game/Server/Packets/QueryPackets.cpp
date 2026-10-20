@@ -40,36 +40,39 @@ WorldPacket const* WorldPackets::Query::NameQueryResponse::Write()
         _worldPacket.WriteBit(p.HasData);
         _worldPacket.WriteBit(false);
         _worldPacket.FlushBits();
-        if (!p.HasData)
-            continue;
-
-        // PlayerGuidLookupData (FUN_140717ea0): bit IsDeleted, 6-bit name length, five 7-bit declined
-        // name lengths, flush, the declined names, PackedGuid128 AccountID, BnetAccountID, GuidActual,
-        // u64 GuildClubMemberID, u32 VirtualRealmAddress, u8 Race, Sex, ClassID, Level, u8 Unused915,
-        // the name
-        _worldPacket.WriteBit(p.IsDeleted);
-        _worldPacket.WriteBits(p.Name.size(), 6);
-        for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
-            _worldPacket.WriteBits(p.DeclinedNames ? p.DeclinedNames->name[i].size() : 0, 7);
-        _worldPacket.FlushBits();
-        if (p.DeclinedNames)
-            for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
-                _worldPacket.WriteString(p.DeclinedNames->name[i]);
-
-        Guid128::WritePacked(_worldPacket, 0, 0);       // AccountID [TODO: the WowAccount GUID, if a use turns up]
-        Guid128::WritePacked(_worldPacket, 0, 0);       // BnetAccountID
-        Guid128::Write(_worldPacket, p.Player);         // GuidActual
-        _worldPacket << uint64(0);                      // GuildClubMemberID
-        _worldPacket << uint32(Guid128::VirtualRealmAddress());
-        _worldPacket << uint8(p.Race);
-        _worldPacket << uint8(p.Sex);
-        _worldPacket << uint8(p.Class);
-        _worldPacket << uint8(p.Level);
-        _worldPacket << uint8(0);                       // Unused915
-        _worldPacket.WriteString(p.Name);
+        if (p.HasData)
+            WritePlayerGuidLookupData(_worldPacket, p);
     }
 
     return &_worldPacket;
+}
+
+void WorldPackets::Query::WritePlayerGuidLookupData(ByteBuffer& data, NameCacheLookupResult const& p)
+{
+    // PlayerGuidLookupData (FUN_140717ea0): bit IsDeleted, 6-bit name length, five 7-bit declined
+    // name lengths, flush, the declined names, PackedGuid128 AccountID, BnetAccountID, GuidActual,
+    // u64 GuildClubMemberID, u32 VirtualRealmAddress, u8 Race, Sex, ClassID, Level, u8 Unused915,
+    // the name
+    data.WriteBit(p.IsDeleted);
+    data.WriteBits(p.Name.size(), 6);
+    for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+        data.WriteBits(p.DeclinedNames ? p.DeclinedNames->name[i].size() : 0, 7);
+    data.FlushBits();
+    if (p.DeclinedNames)
+        for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+            data.WriteString(p.DeclinedNames->name[i]);
+
+    Guid128::WritePacked(data, 0, 0);               // AccountID [TODO: the WowAccount GUID, if a use turns up]
+    Guid128::WritePacked(data, 0, 0);               // BnetAccountID
+    Guid128::Write(data, p.Player);                 // GuidActual
+    data << uint64(0);                              // GuildClubMemberID
+    data << uint32(Guid128::VirtualRealmAddress());
+    data << uint8(p.Race);
+    data << uint8(p.Sex);
+    data << uint8(p.Class);
+    data << uint8(p.Level);
+    data << uint8(0);                               // Unused915
+    data.WriteString(p.Name);
 }
 
 WorldPacket const* WorldPackets::Query::TimeQueryResponse::Write()

@@ -51,6 +51,8 @@ namespace WorldPackets
             uint8 Level = 0;
         };
 
+        void WritePlayerGuidLookupData(ByteBuffer& data, NameCacheLookupResult const& p);
+
         class NameQueryResponse final : public ServerPacket
         {
         public:

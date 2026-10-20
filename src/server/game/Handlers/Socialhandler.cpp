@@ -21,6 +21,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "Realm.h"
 #include "SocialMgr.h"
@@ -37,11 +38,12 @@ void WorldSession::HandleContactListOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleAddFriendOpcode(WorldPacket& recv_data)
 {
-    std::string friendName = GetAcoreString(LANG_FRIEND_IGNORE_UNKNOWN);
-    std::string friendNote;
-
-    recv_data >> friendName;
-    recv_data >> friendNote;
+    // 3.4.3 (writer FUN_140763f30): 9-bit name and 10-bit notes lengths, flush, the name, the notes
+    uint32 nameLen = recv_data.ReadBits(9);
+    uint32 noteLen = recv_data.ReadBits(10);
+    recv_data.ResetBitReader();
+    std::string friendName = recv_data.ReadString(nameLen);
+    std::string friendNote = recv_data.ReadString(noteLen);
 
     if (!normalizePlayerName(friendName))
         return;
@@ -91,8 +93,9 @@ void WorldSession::HandleAddFriendOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleDelFriendOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid FriendGUID;
-    recv_data >> FriendGUID;
+    // 3.4.3 (writer FUN_140766cb0): u32 VirtualRealmAddress, PackedGuid128 Guid
+    recv_data.read_skip<uint32>();
+    ObjectGuid FriendGUID = Guid128::Read(recv_data);
 
     _player->GetSocial()->RemoveFromSocialList(FriendGUID, SOCIAL_FLAG_FRIEND);
 
@@ -103,9 +106,11 @@ void WorldSession::HandleDelFriendOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleAddIgnoreOpcode(WorldPacket& recv_data)
 {
-    std::string ignoreName = GetAcoreString(LANG_FRIEND_IGNORE_UNKNOWN);
-
-    recv_data >> ignoreName;
+    // 3.4.3 (writer FUN_140764050): 9-bit name length, flush, PackedGuid128 AccountGUID, the name
+    uint32 nameLen = recv_data.ReadBits(9);
+    recv_data.ResetBitReader();
+    Guid128::Skip(recv_data);
+    std::string ignoreName = recv_data.ReadString(nameLen);
 
     if (!normalizePlayerName(ignoreName))
         return;
@@ -138,8 +143,9 @@ void WorldSession::HandleAddIgnoreOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleDelIgnoreOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid IgnoreGUID;
-    recv_data >> IgnoreGUID;
+    // 3.4.3 (writer FUN_140766d00): u32 VirtualRealmAddress, PackedGuid128 Guid
+    recv_data.read_skip<uint32>();
+    ObjectGuid IgnoreGUID = Guid128::Read(recv_data);
 
     _player->GetSocial()->RemoveFromSocialList(IgnoreGUID, SOCIAL_FLAG_IGNORED);
     sSocialMgr->SendFriendStatus(GetPlayer(), FRIEND_IGNORE_REMOVED, IgnoreGUID, false);
@@ -147,8 +153,12 @@ void WorldSession::HandleDelIgnoreOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleSetContactNotesOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    std::string note;
-    recv_data >> guid >> note;
+    // 3.4.3 (writer FUN_140769060): u32 VirtualRealmAddress, PackedGuid128 Guid, 10-bit notes length,
+    // flush, the notes
+    recv_data.read_skip<uint32>();
+    ObjectGuid guid = Guid128::Read(recv_data);
+    uint32 noteLen = recv_data.ReadBits(10);
+    recv_data.ResetBitReader();
+    std::string note = recv_data.ReadString(noteLen);
     _player->GetSocial()->SetFriendNote(guid, note);
 }

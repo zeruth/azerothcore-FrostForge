@@ -675,6 +675,7 @@ public:
     void SendPetitionShowList(ObjectGuid guid);
 
     void BuildPartyMemberStatsChangedPacket(Player* player, WorldPacket* data);
+    void BuildPartyMemberFullState(Player* player, ObjectGuid memberGuid, WorldPacket& data);
 
     void DoLootRelease(ObjectGuid lguid);
 
