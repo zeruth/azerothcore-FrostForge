@@ -16,6 +16,7 @@
  */
 
 #include "Battlefield.h"
+#include "PacketGuid128.h"
 #include "BattlefieldMgr.h"
 #include "ScriptMgr.h"
 #include "CellImpl.h"
@@ -734,7 +735,9 @@ void Battlefield::SendAreaSpiritHealerQueryOpcode(Player* player, ObjectGuid con
     uint32 time = static_cast<uint32>(std::clamp(remaining,
         Milliseconds::zero(), Milliseconds(RESURRECTION_INTERVAL)).count());
 
-    data << guid << time;
+    // 3.4.3 (FUN_1406b5650): PackedGuid128 HealerGuid, u32 TimeLeft (ms)
+    Guid128::Write(data, guid);
+    data << uint32(time);
     ASSERT(player);
     player->SendDirectMessage(&data);
 }

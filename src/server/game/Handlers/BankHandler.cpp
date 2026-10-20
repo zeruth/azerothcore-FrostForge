@@ -19,6 +19,7 @@
 #include "DBCStores.h"
 #include "Item.h"
 #include "Log.h"
+#include "PacketGuid128.h"
 #include "Player.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -43,9 +44,8 @@ bool WorldSession::CanUseBank(ObjectGuid bankerGUID) const
 
 void WorldSession::HandleBankerActivateOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075c560): PackedGuid128 Banker
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_BANKER);
     if (!unit)
@@ -173,5 +173,6 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
 void WorldSession::SendShowBank(ObjectGuid guid)
 {
     m_currentBankerGUID = guid;
-    // the 3.4.3 client opens the bank through SMSG_NPC_INTERACTION_OPEN_RESULT; not sent until ported
+    // 3.4.3 has no SMSG_SHOW_BANK: the bank frame opens on SMSG_NPC_INTERACTION_OPEN_RESULT, Banker (8)
+    SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_BANKER, true);
 }

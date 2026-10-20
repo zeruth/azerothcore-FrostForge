@@ -61,6 +61,7 @@ namespace WorldPackets::NPC
 
         ObjectGuid TrainerGUID;
         int32 TrainerType = 0;
+        uint32 TrainerID = 0;
         std::vector<TrainerListSpell> Spells;
         std::string Greeting;
     };
@@ -73,6 +74,7 @@ namespace WorldPackets::NPC
         void Read() override;
 
         ObjectGuid TrainerGUID;
+        uint32 TrainerID = 0;
         int32 SpellID = 0;
     };
 

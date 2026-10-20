@@ -260,12 +260,25 @@ void WorldSession::HandleGameObjectQueryOpcode(WorldPacket& recvData)
     LOG_DEBUG("network", "WORLD: Sent SMSG_QUERY_GAME_OBJECT_RESPONSE");
 }
 
-void WorldSession::HandleCorpseQueryOpcode(WorldPacket& /*recvData*/)
+void WorldSession::HandleCorpseQueryOpcode(WorldPacket& recvData)
 {
+    // 3.4.3 (writer FUN_1407688a0): PackedGuid128 Player: the client's own (a ghost whose corpse is out of
+    // sight) or a party member's; AC answers for its own corpse only
+    ObjectGuid player = Guid128::Read(recvData);
+    if (player != _player->GetGUID())
+        return;
+
+    // SMSG_CORPSE_LOCATION, 3.4.3 (FUN_1406bc8e0, handler FUN_141927110): bit Valid, flush, PackedGuid128
+    // Player, i32 ActualMapID (the corpse's), f32 X, Y, Z, i32 MapID (the entrance map for a corpse in an
+    // instance), PackedGuid128 Transport
     if (!_player->HasCorpse())
     {
-        WorldPacket data(SMSG_CORPSE_LOCATION, 1);
-        data << uint8(0);                                   // corpse not found
+        WorldPacket data(SMSG_CORPSE_LOCATION, 1 + 18 + 20 + 2);
+        data.WriteBit(false);                               // corpse not found
+        data.FlushBits();
+        Guid128::Write(data, _player->GetGUID());
+        data << int32(0) << float(0) << float(0) << float(0) << int32(0);
+        Guid128::Write(data, ObjectGuid::Empty);
         SendPacket(&data);
         return;
     }
@@ -297,14 +310,16 @@ void WorldSession::HandleCorpseQueryOpcode(WorldPacket& /*recvData*/)
         }
     }
 
-    WorldPacket data(SMSG_CORPSE_LOCATION, 1 + (6 * 4));
-    data << uint8(1);                                       // corpse found
-    data << int32(mapID);
+    WorldPacket data(SMSG_CORPSE_LOCATION, 1 + 18 + 20 + 2);
+    data.WriteBit(true);                                    // corpse found
+    data.FlushBits();
+    Guid128::Write(data, _player->GetGUID());
+    data << int32(corpseMapID);
     data << float(x);
     data << float(y);
     data << float(z);
-    data << int32(corpseMapID);
-    data << uint32(0);                                      // unknown
+    data << int32(mapID);
+    Guid128::Write(data, ObjectGuid::Empty);                // Transport
     SendPacket(&data);
 }
 
@@ -400,7 +415,10 @@ void WorldSession::HandleCorpseMapPositionQuery(WorldPackets::Query::CorpseMapPo
 {
     LOG_DEBUG("network", "WORLD: Recv CMSG_QUERY_CORPSE_TRANSPORT");
 
-    WorldPacket data(SMSG_CORPSE_TRANSPORT_QUERY, 4 + 4 + 4 + 4);
+    // SMSG_CORPSE_TRANSPORT_QUERY, 3.4.3 (FUN_1406bca00): PackedGuid128 Player, f32 X, Y, Z (on the
+    // transport), f32 Facing. AC keeps no corpse transport position.
+    WorldPacket data(SMSG_CORPSE_TRANSPORT_QUERY, 18 + 16);
+    Guid128::Write(data, _player->GetGUID());
     data << float(0);
     data << float(0);
     data << float(0);

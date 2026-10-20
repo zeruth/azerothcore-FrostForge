@@ -1512,6 +1512,11 @@ void GameObject::Use(Unit* user)
 
     switch (GetGoType())
     {
+        case GAMEOBJECT_TYPE_MAILBOX:                       //19
+            // the 3.4.3 client opens the mail frame only on SMSG_NPC_INTERACTION_OPEN_RESULT (MailInfo)
+            if (Player* player = user->ToPlayer())
+                player->GetSession()->SendShowMailBox(GetGUID());
+            return;
         case GAMEOBJECT_TYPE_DOOR:                          //0
             //doors/buttons never really despawn, only reset to default state/flags
             UseDoorOrButton(0, false, user);

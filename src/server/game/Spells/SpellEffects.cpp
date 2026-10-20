@@ -6719,8 +6719,10 @@ void Spell::EffectBind(SpellEffIndex effIndex)
     LOG_DEBUG("spells.aura", "EffectBind: New homebind X: {}, Y: {}, Z: {}, MapId: {}, AreaId: {}",
                    homeLoc.GetPositionX(), homeLoc.GetPositionY(), homeLoc.GetPositionZ(), homeLoc.GetMapId(), areaId);
     // zone update
-    data.Initialize(SMSG_PLAYER_BOUND, 8 + 4);
-    data << unitCaster->GetGUID();
+    // SMSG_PLAYER_BOUND, 3.4.3 (inline in FUN_1407429f0, handler FUN_141736aa0): PackedGuid128 BinderGUID,
+    // u32 AreaID (the client prints ERR_DEATHBIND_SUCCESS_S with its name)
+    data.Initialize(SMSG_PLAYER_BOUND, 18 + 4);
+    Guid128::Write(data, unitCaster->GetGUID());
     data << uint32(areaId);
     player->SendDirectMessage(&data);
 }

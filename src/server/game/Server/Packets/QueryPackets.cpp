@@ -81,5 +81,7 @@ WorldPacket const* WorldPackets::Query::TimeQueryResponse::Write()
 
 void WorldPackets::Query::CorpseMapPositionQuery::Read()
 {
-    _worldPacket >> unk;
+    // 3.4.3 (writer FUN_1407688e0): PackedGuid128 Player, PackedGuid128 Transport
+    Guid128::Skip(_worldPacket);
+    Guid128::Skip(_worldPacket);
 }

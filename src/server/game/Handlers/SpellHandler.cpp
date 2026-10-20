@@ -398,8 +398,8 @@ void WorldSession::HandleOpenWrappedItemCallback(uint8 bagIndex, uint8 slot, Obj
 
 void WorldSession::HandleGameObjectUseOpcode(WorldPacket& recvData)
 {
-    ObjectGuid guid;
-    recvData >> guid;
+    // 3.4.3 (writer FUN_14075d5a0): PackedGuid128 Guid
+    ObjectGuid guid = Guid128::Read(recvData);
 
     LOG_DEBUG("network", "WORLD: Recvd CMSG_GAME_OBJ_USE Message [{}]", guid.ToString());
 
@@ -419,8 +419,8 @@ void WorldSession::HandleGameObjectUseOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleGameobjectReportUse(WorldPacket& recvPacket)
 {
-    ObjectGuid guid;
-    recvPacket >> guid;
+    // 3.4.3 (writer FUN_14075d560): PackedGuid128 Guid
+    ObjectGuid guid = Guid128::Read(recvPacket);
 
     LOG_DEBUG("network", "WORLD: Recvd CMSG_GAME_OBJ_REPORT_USE Message [{}]", guid.ToString());
 

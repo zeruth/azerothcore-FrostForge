@@ -74,7 +74,22 @@ void WorldSession::SendTabardVendorActivate(ObjectGuid guid)
 
 void WorldSession::SendShowMailBox(ObjectGuid guid)
 {
-    // the 3.4.3 client opens the mailbox through SMSG_NPC_INTERACTION_OPEN_RESULT; not sent until ported
+    // 3.4.3 has no SMSG_SHOW_MAILBOX: the mail frame opens on SMSG_NPC_INTERACTION_OPEN_RESULT, MailInfo
+    SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_MAIL_INFO, true);
+}
+
+void WorldSession::SendNpcInteractionOpenResult(ObjectGuid npc, uint32 interactionType, bool success)
+{
+    // SMSG_NPC_INTERACTION_OPEN_RESULT, 3.4.3 (FUN_1406c5cf0, handler FUN_141a54580): PackedGuid128 Npc,
+    // u32 InteractionType (PlayerInteractionType), bit Success, flush. Success opens the window the type
+    // names (FUN_141a55800); it replaces 3.3.5's SMSG_SHOW_BANK, _BINDER_CONFIRM and
+    // _SPIRIT_HEALER_CONFIRM.
+    WorldPacket data(SMSG_NPC_INTERACTION_OPEN_RESULT, 18 + 5);
+    Guid128::Write(data, npc);
+    data << uint32(interactionType);
+    data.WriteBit(success);
+    data.FlushBits();
+    SendPacket(&data);
 }
 
 void WorldSession::HandleTrainerListOpcode(WorldPackets::NPC::Hello& packet)
@@ -238,9 +253,8 @@ void WorldSession::HandleSpiritHealerActivateOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_SPIRIT_HEALER_ACTIVATE");
 
-    ObjectGuid guid;
-
-    recvData >> guid;
+    // 3.4.3 (writer FUN_140760cf0, sent from the confirm dialog FUN_141a56c00): PackedGuid128 Healer
+    ObjectGuid guid = Guid128::Read(recvData);
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_SPIRITHEALER);
     if (!unit)
@@ -291,8 +305,8 @@ void WorldSession::SendSpiritResurrect()
 
 void WorldSession::HandleBinderActivateOpcode(WorldPacket& recvData)
 {
-    ObjectGuid npcGUID;
-    recvData >> npcGUID;
+    // 3.4.3 (writer FUN_14075c960, sent from the bind confirm dialog FUN_141a56bd0): PackedGuid128 Binder
+    ObjectGuid npcGUID = Guid128::Read(recvData);
 
     if (!GetPlayer()->IsInWorld() || !GetPlayer()->IsAlive())
         return;
@@ -754,10 +768,11 @@ void WorldSession::HandleRepairItemOpcode(WorldPacket& recvData)
 {
     LOG_DEBUG("network", "WORLD: CMSG_REPAIR_ITEM");
 
-    ObjectGuid npcGUID, itemGUID;
-    uint8 guildBank;                                        // new in 2.3.2, bool that means from guild bank money
-
-    recvData >> npcGUID >> itemGUID >> guildBank;
+    // 3.4.3 (writer FUN_14075fce0): PackedGuid128 NpcGUID, PackedGuid128 ItemGUID (empty: repair all), bit
+    // UseGuildBank
+    ObjectGuid npcGUID = Guid128::Read(recvData);
+    ObjectGuid itemGUID = Guid128::Read(recvData);
+    uint8 guildBank = recvData.ReadBit();
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(npcGUID, UNIT_NPC_FLAG_REPAIR);
     if (!unit)

@@ -16,6 +16,7 @@
  */
 
 #include "BattlegroundMgr.h"
+#include "PacketGuid128.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "BattlegroundAB.h"
@@ -678,7 +679,9 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
     uint32 time_ = RESURRECTION_INTERVAL - bg->GetLastResurrectTime();      // resurrect every X seconds
     if (time_ == uint32(-1))
         time_ = 0;
-    data << guid << time_;
+    // 3.4.3 (FUN_1406b5650): PackedGuid128 HealerGuid, u32 TimeLeft (ms)
+    Guid128::Write(data, guid);
+    data << uint32(time_);
     player->SendDirectMessage(&data);
 }
 

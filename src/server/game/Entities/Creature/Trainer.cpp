@@ -42,6 +42,7 @@ namespace Trainer
         WorldPackets::NPC::TrainerList trainerList;
         trainerList.TrainerGUID = npc->GetGUID();
         trainerList.TrainerType = AsUnderlyingType(_type);
+        trainerList.TrainerID = _trainerId;
         trainerList.Greeting = GetGreeting(locale);
         trainerList.Spells.reserve(_spells.size());
         for (Spell const& trainerSpell : _spells)

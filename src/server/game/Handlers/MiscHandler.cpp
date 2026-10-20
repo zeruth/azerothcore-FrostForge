@@ -62,6 +62,7 @@ void WorldSession::HandleRepopRequestOpcode(WorldPacket& recv_data)
 {
     LOG_DEBUG("network", "WORLD: Recvd CMSG_REPOP_REQUEST Message");
 
+    // 3.4.3 (writer FUN_14075fd50): bit CheckInstance, flush
     recv_data.read_skip<uint8>();
 
     if (GetPlayer()->IsAlive() || GetPlayer()->HasPlayerFlag(PLAYER_FLAGS_GHOST))
@@ -634,8 +635,8 @@ void WorldSession::HandleBugOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleReclaimCorpseOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    recv_data >> guid;
+    // 3.4.3 (writer FUN_14075fc60): PackedGuid128 CorpseGUID
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     if (_player->IsAlive())
         return;
@@ -669,16 +670,16 @@ void WorldSession::HandleReclaimCorpseOpcode(WorldPacket& recv_data)
 
 void WorldSession::HandleResurrectResponseOpcode(WorldPacket& recv_data)
 {
-    ObjectGuid guid;
-    uint8 status;
-    recv_data >> guid;
-    recv_data >> status;
+    // 3.4.3 (writer FUN_140768e50): PackedGuid128 Resurrecter, u32 Response (0 accept, 1 decline, 2 timeout;
+    // 3.3.5 sent a u8 with 1 to accept)
+    ObjectGuid guid = Guid128::Read(recv_data);
+    uint32 response = recv_data.read<uint32>();
 
     // Xinef: Prevent resurrect with prevent resurrection aura
     if (GetPlayer()->IsAlive() || GetPlayer()->HasPreventResurectionAura())
         return;
 
-    if (status == 0)
+    if (response != 0)
     {
         GetPlayer()->clearResurrectRequestData();           // reject
         return;
@@ -1826,8 +1827,8 @@ void WorldSession::HandleAreaSpiritHealerQueryOpcode(WorldPacket& recv_data)
 
     Battleground* bg = _player->GetBattleground();
 
-    ObjectGuid guid;
-    recv_data >> guid;
+    // 3.4.3 (writer FUN_14075bad0): PackedGuid128 HealerGuid
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     Creature* unit = GetPlayer()->GetMap()->GetCreature(guid);
     if (!unit)
@@ -1849,8 +1850,8 @@ void WorldSession::HandleAreaSpiritHealerQueueOpcode(WorldPacket& recv_data)
 
     Battleground* bg = _player->GetBattleground();
 
-    ObjectGuid guid;
-    recv_data >> guid;
+    // 3.4.3 (writer FUN_14075bb10): PackedGuid128 HealerGuid
+    ObjectGuid guid = Guid128::Read(recv_data);
 
     Creature* unit = GetPlayer()->GetMap()->GetCreature(guid);
     if (!unit)

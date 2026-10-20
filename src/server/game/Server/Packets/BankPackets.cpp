@@ -16,20 +16,33 @@
  */
 
 #include "BankPackets.h"
+#include "PacketGuid128.h"
+#include "Player.h"
+
+// 3.4.3: CMSG_AUTOBANK_ITEM (writer FUN_14075c190) and CMSG_AUTOSTORE_BANK_ITEM (FUN_14075c4a0) start with
+// the client's InvUpdate (2-bit count, flush, pairs), then u8 Bag, u8 Slot in InvSlots numbering
+static void ReadBankItemPos(ByteBuffer& data, uint8& bag, uint8& slot)
+{
+    uint32 count = data.ReadBits(2);
+    data.ResetBitReader();
+    data.read_skip(std::size_t(count) * 2);
+    uint8 clientBag = data.read<uint8>();
+    uint8 clientSlot = data.read<uint8>();
+    ServerItemPos(clientBag, clientSlot, bag, slot);
+}
 
 void WorldPackets::Bank::AutoBankItem::Read()
 {
-    _worldPacket >> Bag;
-    _worldPacket >> Slot;
+    ReadBankItemPos(_worldPacket, Bag, Slot);
 }
 
 void WorldPackets::Bank::AutoStoreBankItem::Read()
 {
-    _worldPacket >> Bag;
-    _worldPacket >> Slot;
+    ReadBankItemPos(_worldPacket, Bag, Slot);
 }
 
 void WorldPackets::Bank::BuyBankSlot::Read()
 {
-    _worldPacket >> Banker;
+    // 3.4.3 (writer FUN_14075ca50): PackedGuid128 Guid (the banker)
+    Banker = Guid128::Read(_worldPacket);
 }

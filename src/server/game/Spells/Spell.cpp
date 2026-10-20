@@ -5632,18 +5632,19 @@ void Spell::SendResurrectRequest(Player* target)
                                ? ""
                                : unitCaster->GetNameForLocaleIdx(target->GetSession()->GetSessionDbLocaleIndex()));
 
-    // SMSG_RESURRECT_REQUEST, 3.4.3 (game switch, inline): PackedGuid128 ResurrectOffererGUID, u32 its
-    // virtual realm address, u32 PetNumber, u32 SpellID, 11-bit name length, bit UseTimer, bit Sickness,
-    // flush, the name
+    // SMSG_RESURRECT_REQUEST, 3.4.3 (game switch, inline; handler FUN_14170ecc0): PackedGuid128
+    // ResurrectOffererGUID, u32 its virtual realm address, u32 PetNumber, u32 SpellID, 11-bit name length,
+    // two bits, flush, the name. The handler hands the first bit to Lua ResurrectHasSickness and the
+    // second to ResurrectHasTimer (TrinityCore writes them the other way round).
     WorldPacket data(SMSG_RESURRECT_REQUEST, 18 + 12 + 2 + sentName.size());
     Guid128::Write(data, unitCaster->GetGUID());
     data << uint32(Guid128::VirtualRealmAddress());
     data << uint32(0);                                      // PetNumber
     data << uint32(m_spellInfo->Id);
     data.WriteBits(std::min<std::size_t>(sentName.size(), 0x7FF), 11);
+    data.WriteBit(!unitCaster->IsPlayer());                 // "you'll be afflicted with resurrection sickness"
     // the reclaim delay of SMSG_CORPSE_RECLAIM_DELAY is skipped for spells with this attribute
     data.WriteBit(!m_spellInfo->HasAttribute(SPELL_ATTR3_NO_RES_TIMER));
-    data.WriteBit(!unitCaster->IsPlayer());                 // "you'll be afflicted with resurrection sickness"
     data.FlushBits();
     data.WriteString(std::string_view(sentName).substr(0, 0x7FF));
     target->SendDirectMessage(&data);

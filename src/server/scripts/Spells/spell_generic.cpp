@@ -2758,7 +2758,8 @@ class spell_gen_spirit_healer_res : public SpellScript
 
     void HandleDummy(SpellEffIndex /* effIndex */)
     {
-        // the 3.4.3 client has no SMSG_SPIRIT_HEALER_CONFIRM; not sent until the resurrection flow is ported
+        // the 3.4.3 client has no SMSG_SPIRIT_HEALER_CONFIRM: Player::OnGossipSelect opens the dialog through
+        // SMSG_NPC_INTERACTION_OPEN_RESULT (SpiritHealer) when the gossip option is chosen
     }
 
     void Register() override

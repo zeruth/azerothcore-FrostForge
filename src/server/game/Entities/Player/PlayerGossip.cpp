@@ -319,7 +319,13 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
             break;
         case GOSSIP_OPTION_SPIRITHEALER:
             if (isDead())
+            {
                 source->ToCreature()->CastSpell(source->ToCreature(), 17251, true, nullptr, nullptr, GetGUID());
+                // 3.4.3 has no SMSG_SPIRIT_HEALER_CONFIRM: the dialog opens on SMSG_NPC_INTERACTION_OPEN_RESULT,
+                // SpiritHealer (18); accepting it sends CMSG_SPIRIT_HEALER_ACTIVATE
+                PlayerTalkClass->SendCloseGossip();
+                GetSession()->SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_SPIRIT_HEALER, true);
+            }
             break;
         case GOSSIP_OPTION_QUESTGIVER:
             PrepareQuestMenu(guid);

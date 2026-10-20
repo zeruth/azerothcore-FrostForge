@@ -323,6 +323,16 @@ constexpr Seconds PLAY_TIME_LIMIT_PARTIAL             = Hours(3);
 constexpr Seconds PLAY_TIME_LIMIT_APPROACHING_FULL    = Hours(4) + Minutes(30);
 constexpr Seconds PLAY_TIME_LIMIT_FULL                = Hours(5);
 
+/// The 3.4.3 client's PlayerInteractionType (SMSG_NPC_INTERACTION_OPEN_RESULT, FUN_141a55ee0) for the
+/// windows the server opens [names inferred from TrinityCore]
+enum PlayerInteractionType : uint32
+{
+    PLAYER_INTERACTION_BANKER           = 8,
+    PLAYER_INTERACTION_MAIL_INFO        = 17,
+    PLAYER_INTERACTION_SPIRIT_HEALER    = 18,
+    PLAYER_INTERACTION_BINDER           = 20
+};
+
 enum PlayTimeFlag : uint32
 {
     PTF_APPROACHING_PARTIAL_PLAY_TIME = 0x1000,
@@ -598,6 +608,7 @@ public:
     void SendShowBank(ObjectGuid guid);
     bool CanOpenMailBox(ObjectGuid guid);
     void SendShowMailBox(ObjectGuid guid);
+    void SendNpcInteractionOpenResult(ObjectGuid npc, uint32 interactionType, bool success);
     void SendMailList();
     void SendTabardVendorActivate(ObjectGuid guid);
     void SendSpiritResurrect();
@@ -653,6 +664,7 @@ public:
     //Taxi
     void SendTaxiStatus(ObjectGuid guid);
     void SendTaxiMenu(Creature* unit);
+    static void BuildTaxiNodeStatus(WorldPacket& data, ObjectGuid unit, bool known);
     void SendDoFlight(uint32 mountDisplayId, uint32 path, uint32 pathNode = 0);
     bool SendLearnNewTaxiNode(Creature* unit);
     void SendDiscoverNewTaxiNode(uint32 nodeid);
@@ -1355,6 +1367,7 @@ private:
     LockedQueue<WorldPacket*> _recvQueue;
     uint32 m_currentVendorEntry;
     ObjectGuid m_currentBankerGUID;
+    ObjectGuid m_currentMailboxGUID;                        // 3.4.3 deletes and returns mail without naming the mailbox
     uint32 _offlineTime;
     bool _kicked;
     // Packets cooldown

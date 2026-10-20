@@ -2956,25 +2956,26 @@ void Player::RemoveMail(uint32 id)
 
 void Player::SendMailResult(uint32 mailId, MailResponseType mailAction, MailResponseResult mailError, uint32 equipError, ObjectGuid::LowType item_guid, uint32 item_count)
 {
-    WorldPacket data(SMSG_MAIL_COMMAND_RESULT, (4 + 4 + 4 + (mailError == MAIL_ERR_EQUIP_ERROR ? 4 : (mailAction == MAIL_ITEM_TAKEN ? 4 + 4 : 0))));
-    data << (uint32) mailId;
-    data << (uint32) mailAction;
-    data << (uint32) mailError;
-    if (mailError == MAIL_ERR_EQUIP_ERROR)
-        data << (uint32) equipError;
-    else if (mailAction == MAIL_ITEM_TAKEN)
-    {
-        data << (uint32) item_guid;                         // item guid low?
-        data << (uint32) item_count;                        // item count?
-    }
+    // SMSG_MAIL_COMMAND_RESULT, 3.4.3: u64 MailID, i32 Command (MailResponseType), i32 ErrorCode, i32
+    // BagResult (the client's InventoryResult numbering, for ErrorCode 1), u64 AttachID, i32
+    // QtyInInventory. AC's 3.3.5 error numbers are the client's but for the internal error: 3.4.3 shows
+    // ERR_MAIL_DATABASE_ERROR for 10 (6 falls back to it anyway).
+    WorldPacket data(SMSG_MAIL_COMMAND_RESULT, 8 + 12 + 8 + 4);
+    data << uint64(mailId);
+    data << int32(mailAction);
+    data << int32(mailError == MAIL_ERR_INTERNAL_ERROR ? 10 : int32(mailError));
+    data << int32(mailError == MAIL_ERR_EQUIP_ERROR ? ClientInventoryResult(InventoryResult(equipError)) : 0);
+    data << uint64(mailAction == MAIL_ITEM_TAKEN ? item_guid : 0);
+    data << int32(mailAction == MAIL_ITEM_TAKEN ? item_count : 0);
     SendDirectMessage(&data);
 }
 
 void Player::SendNewMail()
 {
     // deliver undelivered mail
+    // 3.4.3: f32 Delay
     WorldPacket data(SMSG_NOTIFY_RECEIVED_MAIL, 4);
-    data << (uint32) 0;
+    data << float(0.0f);
     SendDirectMessage(&data);
 
     // The client caches its inbox and refuses to re-query it more than once a minute, so a mailbox
@@ -4557,8 +4558,9 @@ void Player::DeleteOldRecoveryItems(uint32 keepDays)
 */
 void Player::BuildPlayerRepop()
 {
-    WorldPacket data(SMSG_PRE_RESSURECT, GetPackGUID().size());
-    data << GetPackGUID();
+    // 3.4.3 (FUN_1406bb6a0): PackedGuid128 PlayerGUID
+    WorldPacket data(SMSG_PRE_RESSURECT, 18);
+    Guid128::Write(data, GetGUID());
     SendDirectMessage(&data);
     if (getRace(true) == RACE_NIGHTELF)
     {
@@ -4608,6 +4610,8 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     if (!sScriptMgr->OnPlayerCanResurrect(this))
         return;
 
+    // SMSG_DEATH_RELEASE_LOC, 3.4.3: read raw (FUN_1406bcf60, handler FUN_14170dd40), i32 MapID (-1 clears),
+    // f32 X, Y, Z: 3.3.5's layout
     WorldPacket data(SMSG_DEATH_RELEASE_LOC, 4 * 4);        // remove spirit healer position
     data << uint32(-1);
     data << float(0);
@@ -9197,7 +9201,9 @@ uint32 Player::GetXPRestBonus(uint32 xp)
 
 void Player::SetBindPoint(ObjectGuid guid)
 {
-    // the 3.4.3 client has no SMSG_BINDER_CONFIRM
+    // 3.4.3 has no SMSG_BINDER_CONFIRM: the bind confirm dialog opens on SMSG_NPC_INTERACTION_OPEN_RESULT,
+    // Binder (20); accepting it sends CMSG_BINDER_ACTIVATE
+    GetSession()->SendNpcInteractionOpenResult(guid, PLAYER_INTERACTION_BINDER, true);
 }
 
 void Player::SendTalentWipeConfirm(ObjectGuid guid)
@@ -10751,9 +10757,8 @@ void Player::SendTaxiNodeStatusMultiple()
         if (!nearestNode)
             return;
 
-        WorldPacket data(SMSG_TAXI_NODE_STATUS, 9);
-        data << creature->GetGUID();
-        data << uint8(m_taxi.IsTaximaskNodeKnown(nearestNode) ? 1 : 0);
+        WorldPacket data;
+        WorldSession::BuildTaxiNodeStatus(data, creature->GetGUID(), m_taxi.IsTaximaskNodeKnown(nearestNode));
         SendDirectMessage(&data);
     });
 }
@@ -13380,6 +13385,7 @@ int32 Player::CalculateCorpseReclaimDelay(bool load)
 
 void Player::SendCorpseReclaimDelay(uint32 delay)
 {
+    // 3.4.3: read raw (FUN_1406b5c70, handler FUN_141927280), u32 Remaining in ms: 3.3.5's layout
     WorldPacket data(SMSG_CORPSE_RECLAIM_DELAY, 4);
     data << uint32(delay);
     SendDirectMessage(&data);
