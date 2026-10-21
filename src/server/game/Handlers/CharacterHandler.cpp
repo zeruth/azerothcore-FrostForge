@@ -413,10 +413,22 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result, PreparedQueryResul
     data.WriteBit(false);                                       // HasDisabledClassesMask
     data.FlushBits();
 
+    // RaceUnlockData: one per playable race. The client's enter-world check (FUN_140233d30)
+    // looks the selected character's race up here (FUN_14167b850) and refuses the login as
+    // "disabled for that race" (error 0x4f) when it is missing.
+    std::vector<uint8> playableRaces;
+    for (uint8 race = 1; race <= RACE_DRAENEI; ++race)
+        for (uint8 playerClass = 1; playerClass < MAX_CLASSES; ++playerClass)
+            if (sObjectMgr->GetPlayerInfo(race, playerClass))
+            {
+                playableRaces.push_back(race);
+                break;
+            }
+
     std::size_t countPos = data.wpos();
     data << uint32(0);                                          // Characters
     data << uint32(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
-    data << uint32(0);                                          // RaceUnlockData
+    data << uint32(playableRaces.size());                       // RaceUnlockData
     data << uint32(0);                                          // UnlockedConditionalAppearances
     data << uint32(0);                                          // RaceLimitDisables
 
@@ -438,6 +450,19 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result, PreparedQueryResul
     }
 
     data.put<uint32>(countPos, num);
+
+    // RaceUnlockData, after the characters (parser FUN_1406faac0): int32 RaceID, then one byte
+    // of bits from the top: HasExpansion, HasAchievement, HasHeritageArmor, IsLocked.
+    for (uint8 race : playableRaces)
+    {
+        bool const isTbcRace = race == RACE_BLOODELF || race == RACE_DRAENEI;
+        data << int32(race);
+        data.WriteBit(Expansion() >= (isTbcRace ? 1 : 0));     // HasExpansion
+        data.WriteBit(false);                                  // HasAchievement
+        data.WriteBit(false);                                  // HasHeritageArmor
+        data.WriteBit(false);                                  // IsLocked
+        data.FlushBits();
+    }
 
     SendPacket(&data);
 }
