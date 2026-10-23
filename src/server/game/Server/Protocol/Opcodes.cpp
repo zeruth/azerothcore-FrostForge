@@ -1546,9 +1546,9 @@ void OpcodeTable::Initialize()
     /*0x3048*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_AUTH_CHALLENGE,                                             STATUS_NEVER,      LAYOUT_343);
     /*0x3049*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_ENTER_ENCRYPTED_MODE,                                       STATUS_NEVER,      LAYOUT_343);
     /*0x304A*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_SUSPEND_COMMS,                                              STATUS_NEVER,      LAYOUT_335);
-    /*0x304B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RESUME_COMMS,                                               STATUS_UNHANDLED,  LAYOUT_335);
+    /*0x304B*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RESUME_COMMS,                                               STATUS_NEVER,      LAYOUT_343);
     /*0x304C*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DROP_NEW_CONNECTION,                                        STATUS_UNHANDLED,  LAYOUT_335);
-    /*0x304D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CONNECT_TO,                                                 STATUS_UNHANDLED,  LAYOUT_335);
+    /*0x304D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_CONNECT_TO,                                                 STATUS_NEVER,      LAYOUT_343);
     /*0x304E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_PONG,                                                       STATUS_NEVER,      LAYOUT_343);
     /*0x304F*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_RESET_COMPRESSION_CONTEXT,                                  STATUS_UNHANDLED,  LAYOUT_335);
     /*0x3050*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_UNKNOWN_3050_CONNECTION,                                    STATUS_UNHANDLED,  LAYOUT_335);

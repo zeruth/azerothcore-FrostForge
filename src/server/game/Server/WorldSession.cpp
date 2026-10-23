@@ -27,6 +27,7 @@
 #include "BanMgr.h"
 #include "CharacterPackets.h"
 #include "Common.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Group.h"
@@ -48,6 +49,8 @@
 #include "Player.h"
 #include "Realm.h"
 #include "QueryHolder.h"
+#include "Random.h"
+#include "RSA.h"
 #include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "Transport.h"
@@ -59,6 +62,8 @@
 #include "WorldPacket.h"
 #include "WorldSocket.h"
 #include "WorldState.h"
+#include <algorithm>
+#include <mutex>
 #include <zlib.h>
 
 namespace
@@ -158,6 +163,9 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 accountFlags, s
     _timeSyncNextCounter = 0;
     _timeSyncTimer = 0;
 
+    _sessionKey.fill(0);
+    _instanceConnectKey = 0;
+
     if (sock)
     {
         m_Address = sock->GetRemoteIpAddress().to_string();
@@ -183,6 +191,14 @@ WorldSession::~WorldSession()
     {
         m_Socket->CloseSocket();
         m_Socket = nullptr;
+    }
+
+    // the instance socket holds a raw pointer to this session: cut it before closing
+    if (m_instanceSocket)
+    {
+        m_instanceSocket->DetachSession();
+        m_instanceSocket->CloseSocket();
+        m_instanceSocket = nullptr;
     }
 
     delete _RBACData;
@@ -888,6 +904,9 @@ void WorldSession::KickPlayer(std::string const& reason, bool setKicked)
         m_Socket->CloseSocket();
     }
 
+    if (m_instanceSocket)
+        m_instanceSocket->CloseSocket();
+
     if (setKicked)
         SetKicked(true); // pussywizard: the session won't be left ingame for 60 seconds and to also kick offline session
 }
@@ -1305,6 +1324,107 @@ void WorldSession::SendTimeSync()
     // Schedule next sync in 10 sec (except for the 2 first packets, which are spaced by only 5s)
     _timeSyncTimer = _timeSyncNextCounter == 0 ? 5000 : 10000;
     _timeSyncNextCounter++;
+}
+
+namespace
+{
+    // The key SMSG_CONNECT_TO is signed with; the client carries its public half.
+    Acore::Crypto::RSA const* ConnectToKey()
+    {
+        static Acore::Crypto::RSA key;
+        static std::once_flag loaded;
+        std::call_once(loaded, []
+        {
+            std::string file = sConfigMgr->GetOption<std::string>("ConnectToPrivateKeyFile", "worldserver-connectto-rsa.key.pem");
+            if (!key.LoadPrivateKeyFromFile(file) || key.GetSize() != 256)
+                LOG_ERROR("network", "WorldSession: cannot load the RSA-2048 key {}; no client can open its instance connection", file);
+        });
+        return key.GetSize() == 256 ? &key : nullptr;
+    }
+
+    // ConnectToSerial::WorldAttempt1; the client hands it back in CMSG_CONNECT_TO_FAILED
+    constexpr uint32 ConnectToSerialWorld = 14;
+    // the connection the client opens: 1, the instance connection (FUN_141232c30 opens it in slot 3)
+    constexpr uint8 ConnectToInstance = 1;
+}
+
+// SMSG_CONNECT_TO (read inline by FUN_140726b80, handled by FUN_141232c30): Signature[256],
+// Where (u8 type, then 4 or 16 address bytes), u16 port, u32 serial, u8 connection, u64 key. The
+// signature is RSA PKCS#1 v1.5 over SHA-256(Where || u32 type || u16 port), byte-reversed.
+void WorldSession::SendConnectToInstance()
+{
+    if (!m_Socket || !_player)
+        return;
+
+    Acore::Crypto::RSA const* signer = ConnectToKey();
+    if (!signer)
+        return;
+
+    boost::asio::ip::tcp_endpoint endpoint = realm.GetAddressForClient(m_Socket->GetRemoteIpAddress());
+    boost::asio::ip::address address = endpoint.address();
+    if (address.is_v6() && address.to_v6().is_v4_mapped())
+        address = boost::asio::ip::make_address_v4(boost::asio::ip::v4_mapped, address.to_v6());
+
+    ByteBuffer where;
+    uint32 whereType;
+    if (address.is_v4())
+    {
+        whereType = 1;
+        where << uint8(whereType);
+        auto bytes = address.to_v4().to_bytes();
+        where.append(bytes.data(), bytes.size());
+    }
+    else
+    {
+        whereType = 2;
+        where << uint8(whereType);
+        auto bytes = address.to_v6().to_bytes();
+        where.append(bytes.data(), bytes.size());
+    }
+    uint16 port = endpoint.port();
+
+    ByteBuffer signedPart(where);
+    signedPart << uint32(whereType);
+    signedPart << uint16(port);
+
+    std::vector<uint8> signature;
+    if (!signer->SignSHA256(signedPart.contents(), signedPart.size(), signature))
+    {
+        LOG_ERROR("network", "WorldSession::SendConnectToInstance: signing SMSG_CONNECT_TO failed");
+        return;
+    }
+    std::reverse(signature.begin(), signature.end());
+
+    // the key the instance socket's CMSG_AUTH_CONTINUED_SESSION brings back: the account in its
+    // low half, the connection above it, and random bits to make it this session's
+    _instanceConnectKey = (uint64(urand(0, 0x7FFFFFFF)) << 33) | (uint64(ConnectToInstance) << 32) | uint64(GetAccountId());
+
+    WorldPacket packet(SMSG_CONNECT_TO, 256 + where.size() + 2 + 4 + 1 + 8);
+    packet.append(signature.data(), signature.size());
+    packet.append(where.contents(), where.size());
+    packet << uint16(port);
+    packet << uint32(ConnectToSerialWorld);
+    packet << uint8(ConnectToInstance);
+    packet << uint64(_instanceConnectKey);
+    SendPacket(&packet);
+
+    LOG_DEBUG("network", "WorldSession::SendConnectToInstance: account {} told to open its instance connection to {}:{}",
+        GetAccountId(), address.to_string(), port);
+}
+
+bool WorldSession::HasInstanceConnection() const
+{
+    return m_instanceSocket && m_instanceSocket->IsOpen();
+}
+
+void WorldSession::SetInstanceSocket(std::shared_ptr<WorldSocket> sock)
+{
+    if (m_instanceSocket && m_instanceSocket != sock)
+    {
+        m_instanceSocket->DetachSession();
+        m_instanceSocket->CloseSocket();
+    }
+    m_instanceSocket = std::move(sock);
 }
 
 class AccountInfoQueryHolderPerRealm : public CharacterDatabaseQueryHolder

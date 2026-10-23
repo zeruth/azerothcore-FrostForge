@@ -11942,6 +11942,10 @@ void Player::SendInitialPacketsAfterAddToMap()
 {
     UpdateVisibilityForPlayer(true);
 
+    // the 3.4.3 client holds its movement and time-sync replies for the instance connection
+    if (!GetSession()->HasInstanceConnection())
+        GetSession()->SendConnectToInstance();
+
     GetSession()->ResetTimeSync();
     GetSession()->SendTimeSync();
 

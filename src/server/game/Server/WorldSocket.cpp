@@ -55,6 +55,7 @@ namespace
     std::array<uint8, 16> const EnableEncryptionSeed = { 0x90, 0x9C, 0xD0, 0x50, 0x5A, 0x2C, 0x14, 0xDD, 0x5C, 0x2C, 0xC0, 0x64, 0x14, 0xF3, 0xFE, 0xC9 };
     std::array<uint8, 16> const EnableEncryptionContext = { 0xA7, 0x1F, 0xB6, 0x9B, 0xC9, 0x7C, 0xDD, 0x96, 0xE9, 0xBB, 0xB8, 0x21, 0x39, 0x8D, 0x5A, 0xD4 };
     std::array<uint8, 16> const Win64AuthSeed = { 0x25, 0xFD, 0x81, 0x24, 0x75, 0xDC, 0xF2, 0x6F, 0x9F, 0x13, 0x83, 0xAE, 0xD3, 0x7F, 0xC9, 0x9E };
+    std::array<uint8, 16> const ContinuedSessionSeed = { 0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2, 0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F };
 
     constexpr uint32 IV_MAGIC_CLIENT = 0x544E4C43; // "CLNT"
     constexpr uint32 IV_MAGIC_SERVER = 0x52565253; // "SRVR"
@@ -87,7 +88,10 @@ namespace
 WorldSocket::WorldSocket(IoContextTcpSocket&& socket)
     : Socket(std::move(socket)), _decrypt(false), _encrypt(true), _recvCounter(0), _sendCounter(0), _decryptEnabled(false),
     _encryptEnabled(false), _connectionStringReceived(false), _OverSpeedPings(0), _worldSession(nullptr), _authed(false),
-    _sendBufferSize(4096), _loggingPackets(false)
+    // every session is captured while PacketLogFile is set (FrostForge: the 3.4.3 packet mapping
+    // reads the log; upstream waits for a GM to turn it on per session)
+    _sendBufferSize(4096), _loggingPackets(sPacketLog->CanLogPacket()), _linkState(LINK_NONE), _instance(false),
+    _linkedSession(nullptr), _continuedKey(0)
 {
     Acore::Crypto::GetRandomBytes(_dosChallenge);
     Acore::Crypto::GetRandomBytes(_serverChallenge);
@@ -183,6 +187,21 @@ bool WorldSocket::Update()
         return false;
 
     _queryProcessor.ProcessReadyCallbacks();
+
+    // the world thread has answered the continued session's lookup
+    uint8 link = _linkState.load();
+    if (link == LINK_FOUND || link == LINK_REFUSED)
+    {
+        _linkState = LINK_NONE;
+        if (link == LINK_FOUND)
+            FinishAuthContinuedSession();
+        else
+        {
+            LOG_ERROR("network", "WorldSocket: {} continued a session that is not there (key {:#x})", GetRemoteIpAddress().to_string(), _continuedKey);
+            SendAuthResponseError(AUTH_SESSION_EXPIRED);
+            DelayedCloseSocket();
+        }
+    }
 
     return true;
 }
@@ -467,6 +486,35 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_AUTH_SESSION", GetRemoteIpAddress().to_string());
             return ReadDataHandlerResult::Error;
         }
+        case CMSG_AUTH_CONTINUED_SESSION:
+        {
+            LogOpcodeText(opcode, sessionGuard);
+            if (_authed || _pendingAccount || _linkState != LINK_NONE || _instance)
+            {
+                LOG_ERROR("network", "WorldSocket::ProcessIncoming: received duplicate CMSG_AUTH_CONTINUED_SESSION from {}", GetRemoteIpAddress().to_string());
+                return ReadDataHandlerResult::Error;
+            }
+
+            try
+            {
+                HandleAuthContinuedSession(packet);
+                return ReadDataHandlerResult::WaitingForQuery;
+            }
+            catch (ByteBufferException const&) { }
+
+            LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_AUTH_CONTINUED_SESSION", GetRemoteIpAddress().to_string());
+            return ReadDataHandlerResult::Error;
+        }
+        case CMSG_CONNECT_TO_FAILED:
+        {
+            // u32 serial, u8 connection (FUN_1406d7380): the client could not open what
+            // SMSG_CONNECT_TO named, or refused it
+            LogOpcodeText(opcode, sessionGuard);
+            uint32 serial = packet.size() >= 4 ? packet.read<uint32>() : 0;
+            uint8 con = packet.size() >= 5 ? packet.read<uint8>() : 0;
+            LOG_ERROR("network", "WorldSocket: client {} failed connect-to serial {} connection {}", GetRemoteIpAddress().to_string(), serial, con);
+            return ReadDataHandlerResult::Ok;
+        }
         case CMSG_ENTER_ENCRYPTED_MODE_ACK:
             LogOpcodeText(opcode, sessionGuard);
             return HandleEnterEncryptedModeAck() ? ReadDataHandlerResult::Ok : ReadDataHandlerResult::Error;
@@ -688,16 +736,6 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
     SessionKeyGenerator<Acore::Crypto::SHA256> sessionKeyGenerator(sessionKeyHmac.GetDigest());
     sessionKeyGenerator.Generate(_sessionKey.data(), uint32(_sessionKey.size()));
 
-    // EncryptKey: HMAC-SHA256(SessionKey, LocalChallenge || ServerChallenge || EncryptionKeySeed)[0:16]
-    Acore::Crypto::HMAC_SHA256 encryptKeyGenerator(_sessionKey);
-    encryptKeyGenerator.UpdateData(authSession->LocalChallenge);
-    encryptKeyGenerator.UpdateData(_serverChallenge);
-    encryptKeyGenerator.UpdateData(EncryptionKeySeed);
-    encryptKeyGenerator.Finalize();
-
-    Acore::Crypto::AES::Key encryptKey;
-    std::memcpy(encryptKey.data(), encryptKeyGenerator.GetDigest().data(), encryptKey.size());
-
     if (IpLocationRecord const* location = sIPLocation->GetLocationRecord(address))
         _ipCountry = location->CountryCode;
 
@@ -759,40 +797,13 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
         return;
     }
 
-    // SMSG_ENTER_ENCRYPTED_MODE: Ed25519ctx over HMAC-SHA256(EncryptKey, Enabled || EnableEncryptionSeed)
-    // (FUN_141561000); the session starts when the client acknowledges it.
-    Acore::Crypto::Ed25519 const* signer = EnterEncryptedModeKey();
-    if (!signer)
+    // the session starts when the client acknowledges encrypted mode
+    if (!SendEnterEncryptedMode(authSession->LocalChallenge))
     {
         SendAuthResponseError(AUTH_SYSTEM_ERROR);
         DelayedCloseSocket();
         return;
     }
-
-    uint8 const enabled = 1;
-    Acore::Crypto::HMAC_SHA256 toSign(encryptKey);
-    toSign.UpdateData(&enabled, 1);
-    toSign.UpdateData(EnableEncryptionSeed);
-    toSign.Finalize();
-
-    Acore::Crypto::Ed25519::Signature signature;
-    if (!signer->Sign(toSign.GetDigest().data(), toSign.GetDigest().size(), EnableEncryptionContext.data(),
-        EnableEncryptionContext.size(), signature))
-    {
-        LOG_ERROR("network", "WorldSocket::HandleAuthSession: signing SMSG_ENTER_ENCRYPTED_MODE failed");
-        SendAuthResponseError(AUTH_SYSTEM_ERROR);
-        DelayedCloseSocket();
-        return;
-    }
-
-    _decrypt.Init(encryptKey);
-    _encrypt.Init(encryptKey);
-
-    WorldPacket enterEncryptedMode(SMSG_ENTER_ENCRYPTED_MODE, 64 + 1);
-    enterEncryptedMode.append(signature);
-    enterEncryptedMode.WriteBit(enabled != 0);
-    enterEncryptedMode.FlushBits();
-    SendPacketAndLogOpcode(enterEncryptedMode);
 
     _pendingAccount = std::move(account);
     _pendingAccountName = authSession->RealmJoinTicket;
@@ -808,8 +819,154 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
     AsyncRead();
 }
 
+bool WorldSocket::SendEnterEncryptedMode(std::array<uint8, 16> const& localChallenge)
+{
+    // EncryptKey: HMAC-SHA256(SessionKey, LocalChallenge || ServerChallenge || EncryptionKeySeed)[0:16]
+    // (FUN_141560560), on every connection the session opens
+    Acore::Crypto::HMAC_SHA256 encryptKeyGenerator(_sessionKey);
+    encryptKeyGenerator.UpdateData(localChallenge);
+    encryptKeyGenerator.UpdateData(_serverChallenge);
+    encryptKeyGenerator.UpdateData(EncryptionKeySeed);
+    encryptKeyGenerator.Finalize();
+
+    Acore::Crypto::AES::Key encryptKey;
+    std::memcpy(encryptKey.data(), encryptKeyGenerator.GetDigest().data(), encryptKey.size());
+
+    // SMSG_ENTER_ENCRYPTED_MODE: Ed25519ctx over HMAC-SHA256(EncryptKey, Enabled || EnableEncryptionSeed)
+    // (FUN_141561000)
+    Acore::Crypto::Ed25519 const* signer = EnterEncryptedModeKey();
+    if (!signer)
+        return false;
+
+    uint8 const enabled = 1;
+    Acore::Crypto::HMAC_SHA256 toSign(encryptKey);
+    toSign.UpdateData(&enabled, 1);
+    toSign.UpdateData(EnableEncryptionSeed);
+    toSign.Finalize();
+
+    Acore::Crypto::Ed25519::Signature signature;
+    if (!signer->Sign(toSign.GetDigest().data(), toSign.GetDigest().size(), EnableEncryptionContext.data(),
+        EnableEncryptionContext.size(), signature))
+    {
+        LOG_ERROR("network", "WorldSocket: signing SMSG_ENTER_ENCRYPTED_MODE failed");
+        return false;
+    }
+
+    _decrypt.Init(encryptKey);
+    _encrypt.Init(encryptKey);
+
+    WorldPacket enterEncryptedMode(SMSG_ENTER_ENCRYPTED_MODE, 64 + 1);
+    enterEncryptedMode.append(signature);
+    enterEncryptedMode.WriteBit(enabled != 0);
+    enterEncryptedMode.FlushBits();
+    SendPacketAndLogOpcode(enterEncryptedMode);
+    return true;
+}
+
+// CMSG_AUTH_CONTINUED_SESSION (FUN_14076a420, sent by FUN_141232760 on a connection SMSG_CONNECT_TO
+// opened): u64 DosResponse, u64 Key (as SMSG_CONNECT_TO gave it), LocalChallenge[16], Digest[24].
+// The session it names lives on the world thread, so the lookup goes there (WorldSessionMgr) and
+// the answer comes back through Update.
+void WorldSocket::HandleAuthContinuedSession(WorldPacket& recvPacket)
+{
+    uint64 dosResponse;
+    recvPacket >> dosResponse;
+    recvPacket >> _continuedKey;
+    recvPacket.read(_continuedLocalChallenge);
+    recvPacket.read(_continuedDigest);
+
+    _linkState = LINK_WAITING;
+    sWorldSessionMgr->AddInstanceSocket(shared_from_this(), _continuedKey);
+}
+
+void WorldSocket::LinkInstance(WorldSession* session, std::array<uint8, 40> const& sessionKey)
+{
+    {
+        std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+        _linkedSession = session;
+        _sessionKey = sessionKey;
+    }
+    _linkState = LINK_FOUND;
+}
+
+void WorldSocket::LinkFailed()
+{
+    _linkState = LINK_REFUSED;
+}
+
+void WorldSocket::DetachSession()
+{
+    std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+    _linkedSession = nullptr;
+    if (_instance)
+        _worldSession = nullptr;
+}
+
+void WorldSocket::FinishAuthContinuedSession()
+{
+    std::array<uint8, 40> sessionKey;
+    {
+        std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+        if (!_linkedSession)
+        {
+            DelayedCloseSocket();
+            return;
+        }
+        sessionKey = _sessionKey;
+    }
+
+    // Digest = HMAC-SHA256(SessionKey, Key || LocalChallenge || ServerChallenge || ContinuedSessionSeed)[0:24]
+    // (FUN_141560b20)
+    Acore::Crypto::HMAC_SHA256 digest(sessionKey);
+    digest.UpdateData(reinterpret_cast<uint8 const*>(&_continuedKey), sizeof(_continuedKey));
+    digest.UpdateData(_continuedLocalChallenge);
+    digest.UpdateData(_serverChallenge);
+    digest.UpdateData(ContinuedSessionSeed);
+    digest.Finalize();
+
+    if (std::memcmp(digest.GetDigest().data(), _continuedDigest.data(), _continuedDigest.size()) != 0)
+    {
+        LOG_ERROR("network", "WorldSocket: {} sent a wrong digest continuing session key {:#x}", GetRemoteIpAddress().to_string(), _continuedKey);
+        SendAuthResponseError(AUTH_FAILED);
+        DelayedCloseSocket();
+        return;
+    }
+
+    if (!SendEnterEncryptedMode(_continuedLocalChallenge))
+    {
+        SendAuthResponseError(AUTH_SYSTEM_ERROR);
+        DelayedCloseSocket();
+        return;
+    }
+
+    _instance = true;
+    LOG_DEBUG("network", "WorldSocket: {} continued session key {:#x} as its instance connection, entering encrypted mode",
+        GetRemoteIpAddress().to_string(), _continuedKey);
+    AsyncRead();
+}
+
 bool WorldSocket::HandleEnterEncryptedModeAck()
 {
+    if (_instance && !_authed)
+    {
+        // the instance connection: from here on its packets are the session's, and the client
+        // moves it into place and sends what it held when SMSG_RESUME_COMMS arrives on it
+        // (FUN_1412333f0)
+        _decryptEnabled = true;
+        _encryptEnabled = true;
+        _authed = true;
+        {
+            std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+            if (!_linkedSession)
+                return false;
+            _worldSession = _linkedSession;
+        }
+
+        WorldPacket resumeComms(SMSG_RESUME_COMMS, 0);
+        SendPacketAndLogOpcode(resumeComms);
+        return true;
+    }
+
     if (!_pendingAccount || _authed)
     {
         LOG_ERROR("network", "WorldSocket: client {} acknowledged encrypted mode out of order", GetRemoteIpAddress().to_string());
@@ -839,6 +996,7 @@ bool WorldSocket::HandleEnterEncryptedModeAck()
         LOG_DEBUG("network", "WorldSocket: Warden is not started for 3.4.3 clients");
 
     _worldSession->ValidateAccountFlags();
+    _worldSession->SetSessionKey(_sessionKey);
 
     sWorldSessionMgr->AddSession(_worldSession);
     return true;

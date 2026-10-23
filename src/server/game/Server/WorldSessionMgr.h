@@ -25,11 +25,14 @@
 #include "ObjectGuid.h"
 #include <list>
 #include <map>
+#include <memory>
 #include <unordered_map>
+#include <utility>
 
 class Player;
 class WorldPacket;
 class WorldSession;
+class WorldSocket;
 
 struct AccountPlayHistory
 {
@@ -55,6 +58,8 @@ public:
     void KickAll();
     void KickAllLess(AccountTypes sec);
     void AddSession(WorldSession* session);
+    // a socket continuing a session as its instance connection; linked on the world thread
+    void AddInstanceSocket(std::shared_ptr<WorldSocket> sock, uint64 connectKey);
 
     void AddQueuedPlayer(WorldSession* session);
     bool RemoveQueuedPlayer(WorldSession* session);
@@ -96,6 +101,9 @@ public:
 private:
     LockedQueue<WorldSession*> _addSessQueue;
     void AddSession_(WorldSession* session);
+
+    LockedQueue<std::pair<std::shared_ptr<WorldSocket>, uint64>> _linkSocketQueue;
+    void LinkInstanceSocket(std::shared_ptr<WorldSocket> sock, uint64 connectKey);
 
     SessionMap _sessions;
     SessionMap _offlineSessions;

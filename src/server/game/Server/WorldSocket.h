@@ -87,6 +87,14 @@ public:
     bool IsLoggingPackets() const { return _loggingPackets; }
     void SetPacketLogging(bool state) { _loggingPackets = state; }
 
+    // The instance connection: the world thread answers CMSG_AUTH_CONTINUED_SESSION's lookup with
+    // the session it names (and that session's key), or with a refusal; the socket finishes the
+    // handshake in its own Update. DetachSession is the session cutting this socket loose as it
+    // goes away.
+    void LinkInstance(WorldSession* session, std::array<uint8, 40> const& sessionKey);
+    void LinkFailed();
+    void DetachSession();
+
 protected:
     void OnClose() override;
     SocketReadCallbackResult ReadHandler() final;
@@ -116,6 +124,11 @@ private:
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
     bool HandleEnterEncryptedModeAck();
     void SendAuthResponseError(uint32 code);
+    void HandleAuthContinuedSession(WorldPacket& recvPacket);
+    void FinishAuthContinuedSession();
+    // SMSG_ENTER_ENCRYPTED_MODE signed and sent, and AES set up with the key it names
+    bool SendEnterEncryptedMode(std::array<uint8, 16> const& localChallenge);
+
 
     bool HandlePing(WorldPacket& recvPacket);
 
@@ -155,6 +168,15 @@ private:
     std::string _ipCountry;
 
     bool _loggingPackets;
+
+    // the instance connection's handshake
+    enum : uint8 { LINK_NONE, LINK_WAITING, LINK_FOUND, LINK_REFUSED };
+    std::atomic<uint8> _linkState;
+    bool _instance;                     // this socket is a session's instance connection
+    WorldSession* _linkedSession;       // under _worldSessionLock until the acknowledgement
+    uint64 _continuedKey;
+    std::array<uint8, 16> _continuedLocalChallenge;
+    std::array<uint8, 24> _continuedDigest;
 };
 
 #endif

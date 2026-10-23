@@ -110,6 +110,18 @@ WorldServerPort = 8085
 EnterEncryptedModePrivateKeyFile = "worldserver-ed25519.key.pem"
 
 #
+#    ConnectToPrivateKeyFile
+#        Description: PEM RSA-2048 private key the world server signs SMSG_CONNECT_TO with, which
+#                     tells the 3.4.3 client to open its instance connection (it holds its movement
+#                     and time-sync replies until that connection is up). The client verifies the
+#                     signature against a modulus compiled into it; FrostLite carries this key's
+#                     (src/net/NetClient.cpp, little-endian).
+#                     Make one with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out <file>
+#        Default:     "worldserver-connectto-rsa.key.pem" (beside the executable)
+
+ConnectToPrivateKeyFile = "worldserver-connectto-rsa.key.pem"
+
+#
 #    BindIP
 #        Description: Bind world server to IP/hostname
 #        Default:     "0.0.0.0" - (Bind to all IPs on the system)

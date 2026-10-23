@@ -1272,6 +1272,17 @@ public:                                                 // opcodes handlers
     void SetKicked(bool val) { _kicked = val; }
     bool IsSocketClosed() const;
 
+    // The instance connection (3.4.3): the client sends its movement and time-sync replies on a
+    // second socket it opens when told to by SMSG_CONNECT_TO, and holds them until that socket is
+    // up. The realm socket's session key proves the second socket belongs to this session.
+    void SetSessionKey(std::array<uint8, 40> const& key) { _sessionKey = key; }
+    std::array<uint8, 40> const& GetSessionKey() const { return _sessionKey; }
+    uint64 GetInstanceConnectKey() const { return _instanceConnectKey; }
+    void SendConnectToInstance();
+    bool HasInstanceConnection() const;
+    // from the world thread, once the socket's continued session named this one
+    void SetInstanceSocket(std::shared_ptr<WorldSocket> sock);
+
     /*
      * CALLBACKS
      */
@@ -1349,6 +1360,9 @@ private:
     ObjectGuid::LowType m_GUIDLow;                     // set logined or recently logout player (while m_playerRecentlyLogout set)
     Player* _player;
     std::shared_ptr<WorldSocket> m_Socket;
+    std::shared_ptr<WorldSocket> m_instanceSocket;
+    std::array<uint8, 40> _sessionKey;
+    uint64 _instanceConnectKey;
     std::string m_Address;
 
     AccountTypes _security;

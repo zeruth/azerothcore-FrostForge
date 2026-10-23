@@ -24,6 +24,7 @@
 #include "World.h"
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
+#include "WorldSocket.h"
 
 WorldSessionMgr* WorldSessionMgr::Instance()
 {
@@ -119,6 +120,10 @@ void WorldSessionMgr::UpdateSessions(uint32 const diff)
         {
             AddSession_(sess);
         }
+
+        std::pair<std::shared_ptr<WorldSocket>, uint64> link;
+        while (_linkSocketQueue.next(link))
+            LinkInstanceSocket(std::move(link.first), link.second);
     }
 
     ///- Then send an update signal to remaining ones
@@ -242,6 +247,26 @@ void WorldSessionMgr::KickAllLess(AccountTypes sec)
 void WorldSessionMgr::AddSession(WorldSession* session)
 {
     _addSessQueue.add(session);
+}
+
+void WorldSessionMgr::AddInstanceSocket(std::shared_ptr<WorldSocket> sock, uint64 connectKey)
+{
+    _linkSocketQueue.add(std::make_pair(std::move(sock), connectKey));
+}
+
+// The session SMSG_CONNECT_TO gave this key to: its account is the key's low half, and the key
+// must be the one it was given.
+void WorldSessionMgr::LinkInstanceSocket(std::shared_ptr<WorldSocket> sock, uint64 connectKey)
+{
+    WorldSession* session = FindSession(uint32(connectKey & 0xFFFFFFFF));
+    if (!session || !session->GetInstanceConnectKey() || session->GetInstanceConnectKey() != connectKey)
+    {
+        sock->LinkFailed();
+        return;
+    }
+
+    session->SetInstanceSocket(sock);
+    sock->LinkInstance(session, session->GetSessionKey());
 }
 
 void WorldSessionMgr::AddQueuedPlayer(WorldSession* session)
