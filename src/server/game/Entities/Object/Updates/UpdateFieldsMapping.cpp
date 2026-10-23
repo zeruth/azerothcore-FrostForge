@@ -41,6 +41,7 @@
 #include "Transport.h"
 #include "UpdateFieldsWriter.h"
 #include "World.h"
+#include <cstring>
 
 namespace
 {
@@ -615,6 +616,30 @@ void Player::FillUpdateFields(UF::Values& values) const
 
 // ---- GameObject ------------------------------------------------------------------------------
 
+namespace
+{
+    // GameObjectFlags 0x100000 (MapObject): the display is a WMO. The 3.4.3 client takes a game
+    // object's model to be an M2 unless this is set (FUN_141753a60 tests bit 20 of the flags), and
+    // parsing a WMO as an M2 faults; 3.3.5 had no such flag. The display's file name says which.
+    constexpr uint32 GO_FLAG_MAP_OBJECT_343 = 0x00100000;
+
+    uint32 ClientGameObjectFlags(GameObject const* go, uint32 flags)
+    {
+        if (GameObjectDisplayInfoEntry const* info = sGameObjectDisplayInfoStore.LookupEntry(go->GetDisplayId()))
+        {
+            if (info->filename)
+            {
+                std::size_t length = std::strlen(info->filename);
+                if (length >= 4 && (info->filename[length - 3] == 'w' || info->filename[length - 3] == 'W')
+                    && (info->filename[length - 2] == 'm' || info->filename[length - 2] == 'M')
+                    && (info->filename[length - 1] == 'o' || info->filename[length - 1] == 'O') && info->filename[length - 4] == '.')
+                    flags |= GO_FLAG_MAP_OBJECT_343;
+            }
+        }
+        return flags;
+    }
+}
+
 void GameObject::FillUpdateFields(UF::Values& values) const
 {
     Object::FillUpdateFields(values);
@@ -625,7 +650,7 @@ void GameObject::FillUpdateFields(UF::Values& values) const
     UF::Data& d = values.Add(UF::STRUCT_GAMEOBJECT);
     d.Set(DisplayID, GetUInt32Value(GAMEOBJECT_DISPLAYID));
     d.SetGuid(CreatedBy, GetGuidValue(OBJECT_FIELD_CREATED_BY));
-    d.Set(Flags, GetUInt32Value(GAMEOBJECT_FLAGS));                   // TODO: audit GameObjectFlags against 3.4.3
+    d.Set(Flags, ClientGameObjectFlags(this, GetUInt32Value(GAMEOBJECT_FLAGS)));   // TODO: audit the rest of GameObjectFlags against 3.4.3
     d.SetFloat(ParentRotation_x, GetFloatValue(GAMEOBJECT_PARENTROTATION + 0));
     d.SetFloat(ParentRotation_y, GetFloatValue(GAMEOBJECT_PARENTROTATION + 1));
     d.SetFloat(ParentRotation_z, GetFloatValue(GAMEOBJECT_PARENTROTATION + 2));
@@ -695,7 +720,7 @@ void GameObject::PatchUpdateFields(UF::Values& values, Player const* target) con
     uint32 goFlags = GetUInt32Value(GAMEOBJECT_FLAGS);
     if (GetGoType() == GAMEOBJECT_TYPE_CHEST && GetGOInfo() && GetGOInfo()->chest.groupLootRules && !IsLootAllowedFor(target))
         goFlags |= GO_FLAG_LOCKED | GO_FLAG_NOT_SELECTABLE;
-    values.Get(UF::STRUCT_GAMEOBJECT)->Set(UF::GameObjectFields::Flags, goFlags);
+    values.Get(UF::STRUCT_GAMEOBJECT)->Set(UF::GameObjectFields::Flags, ClientGameObjectFlags(this, goFlags));
 }
 
 // ---- DynamicObject ---------------------------------------------------------------------------
